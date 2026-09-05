@@ -1,0 +1,16 @@
+# Binaries and libraries
+*.exe
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# Build directories
+build/
+cmake-build-*/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
