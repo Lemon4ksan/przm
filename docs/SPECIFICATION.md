@@ -16,125 +16,134 @@ Date:           September 2026
 
 ## Abstract
 
-Настоящий документ определяет нормативный синтаксис битового потока и детерминированную семантику эталонного декодера для формата компрессии данных **PRZM (PrismLZ)**.
+This document defines the normative bitstream syntax and deterministic decompressor semantics for the **PRZM (PrismLZ)** data compression format.
 
-Подобно основополагающим стандартам сжатия цифровой информации (DEFLATE, JPEG, H.264, AV1, Zstandard), настоящая спецификация **не предписывает и не ограничивает алгоритмы или эвристики компрессии данных**. Архитектура компрессора (энкодера) намеренно вынесена за рамки нормативных требований: любая реализация кодировщика вправе применять произвольные стратегии поиска совпадений — от сверхбыстрых жадных хеш-таблиц до многопоточного динамического программирования на взвешенных графах и нейросетевого синтаксического анализа — при единственном условии: **результирующий битовый поток обязан строго подчиняться нормативной грамматике и семантическим инвариантам декодера**, изложенным в данном документе.
+In adherence to the principles governing foundational open multimedia and data compression standards (such as DEFLATE, JPEG, H.264, AV1, and Zstandard), this specification **does not mandate, prescribe, or constrain compression algorithms or heuristics**. The compression architecture (encoder) is intentionally non-normative: any implementation of an encoder MAY utilize arbitrary substring-search strategies, graph-theoretic matchers, dynamic programming, machine-learning models, or brute-force evaluation, subject to a single invariant: **the emitted bitstream MUST strictly conform to the bitstream grammar and decompressor invariants defined in this specification**.
 
-Спецификация определяет:
-1. Синтаксическую структуру битового потока, заголовков фреймов и секций.
-2. Автомат состояний универсального декодера слитных опкодов (`0x00..0xFF`).
-3. 4-поточный чередующийся декодер энтропийных систем V-ANS с 16x16 ковариационными матрицами.
-4. Бесстековый волновой развёртыватель грамматик PWS (Pareto-Wave Synthesis).
-5. Обратные алгебраические преобразования симплектических фазовых пространств $Sp(4, \mathbb{F}_{2^8})$, ультраметрических волновых базисов Малера и архитектурных трансляторов адресов ветвления (ARM64, x86 Bra86).
-6. Строгий контракт нулевых динамических аллокаций памяти (`0 B/op`).
-
----
-
-## Оглавление
-
-1. [Терминология и соглашения](#1-терминология-и-соглашения)
-2. [Архитектурный принцип независимости энкодера](#2-архитектурный-принцип-независимости-энкодера)
-3. [Глобальная архитектура потока и сигнатуры фреймов](#3-глобальная-архитектура-потока-и-сигнатуры-фреймов)
-4. [Спецификация стандартного фрейма PRZM](#4-спецификация-стандартного-фрейма-przm)
-   - 4.1. [Заголовок фрейма (Frame Header)](#41-заголовок-фрейма-frame-header)
-   - 4.2. [Поле флагов (Flags)](#42-поле-флагов-flags)
-   - 4.3. [Динамические параметры фрейма](#43-динамические-параметры-фрейма)
-   - 4.4. [Каталог секций (Section Directory)](#44-каталог-секций-section-directory)
-   - 4.5. [Топология 4 секций данных](#45-топология-4-секций-данных)
-5. [Синтаксис и семантика потока команд (Command Stream)](#5-синтаксис-и-семантика-потока-команд-command-stream)
-   - 5.1. [Кольцевая очередь локальности смещений (Ring-16 Queue)](#51-кольцевая-очередь-локальности-смещений-ring-16-queue)
-   - 5.2. [Кодирование переменных целых чисел (Fast ULEB128)](#52-кодирование-переменных-целых-чисел-fast-uleb128)
-   - 5.3. [Полная таблица распределения опкодов (`0x00..0xFF`)](#53-полная-таблица-распределения-опкодов-0x000xff)
-   - 5.4. [Семантика быстрого пути 1: Слитный повтор (`0x00..0x7F`)](#54-семантика-быстрого-пути-1-слитный-повтор-0x000x7f)
-   - 5.5. [Семантика быстрого пути 2: Слитное расширенное совпадение (`0x80..0xBF`)](#55-семантика-быстрого-пути-2-слитное-расширенное-совпадение-0x800xbf)
-   - 5.6. [Длинные повторы и шаговые совпадения (`0xC0..0xD7`)](#56-длинные-повторы-и-шаговые-совпадения-0xc00xd7)
-   - 5.7. [Встроенные схемы-словари (`0xD8..0xDF`, `0xF2`)](#57-встроенные-схемы-словари-0xd80xdf-0xf2)
-   - 5.8. [Дельта-маскирование и остаточные мутации (`0xE0..0xE8`)](#58-дельта-маскирование-и-остаточные-мутации-0xe00xe8)
-   - 5.9. [Литеральные и RLE цепочки (`0xF0..0xFA`)](#59-литеральные-и-rle-цепочки-0xf00xfa)
-6. [Декодер секции литералов (Section 4)](#6-декодер-секции-литералов-section-4)
-   - 6.1. [4-поточный энтропийный декодер V-ANS](#61-4-поточный-энтропийный-декодер-v-ans)
-   - 6.2. [Декодер расщеплённых полубайтовых плоскостей (Nibble-Planes)](#62-декодер-расщеплённых-полубайтовых-плоскостей-nibble-planes)
-7. [Грамматики структурного сжатия PWS](#7-грамматики-структурного-сжатия-pws)
-8. [Архитектурные и алгебраические преобразования](#8-архитектурные-и-алгебраические-преобразования)
-   - 8.1. [Инволюции симплектического пространства $Sp(4, \mathbb{F}_{2^8})$](#81-инволюции-симплектического-пространства-sp4-mathbbf_28)
-   - 8.2. [2-адические вейвлеты Паскаля над $\mathbb{Z}_2$](#82-2-адические-вейвлеты-паскаля-над-mathbbz_2)
-   - 8.3. [Коллимация ветвлений x86 (Bra86) и BCJ-Split](#83-коллимация-ветвлений-x86-bra86-и-bcj-split)
-   - 8.4. [Аффинная калибровка команд ARM64](#84-аффинная-калибровка-команд-arm64)
-9. [Критерии соответствия декодера (Conformance Requirements)](#9-критерии-соответствия-декодера-conformance-requirements)
-10. [Соображения безопасности (Security Considerations)](#10-соображения-безопасности-security-considerations)
-11. [Приложение: Эталонная реализация на Си](#11-приложение-эталонная-реализация-на-си)
+This document specifies:
+1. The global framing layout, header fields, and section directory topology.
+2. The complete deterministic state machine for the fused command stream (`0x00..0xFF`).
+3. The 4-lane interleaved Vector Asymmetric Numeral Systems (V-ANS 4x) entropy decoder.
+4. The stackless Pareto-Wave Synthesis (PWS) H-DAG grammar unroller.
+5. Involutive and discrete algebraic transformations across symplectic phase spaces ($Sp(4, \mathbb{F}_{2^8})$), 2-adic Mahler ultrametric Pascal wavelets, and architecture-specific branch filters (ARM64, x86 Bra86).
+6. Strict conformance criteria, including the Zero-Allocation Contract (`0 B/op, 0 malloc/free calls`).
 
 ---
 
-## 1. Терминология и соглашения
+## Table of Contents
 
-Ключевые слова **ДОЛЖЕН** (*MUST*), **НЕ ДОЛЖЕН** (*MUST NOT*), **ТРЕБУЕТСЯ** (*REQUIRED*), **СЛЕДУЕТ** (*SHOULD*), **НЕ СЛЕДУЕТ** (*SHOULD NOT*), **РЕКОМЕНДУЕТСЯ** (*RECOMMENDED*), **ВОЗМОЖНО** (*MAY*) и **НЕОБЯЗАТЕЛЬНО** (*OPTIONAL*) в данном документе трактуются в соответствии с общепринятыми нормами инженерных стандартов открытых систем.
-
-- **Битовый поток (Bitstream)**: Непрерывная последовательность байтов, сформатированная в соответствии с правилами раздела 3 и 4.
-- **Фрейм (Frame)**: Автономная единица сжатых данных, декодируемая независимо от других фреймов.
-- **Несжатый размер ($U_{\text{size}}$)**: Точное количество байтов исходного открытого текста, порождаемое в результате декодирования фрейма.
-- **Буфер вывода ($D$)**: Область непрерывной памяти, выделенная вызывающей программой для размещения распакованных байтов.
-- **Защитный интервал ($P_{\text{safety}}$)**: Обязательный дополнительный резерв буфера вывода за пределами $U_{\text{size}}$, равный **64 байтам**, предотвращающий сбои векторизованных 64-битных инструкций записи.
-- **Очередь смещений ($Q$)**: 16-элементный массив последних использованных расстояний относительного копирования (Move-to-Front).
-
-Порядок байтов во всех числовых полях заголовков и битового потока — **Little-Endian (младший байт первым)**, если явно не указано иное.
+1. [Scope and Field of Application](#1-scope-and-field-of-application)
+2. [Terminology and Conventions](#2-terminology-and-conventions)
+3. [The Encoder Freedom Principle](#3-the-encoder-freedom-principle)
+4. [Global Framing and Coordinate Signatures](#4-global-framing-and-coordinate-signatures)
+5. [Standard Fused Frame Specification](#5-standard-fused-frame-specification)
+   - 5.1 [Frame Header Layout](#51-frame-header-layout)
+   - 5.2 [Header Flags Bitfield](#52-header-flags-bitfield)
+   - 5.3 [Dynamic Frame Parameters](#53-dynamic-frame-parameters)
+   - 5.4 [Section Directory](#54-section-directory)
+   - 5.5 [Four-Section Topology](#55-four-section-topology)
+6. [Fused Command Stream Syntax and Semantics](#6-fused-command-stream-syntax-and-semantics)
+   - 6.1 [Ring-16 Locality Offset Queue](#61-ring-16-locality-offset-queue)
+   - 6.2 [Fast ULEB128 Integer Deserialization](#62-fast-uleb128-integer-deserialization)
+   - 6.3 [Complete Opcode Distribution Map (`0x00..0xFF`)](#63-complete-opcode-distribution-map-0x000xff)
+   - 6.4 [Fast-Path 1: Fused Repeat (`0x00..0x7F`)](#64-fast-path-1-fused-repeat-0x000x7f)
+   - 6.5 [Fast-Path 2: Fused Extended Match (`0x80..0xBF`)](#65-fast-path-2-fused-extended-match-0x800xbf)
+   - 6.6 [Long Repeat and Stride Matches (`0xC0..0xD7`)](#66-long-repeat-and-stride-matches-0xc00xd7)
+   - 6.7 [Built-in Schema Dictionaries (`0xD8..0xDF`, `0xF2`)](#67-built-in-schema-dictionaries-0xd80xdf-0xf2)
+   - 6.8 [Delta-Mask Matching and Residual Mutations (`0xE0..0xE8`)](#68-delta-mask-matching-and-residual-mutations-0xe00xe8)
+   - 6.9 [Literal and Run-Length Sequences (`0xF0..0xFA`)](#69-literal-and-run-length-sequences-0xf00xfa)
+7. [Literal Stream Decompression (Section 4)](#7-literal-stream-decompression-section-4)
+   - 7.1 [4-Lane Interleaved Vector Asymmetric Numeral Systems (V-ANS 4x)](#71-4-lane-interleaved-vector-asymmetric-numeral-systems-v-ans-4x)
+   - 7.2 [Nibble-Plane Splitting](#72-nibble-plane-splitting)
+8. [Pareto-Wave Synthesis (PWS) Structural Grammars](#8-pareto-wave-synthesis-pws-structural-grammars)
+9. [Architectural and Algebraic Pre-Filters](#9-architectural-and-algebraic-pre-filters)
+   - 9.1 [Symplectic Phase-Space Involutions $Sp(4, \mathbb{F}_{2^8})$](#91-symplectic-phase-space-involutions-sp4-mathbbf_28)
+   - 9.2 [2-Adic Mahler Ultrametric Pascal Wavelets](#92-2-adic-mahler-ultrametric-pascal-wavelets)
+   - 9.3 [x86 Instruction Collimation (Bra86) and BCJ-Split](#93-x86-instruction-collimation-bra86-and-bcj-split)
+   - 9.4 [ARM64 Affine Branch Target Uncollimation](#94-arm64-affine-branch-target-uncollimation)
+10. [Conformance Requirements and Zero-Allocation Invariant](#10-conformance-requirements-and-zero-allocation-invariant)
+11. [Security and Robustness Considerations](#11-security-and-robustness-considerations)
+12. [Annex: Reference Pure C Implementation](#12-annex-reference-pure-c-implementation)
 
 ---
 
-## 2. Архитектурный принцип независимости энкодера
+## 1. Scope and Field of Application
 
-Центральный постулат открытого стандарта PRZM формулируется следующим образом:
+This specification applies to software and hardware implementations designed to store, transmit, or decompress data formatted according to the PRZM standard.
 
-> **Спецификация PRZM определяет исключительно формат битового потока и детерминированное поведение декодера. Алгоритмы поиска, эвристики сопоставления образцов, графовые оптимизаторы и вычислительная сложность кодирования остаются полностью на усмотрение создателя компрессора.**
-
-### 2.1. Свобода реализации энкодера
-
-Энкодер PRZM может быть реализован с использованием любых алгоритмических подходов:
-1. **Быстрый уровень (Уровень 1)**: Однопроходный хеш-поиск с линейным хешированием 4-байтовых последовательностей, жадный выбор первого найденного совпадения, прямой сброс несжатых литералов.
-2. **Балансный уровень (Уровень 2)**: Хеш-цепочки переменной глубины, эвристика опережающего поиска (Lazy Matching), динамическое обнаружение периодических шагов (Stride Matching).
-3. **Оптимальный уровень (Уровни 3–4)**: Полнотекстовые суффиксные массивы, динамическое программирование на взвешенных ациклических орграфах (DAG Forward-Trellis / Bit-Cost Parsing), поиск глобального геодезического пути наименьшей энтропии в тропическом полукольце $(\mathbb{Z} \cup \{\infty\}, \min, +)$.
-4. **Аппаратные ускорители**: Специализированные микроконтроллеры, FPGA-конвейеры и GPU-шейдеры, генерирующие поток опкодов параллельно.
-
-### 2.2. Единственный критерий валидности
-
-Любой сжатый битовый поток считается **валидным потоком PRZM**, если и только если эталонный декодер, функционирующий строго по правилам настоящего стандарта, восстанавливает из него исходную байтовую последовательность **бит-в-бит идентично оригиналу** без ошибок переполнения, выхода за границы массивов или невалидных переходов состояний.
+PRZM is engineered for high-throughput streaming pipelines, archival storage containers (e.g., EON), game engines (Unreal Engine, Unity, Godot), GPU microcode storage (shader caches), and kernel-level filesystem mounts. Decompression is designed to saturate host memory bus bandwidths (35 to 56 GB/s) using vector SIMD instruction sets (AVX2, AVX-512, ARM NEON).
 
 ---
 
-## 3. Глобальная архитектура потока и сигнатуры фреймов
+## 2. Terminology and Conventions
 
-Поток PRZM представляет собой последовательность из одного или нескольких фреймов. Первые 4 байта каждого фрейма идентифицируют координатную карту математического атласа PRZM:
+The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**, **NOT RECOMMENDED**, **MAY**, and **OPTIONAL** in this document are to be interpreted in accordance with standard international specification practices.
+
+- **Bitstream**: A contiguous sequence of octets formatted according to this standard.
+- **Frame**: An autonomous, self-contained unit of compressed data capable of being decompressed independently of any preceding or succeeding data.
+- **Uncompressed Size ($U_{\text{size}}$)**: The exact number of uncompressed octets produced by decoding a frame.
+- **Destination Buffer ($D$)**: The contiguous memory region provided by the caller to receive uncompressed bytes.
+- **Safety Padding ($P_{\text{safety}}$)**: An obligatory trailing margin of at least **64 bytes** beyond $U_{\text{size}}$ allocated in $D$ to permit unaligned 64-bit vector stores without boundary faults.
+- **Locality Queue ($Q$)**: A 16-element ring buffer containing recently referenced match distances, maintained via a Move-to-Front policy.
+
+Unless explicitly noted otherwise, all multi-byte integers are serialized in **Little-Endian** byte order.
+
+---
+
+## 3. The Encoder Freedom Principle
+
+A fundamental axiom of this specification is the strict decoupling of encoder heuristics from decompressor mechanics:
+
+> **This specification defines exclusively the grammar of the bitstream and the deterministic transformation performed by the decompressor. Encoders are unconstrained in their algorithmic design.**
+
+### 3.1. Permissible Encoder Implementations
+
+An encoder implementation MAY choose any search, parsing, or optimization technique:
+1. **Low-Latency Encoders (Level 1)**: Single-probe hash tables, 4-byte prefix hashing, greedy match selection, raw literal flushing.
+2. **Balanced Encoders (Level 2)**: Chained hash tables, lazy evaluation ($k$-step forward lookahead), automatic stride periodicity detection.
+3. **Optimal Encoders (Levels 3–4)**: Full suffix arrays, directed acyclic graph (DAG) parsing via dynamic programming, forward trellis path optimization in the tropical min-plus semiring $(\mathbb{Z} \cup \{\infty\}, \min, +)$, and machine-learned structural categorization.
+4. **Hardware Encoders**: Dedicated FPGA pipelines or parallel GPU compute shaders.
+
+### 3.2. Conformance Criterion for Compressed Streams
+
+A compressed stream is valid **if and only if** a conforming decompressor processing the stream produces an uncompressed byte sequence that is **bit-for-bit identical to the original input**, without encountering undefined opcodes, out-of-bounds offset references, or buffer overrun conditions.
+
+---
+
+## 4. Global Framing and Coordinate Signatures
+
+A PRZM bitstream consists of one or more frames. The first 4 bytes of each frame MUST contain a 32-bit signature (or 3-byte versioned prefix) identifying the active coordinate chart of the PRZM differential-geometric atlas:
 
 ```text
 +-------------------+--------------------+---------------------------------------+
-| Магическое число  | Шестнадцатеричное  | Описание координатной карты           |
+| Signature ASCII   | Hexadecimal (LE)   | Target Coordinate Chart / Mode        |
 +-------------------+--------------------+---------------------------------------+
-| "PRZM"            | 0x4D5A5250         | Стандартный слитный фрейм (Universal) |
-| "SYMP"            | 0x53594D50         | Симплектическое фазовое пространство  |
-| "MAHL"            | 0x4D41484C         | 2-адический ультраметрический базис   |
-| "SHEF"            | 0x53484546         | Этальный пучок и тропический реп-треллис|
-| "ARM6"            | 0x41524D36         | Коллиматор ветвлений ARM64            |
-| "MACR"            | 0x4D414352         | Макро-треллис длинного горизонта      |
-| "DEPS"            | 0x44455053         | Расслоение зависимых типов (TLV/Proto)|
+| "PRZM"            | 0x4D5A5250         | Standard Fused Frame (Universal)      |
+| "SYMP"            | 0x53594D50         | Symplectic Phase Space Sp(4, F_{2^8}) |
+| "MAHL"            | 0x4D41484C         | 2-Adic Mahler Ultrametric Wavelet     |
+| "SHEF"            | 0x53484546         | Étale Sheaf & Tropical Trellis        |
+| "ARM6"            | 0x41524D36         | ARM64 Instruction Branch Collimator   |
+| "MACR"            | 0x4D414352         | Ultra-Long Horizon Macro-Trellis      |
+| "DEPS"            | 0x44455053         | Dependent-Type Sheaf Stratification   |
 +-------------------+--------------------+---------------------------------------+
 ```
 
-Для 3-байтовых версионированных потоков прикладных виртуальных машин используются префиксы:
-- `PW\x01` (`0x015750`): Pareto-Wave Synthesis H-DAG Grammar.
+Versioned ISA formats are identified by 3-byte prefixes:
+- `PW\x01` (`0x015750`): Pareto-Wave Synthesis (PWS) H-DAG Grammar.
 - `PV\x01` (`0x015650`): Zero-Schema Vector Virtual Machine ISA.
 - `GG\x01` (`0x014747`): Geometric Grammar Tree Codec.
 
-Декодер **ДОЛЖЕН** определить тип фрейма по сигнатуре первых байтов и передать поток соответствующему функциональному модулю.
+A decompressor MUST inspect the magic bytes at offset 0 and dispatch execution to the corresponding functional pipeline.
 
 ---
 
-## 4. Спецификация стандартного фрейма PRZM
+## 5. Standard Fused Frame Specification
 
-Стандартный слитный фрейм (`"PRZM"`) покрывает универсальный домен сжатия и является обязательным для всех совместимых декодеров.
+The Standard Fused Frame (`"PRZM"`) constitutes the general-purpose compression substrate.
 
-### 4.1. Заголовок фрейма (Frame Header)
+### 5.1. Frame Header Layout
 
-Заголовок стандартного фрейма имеет фиксированный размер **8 байтов**:
+The frame header occupies exactly **8 bytes**:
 
 ```text
  0                   1                   2                   3
@@ -146,82 +155,84 @@ Date:           September 2026
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-- **Magic** (байты 0..3): Символы `'P'`, `'R'`, `'Z'`, `'M'` (`0x4D5A5250`).
-- **Flags** (байт 4): 8-битная битовая маска конфигурации фрейма.
-- **UncompressedSize** (байты 5..7): 24-битное целое число в формате Little-Endian, определяющее точный несжатый размер данных ($0 \le U_{\text{size}} \le 16\text{ MiB}$).
+- **Magic** (Bytes 0..3): `0x4D5A5250` (`'P'`, `'R'`, `'Z'`, `'M'`).
+- **Flags** (Byte 4): 8-bit frame configuration bitmask.
+- **UncompressedSize** (Bytes 5..7): 24-bit unsigned integer in Little-Endian format specifying the uncompressed payload size ($0 \le U_{\text{size}} \le 16\text{ MiB}$).
 
-Если $U_{\text{size}} = 0$, декодер завершает работу и возвращает 0 записанных байтов.
+If $U_{\text{size}} = 0$, the decompressor SHALL emit zero bytes and immediately report success.
 
-### 4.2. Поле флагов (Flags)
-
-```text
-  Бит 0: FLAG_STRIDE       (0x01) - Присутствует 1-байтовое поле Stride
-  Бит 1: FLAG_DELTA_MASK   (0x02) - Активирован режим дельта-мутаций
-  Бит 2: FLAG_UNCOMPRESSED (0x04) - Фрейм сохранён без сжатия (Raw Payload)
-  Бит 3: FLAG_EXT_OFFSET   (0x08) - 24-битные размеры секций в каталоге
-  Бит 4: FLAG_DICT_REF     (0x10) - Присутствует 4-байтовое поле DictID
-  Бит 5: FLAG_BCJ_SPLIT    (0x20) - Активирован 4-плоскостной x86 сплиттер
-  Бит 6: FLAG_BCJ          (0x40) - Активирован стандартный фильтр x86 Bra86
-  Бит 7: FLAG_NIBBLE       (0x80) - Секция 4 закодирована через V-ANS / Nibble
-```
-
-Если установлен бит `FLAG_UNCOMPRESSED` (0x04), ровно $U_{\text{size}}$ байтов исходных данных следуют непосредственно за 8-байтовым заголовком фрейма. Декодер копирует их в буфер вывода и завершает работу.
-
-### 4.3. Динамические параметры фрейма
-
-Если `FLAG_UNCOMPRESSED` сброшен, непосредственно за заголовком фрейма (начиная со смещения 8) располагаются опциональные поля параметров, наличие которых обусловлено битами флагов:
+### 5.2. Header Flags Bitfield
 
 ```text
+  Bit 0: FLAG_STRIDE       (0x01) - 1-byte Stride parameter present
+  Bit 1: FLAG_DELTA_MASK   (0x02) - Delta mutation mode active
+  Bit 2: FLAG_UNCOMPRESSED (0x04) - Uncompressed raw payload
+  Bit 3: FLAG_EXT_OFFSET   (0x08) - 24-bit section sizes in directory
+  Bit 4: FLAG_DICT_REF     (0x10) - 4-byte DictID parameter present
+  Bit 5: FLAG_BCJ_SPLIT    (0x20) - 4-plane x86 displacement splitter active
+  Bit 6: FLAG_BCJ          (0x40) - Standard x86 Bra86 filter active
+  Bit 7: FLAG_NIBBLE       (0x80) - Section 4 encoded via V-ANS or Nibble-Planes
+```
+
+When `FLAG_UNCOMPRESSED` (0x04) is set, exactly $U_{\text{size}}$ bytes follow the 8-byte header verbatim. The decompressor SHALL copy these bytes to $D$ and terminate.
+
+### 5.3. Dynamic Frame Parameters
+
+When `FLAG_UNCOMPRESSED` is clear, dynamic parameters immediately follow the 8-byte header starting at offset 8:
+
+```text
 +-------------------+---------------+-------------------------------------------+
-| Поле              | Условие       | Размер и формат                           |
+| Field             | Condition     | Size and Format                           |
 +-------------------+---------------+-------------------------------------------+
-| Stride            | FLAG_STRIDE   | 1 байт (значение $S-1$, шаг $S \in 1..256$)|
-| DictID            | FLAG_DICT_REF | 4 байта (uint32 Little-Endian)            |
-| CallCount         | FLAG_BCJ_SPLIT| 4 байта (uint32 Little-Endian)            |
+| Stride            | FLAG_STRIDE   | 1 byte (value $S-1$, stride $S \in 1..256$)|
+| DictID            | FLAG_DICT_REF | 4 bytes (uint32 Little-Endian)            |
+| CallCount         | FLAG_BCJ_SPLIT| 4 bytes (uint32 Little-Endian)            |
 +-------------------+---------------+-------------------------------------------+
 ```
 
-### 4.4. Каталог секций (Section Directory)
+Parameters MUST appear in the exact order: `Stride`, `DictID`, `CallCount`.
 
-Непосредственно за динамическими параметрами следует каталог размеров секций.
-- **Стандартный каталог** (`FLAG_EXT_OFFSET == 0`):
-  - `CmdStreamSize` (2 байта, uint16 LE): Длина Секции 2 в байтах.
-  - `OffsetStreamSize` (2 байта, uint16 LE): Длина Секции 3 в байтах.
-- **Расширенный каталог** (`FLAG_EXT_OFFSET != 0`):
-  - `CmdStreamSize` (3 байта, uint24 LE): Длина Секции 2 в байтах.
-  - `OffsetStreamSize` (3 байта, uint24 LE): Длина Секции 3 в байтах.
+### 5.4. Section Directory
 
-### 4.5. Топология 4 секций данных
+Immediately following the dynamic parameters is the Section Directory:
+- **Standard Directory** (`FLAG_EXT_OFFSET == 0`):
+  - `CmdStreamSize` (2 bytes, uint16 LE): Size of Section 2 in bytes.
+  - `OffsetStreamSize` (2 bytes, uint16 LE): Size of Section 3 in bytes.
+- **Extended Directory** (`FLAG_EXT_OFFSET != 0`):
+  - `CmdStreamSize` (3 bytes, uint24 LE): Size of Section 2 in bytes.
+  - `OffsetStreamSize` (3 bytes, uint24 LE): Size of Section 3 in bytes.
 
-Полезная нагрузка сжатого фрейма строго разделена на 4 ортогональные секции:
+### 5.5. Four-Section Topology
+
+The compressed frame payload is organized into 4 disjoint, contiguous sections:
 
 ```text
 [Header 8B] [Params 0..9B] [Dir 4..6B]
-  ├── Section 1: Distribution Parameters (минимум 8 байт: 8 + 2 * ExceptionsCount)
-  ├── Section 2: Command Stream (размер = CmdStreamSize)
-  ├── Section 3: Offset Stream (размер = OffsetStreamSize)
-  └── Section 4: Literal Stream (до конца фрейма: src_len - sec4_offset)
+  ├── Section 1: Distribution Parameters (size = 8 + 2 * ExceptionCount)
+  ├── Section 2: Command Stream (size = CmdStreamSize)
+  ├── Section 3: Offset Stream (size = OffsetStreamSize)
+  └── Section 4: Literal Stream (size = src_len - sec4_offset)
 ```
 
-1. **Секция 1 (Distribution Parameters)**: Содержит метаданные распределения вероятностей. Минимальный размер — 8 байт. Байт со смещением 5 внутри Секции 1 задаёт количество исключений (`ExceptionCount`). Полная длина Секции 1 вычисляется по формуле:
+1. **Section 1 (Distribution Parameters)**: Contains probability distribution metadata. The minimum size is 8 bytes. Byte 5 of Section 1 specifies `ExceptionCount`. The total byte length of Section 1 is:
    $$\text{Sec1Size} = 8 + 2 \times \text{ExceptionCount}$$
-2. **Секция 2 (Command Stream)**: Поток слитных опкодов, управляющий развёртыванием данных.
-3. **Секция 3 (Offset Stream)**: Непрерывный массив сжатых переменной длины (ULEB128) расстояний LZ77.
-4. **Секция 4 (Literal Stream)**: Байты незатронутых открытых литералов, упакованные сырым способом, через 4-поточный V-ANS или RLE-плоскости.
+2. **Section 2 (Command Stream)**: Sequence of fused opcodes governing data generation.
+3. **Section 3 (Offset Stream)**: Packed ULEB128 variable-length integer match distances.
+4. **Section 4 (Literal Stream)**: Literal octets (raw, V-ANS 4x compressed, or nibble-plane encoded).
 
 ---
 
-## 5. Синтаксис и семантика потока команд (Command Stream)
+## 6. Fused Command Stream Syntax and Semantics
 
-Поток команд (Секция 2) интерпретируется декодером последовательно байт за байтом от смещения `sec2_offset` до `sec2_offset + CmdStreamSize`.
+The Command Stream (Section 2) is evaluated sequentially from offset `sec2_offset` to `sec2_offset + CmdStreamSize`.
 
-### 5.1. Кольцевая очередь локальности смещений (Ring-16 Queue)
+### 6.1. Ring-16 Locality Offset Queue
 
-Декодер поддерживает кольцевую очередь $Q$ из 16 целочисленных элементов, инициализируемую в начале каждого фрейма в зависимости от эффективного шага $S$ (`Stride`, по умолчанию $S=1$):
+The decompressor maintains an internal 16-element integer queue $Q$, initialized at the start of each frame using the effective stride periodicity $S$ (default $S = 1$):
 
 $$Q = [1, S, 2S, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]$$
 
-При обращении к индексу $k \in [0..15]$ извлекается дистанция $d = Q[k]$. После этого очередь обновляется по принципу Move-to-Front: элементы со смещениями от $k$ сдвигаются вправо, а выбранное значение $d$ помещается в голову очереди ($Q[0]$):
+Whenever match distance $d = Q[k]$ is accessed by index $k \in [0..15]$, the queue MUST be updated using the Move-to-Front rule: elements $Q[0..k-1]$ are shifted right by one position, and $d$ is inserted at index 0:
 
 ```c
 int d = q[k];
@@ -231,185 +242,179 @@ for (int j = k; j > 0; j--) {
 q[0] = d;
 ```
 
-При явном декодировании нового расстояния $d$ из Секции 3 или при выполнении шагового совпадения ($d = m \times S$), вся очередь сдвигается вправо на 1 позицию, и новое расстояние записывается в $Q[0]$.
+Whenever an explicit distance $d$ is decoded from Section 3 or synthesized via Stride matching ($d = m \times S$), the entire queue $Q$ is shifted right, and $d$ is inserted at $Q[0]$.
 
-### 5.2. Кодирование переменных целых чисел (Fast ULEB128)
+### 6.2. Fast ULEB128 Integer Deserialization
 
-Чтение смещений из Секции 3 и дополнительных длин из Секции 2 выполняется с помощью оптимизированного декодера ULEB128. Каждый байт передаёт 7 бит значения; старший бит (бит 7) является флагом продолжения:
+Explicit match distances in Section 3 and length extensions in Section 2 are serialized using ULEB128 encoding (7 bits per byte, MSB indicates continuation):
 
 ```text
-Байт 0: [0xxxxxxx]                -> Значение: 0 .. 127 (1 байт)
-Байт 1: [1xxxxxxx] [0yyyyyyy]     -> Значение: x | (y << 7) (2 байта)
-Байт 2: [1xxxxxxx] [1yyyyyyy] [0zzzzzzz] -> Значение: x | (y << 7) | (z << 14) (3 байта)
+Byte 0: [0xxxxxxx]                         -> Value: 0 .. 127 (1 byte)
+Byte 1: [1xxxxxxx] [0yyyyyyy]              -> Value: x | (y << 7) (2 bytes)
+Byte 2: [1xxxxxxx] [1yyyyyyy] [0zzzzzzz]   -> Value: x | (y << 7) | (z << 14) (3 bytes)
 ```
 
-Для блоков размером до 256 КиБ все смещения и длины гарантированно укладываются максимум в 3 байта.
+For frames up to 256 KiB, all offsets and lengths are guaranteed to occupy at most 3 bytes.
 
-### 5.3. Полная таблица распределения опкодов (`0x00..0xFF`)
+### 6.3. Complete Opcode Distribution Map (`0x00..0xFF`)
 
-Пространство опкодов PRZM представляет собой непрерывную и однозначную функцию диспетчеризации:
+The 8-bit opcode space maps deterministically to decompressor actions:
 
 ```text
 +-------------------+-----------------------------------------------------------+
-| Диапазон опкодов  | Назначение и внутренняя семантика                         |
+| Opcode Range      | Command Category and Semantics                            |
 +-------------------+-----------------------------------------------------------+
 | 0x00 .. 0x7F      | Fast-Path 1: Fused Repeat (0 LLL MM KK)                   |
 | 0x80 .. 0xBF      | Fast-Path 2: Fused Extended Match (10 LL MMMM)            |
 | 0xC0 .. 0xCF      | Long Repeat Match (k in 0..15) + Fused Literals           |
 | 0xD0 .. 0xD7      | Stride Match (m in 1..8, d = m * Stride)                  |
-| 0xD8 .. 0xDF      | Direct 1-byte Schema Token (Tokens 0..7)                  |
+| 0xD8 .. 0xDF      | Direct 1-Byte Schema Token (Tokens 0..7)                  |
 | 0xE0 .. 0xE7      | Delta-Mask Match with Locality Ring (k in 0..7)           |
 | 0xE8              | Delta-Mask Match with Explicit Offset (ULEB128)           |
-| 0xE9 .. 0xEF      | Зарезервировано для будущих расширений стандарта          |
-| 0xF0              | Pure Literal Run (длина через ULEB128)                    |
-| 0xF1              | Pure RLE Run (длина через ULEB128, байт из Секции 4)      |
-| 0xF2              | Extended 2-byte Schema Token (0xF2 <TokenID>)             |
-| 0xF3 .. 0xFA      | Direct 1-byte Literal Run (1..8 литералов без заголовка)  |
-| 0xFB .. 0xFF      | Зарезервировано для расширений виртуальной машины         |
+| 0xE9 .. 0xEF      | Reserved for future standard extensions                   |
+| 0xF0              | Pure Literal Run (ULEB128 length, Section 4 payload)      |
+| 0xF1              | Pure RLE Run (ULEB128 length, single byte replicated)     |
+| 0xF2              | Extended 2-Byte Schema Token (0xF2 <TokenID>)             |
+| 0xF3 .. 0xFA      | Direct 1-Byte Literal Run (1..8 literals without header)  |
+| 0xFB .. 0xFF      | Reserved for Virtual Machine execution extensions         |
 +-------------------+-----------------------------------------------------------+
 ```
 
-### 5.4. Семантика быстрого пути 1: Слитный повтор (`0x00..0x7F`)
+### 6.4. Fast-Path 1: Fused Repeat (`0x00..0x7F`)
 
-Старший бит равен 0. Опкод упаковывает три значения в один байт:
+Bit 7 is `0`. Encodes literal count, match length, and repeat index in a single byte:
 
 ```text
- Бит:   7   6   5   4   3   2   1   0
+ Bit:   7   6   5   4   3   2   1   0
       +---+---+---+---+---+---+---+---+
       | 0 |    LLL    |   MM  |   KK  |
       +---+---+---+---+---+---+---+---+
 ```
-- **Литеральная длина** `LLL = (op >> 4) & 0x07` ($0..7$ байт).
-- **Базовая длина совпадения** `MM = (op >> 2) & 0x03`, полная длина $M_{\text{len}} = MM + 4$ ($4..7$ байт).
-- **Индекс очереди локальности** `KK = op & 0x03` ($k \in [0..3]$).
+- **Literal Length** `LLL = (op >> 4) & 0x07` ($0..7$ bytes).
+- **Base Match Length** `MM = (op >> 2) & 0x03`, full match length $M_{\text{len}} = MM + 4$ ($4..7$ bytes).
+- **Locality Index** `KK = op & 0x03` ($k \in [0..3]$).
 
-**Поведение декодера:**
-1. Если `LLL > 0`, скопировать `LLL` литералов из Секции 4 в буфер вывода по текущей позиции `dst_pos`. Сдвинуть указатели `lit_ptr += LLL`, `dst_pos += LLL`.
-2. Извлечь расстояние $d = Q[k]$, переместить $d$ в $Q[0]$.
-3. Проверить инвариант: $dst\_pos \ge d$ (иначе аварийный возврат `PRZM_ERR_OFFSET_OOB`).
-4. Скопировать $M_{\text{len}}$ байтов из позиции `dst_pos - d` в `dst_pos`.
-5. Сдвинуть позицию записи: `dst_pos += M_len`.
+**Decompressor Execution Sequence:**
+1. If `LLL > 0`, copy `LLL` bytes from Section 4 to destination offset `dst_pos`. Advance `lit_ptr += LLL`, `dst_pos += LLL`.
+2. Retrieve distance $d = Q[k]$; update queue $Q$ via Move-to-Front.
+3. Validate distance: if $dst\_pos < d$, abort with `PRZM_ERR_OFFSET_OOB`.
+4. Copy $M_{\text{len}}$ bytes from offset `dst_pos - d` to `dst_pos`.
+5. Advance `dst_pos += M_len`.
 
-### 5.5. Семантика быстрого пути 2: Слитное расширенное совпадение (`0x80..0xBF`)
+### 6.5. Fast-Path 2: Fused Extended Match (`0x80..0xBF`)
 
-Биты 7..6 равны `10`:
+Bits 7..6 are `10`:
 
 ```text
- Бит:   7   6   5   4   3   2   1   0
+ Bit:   7   6   5   4   3   2   1   0
       +---+---+---+---+---+---+---+---+
       | 1   0 |   LL  |     MMMM      |
       +---+---+---+---+---+---+---+---+
 ```
-- **Литеральная длина** `LL = (op >> 4) & 0x03` ($0..3$ байт).
-- **Базовая длина совпадения** `MMMM = op & 0x0F` ($0..15$).
-- Если `MMMM < 15`, то полная длина совпадения $M_{\text{len}} = MMMM + 4$ ($4..18$ байт).
-- Если `MMMM == 15`, декодер считывает целое число `extra` из потока команд через ULEB128, и $M_{\text{len}} = 19 + extra$.
+- **Literal Length** `LL = (op >> 4) & 0x03` ($0..3$ bytes).
+- **Base Match Length** `MMMM = op & 0x0F` ($0..15$).
+- If `MMMM < 15`, full match length $M_{\text{len}} = MMMM + 4$ ($4..18$ bytes).
+- If `MMMM == 15`, an unsigned ULEB128 integer `extra` is read from Section 2; $M_{\text{len}} = 19 + extra$.
 
-**Поведение декодера:**
-1. Скопировать `LL` литералов из Секции 4.
-2. Прочитать явное смещение $d$ из Секции 3 (Offset Stream) через ULEB128.
-3. Сдвинуть очередь: `Q[j] = Q[j-1]` для всех $j \in [15..1]$, записать `Q[0] = d`.
-4. Проверить $dst\_pos \ge d$ и скопировать $M_{\text{len}}$ байтов из `dst_pos - d`.
+**Decompressor Execution Sequence:**
+1. If `LL > 0`, copy `LL` literals from Section 4.
+2. Read explicit match distance $d$ from Section 3 (Offset Stream) via ULEB128.
+3. Update queue $Q$: shift all elements right; insert $d$ at $Q[0]$.
+4. Validate $dst\_pos \ge d$, then copy $M_{\text{len}}$ bytes from `dst_pos - d`.
 
-### 5.6. Длинные повторы и шаговые совпадения (`0xC0..0xD7`)
+### 6.6. Long Repeat and Stride Matches (`0xC0..0xD7`)
 
-- **Длинный повтор (`0xC0..0xCF`)**:
-  Младшие 4 бита задают индекс очереди $k = op \ \& \ 0x0F$ ($0..15$). Следующий байт потока команд — `token`:
-  - Длина литералов `lit_len = token >> 4` ($0..15$).
-  - Базовая длина `base_len = token & 0x0F`. Если `base_len == 15`, читается ULEB128 `extra` ($M_{\text{len}} = 19 + extra$), иначе $M_{\text{len}} = base\_len + 4$.
-  - Расстояние $d = Q[k]$; очередь обновляется по схеме Move-to-Front.
-- **Шаговое совпадение (`0xD0..0xD7`)**:
-  Множитель шага $m = (op \ \& \ 0x07) + 1$ ($1..8$). Следующий байт потока команд — `token`:
-  - Длина литералов `lit_len = token >> 4` ($0..15$).
-  - Длина совпадения $M_{\text{len}} = (token \ \& \ 0x0F) + 4$ ($4..19$ байт).
-  - Расстояние $d = m \times S$.
-  - Очередь $Q$ сдвигается вправо, и значение $d$ записывается в $Q[0]$.
+- **Long Repeat Match (`0xC0..0xCF`)**:
+  Lower 4 bits indicate queue index $k = op \ \& \ 0x0F$ ($0..15$). The subsequent byte `token` in Section 2 provides:
+  - Literal length `lit_len = token >> 4` ($0..15$).
+  - Base length `base_len = token & 0x0F`. If `base_len == 15`, read ULEB128 `extra` ($M_{\text{len}} = 19 + extra$), else $M_{\text{len}} = base\_len + 4$.
+  - Distance $d = Q[k]$; queue $Q$ is updated via Move-to-Front.
+- **Stride Match (`0xD0..0xD7`)**:
+  Encodes stride multiplier $m = (op \ \& \ 0x07) + 1$ ($1..8$). The subsequent byte `token` in Section 2 provides:
+  - Literal length `lit_len = token >> 4` ($0..15$).
+  - Match length $M_{\text{len}} = (token \ \& \ 0x0F) + 4$ ($4..19$ bytes).
+  - Match distance is synthesized arithmetically: $d = m \times S$.
+  - Queue $Q$ is shifted right; $d$ is inserted at $Q[0]$.
 
-### 5.7. Встроенные схемы-словари (`0xD8..0xDF`, `0xF2`)
+### 6.7. Built-in Schema Dictionaries (`0xD8..0xDF`, `0xF2`)
 
-Если во фрейме установлен флаг `FLAG_DICT_REF`, декодер активирует встроенный лексический словарь в соответствии с `DictID`:
-- `DictID = 1`: Словарь грамматических конструкций JSON (64 нормативных токена).
-- `DictID = 2`: Словарь исходного кода C/Go/Rust (42 нормативных токена).
+When `FLAG_DICT_REF` is set, the decompressor activates the built-in lexicon designated by `DictID`:
+- `DictID = 1`: JSON structural tokens (64 normative strings).
+- `DictID = 2`: Programming source code tokens (42 normative strings).
 
-- **Прямой токен (`0xD8..0xDF`)**: Индекс токена $t = op - 0xD8$ ($0..7$). Токен копируется в позицию вывода.
-- **Расширенный токен (`0xF2`)**: Следующий байт потока команд определяет $t = src[cmd\_ptr++]$. Строка токена $t$ копируется в буфер вывода.
+- **Direct Token (`0xD8..0xDF`)**: Token index $t = op - 0xD8$ ($0..7$). The corresponding string is copied to `dst_pos`.
+- **Extended Token (`0xF2`)**: Next byte in Section 2 designates $t = src[cmd\_ptr++]$. The string for token $t$ is copied to `dst_pos`.
 
-Если токен с индексом $t$ отсутствует в активном словаре, либо флаг `FLAG_DICT_REF` сброшен, декодер **ДОЛЖЕН** прервать работу с ошибкой `PRZM_ERR_CORRUPTED_FRAME`.
+If $t$ exceeds the active dictionary capacity or `FLAG_DICT_REF` is clear, the decompressor MUST return `PRZM_ERR_CORRUPTED_FRAME`.
 
-### 5.8. Дельта-маскирование и остаточные мутации (`0xE0..0xE8`)
+### 6.8. Delta-Mask Matching and Residual Mutations (`0xE0..0xE8`)
 
-Команды дельта-маскирования предназначены для компактного представления структурированных записей, отличающихся от ранее встреченных на небольшое число отдельных байтов:
-- `0xE0..0xE7`: Базовое расстояние берётся из очереди локальности $d = Q[op \ \& \ 0x07]$.
-- `0xE8`: Базовое расстояние $d$ считывается явно из Секции 3 через ULEB128.
+Delta-mask commands reconstruct mutated records by copying a base match and applying discrete XOR modifications:
+- `0xE0..0xE7`: Base distance $d = Q[op \ \& \ 7]$.
+- `0xE8`: Base distance $d$ is read from Section 3 via ULEB128.
 
-После копирования $M_{\text{len}}$ байтов совпадения, декодер считывает из Секции 4 параметры мутаций:
-- Количество байтовых мутаций $C_{\text{mods}} = lits[lit\_ptr++]$.
-- Для каждой мутации считывается относительное смещение $rel\_off$ (1 байт, если $M_{\text{len}} \le 256$, либо 2 байта uint16 LE, если $M_{\text{len}} > 256$) и значение маски $xor\_val$.
-- Выполняется операция побитового исключающего ИЛИ:
+Following the copy of $M_{\text{len}}$ bytes from `dst_pos - d`, mutation descriptors are read from Section 4:
+- Mutation count $C_{\text{mods}} = lits[lit\_ptr++]$.
+- For each mutation, relative offset $rel\_off$ is read (1 byte if $M_{\text{len}} \le 256$, or 2 bytes uint16 LE if $M_{\text{len}} > 256$), followed by 1 byte $xor\_val$.
+- In-place mutation is applied:
   $$D[dst\_pos + rel\_off] \leftarrow D[dst\_pos + rel\_off] \oplus xor\_val$$
 
-### 5.9. Литеральные и RLE цепочки (`0xF0..0xFA`)
+### 6.9. Literal and Run-Length Sequences (`0xF0..0xFA`)
 
-- **0xF0 (Pure Literal Run)**: Длина цепочки $L$ считывается через ULEB128 из потока команд. Ровно $L$ байтов копируются из Секции 4 в буфер вывода.
-- **0xF1 (Pure RLE Run)**: Длина серии $R$ считывается через ULEB128 из потока команд. Следующий 1 байт из Секции 4 дублируется в буфере вывода $R$ раз.
-- **0xF3..0xFA (Direct 1-byte Literal Run)**: Компактная форма сброса коротких последовательностей от 1 до 8 литералов:
-  $$L = op - 0xF3 + 1 \quad (L \in [1..8])$$
-  Ровно $L$ литералов копируются из Секции 4 без дополнительных накладных расходов.
+- **0xF0 (Pure Literal Run)**: Run length $L$ is decoded via ULEB128 from Section 2. Exactly $L$ bytes are transferred from Section 4.
+- **0xF1 (Pure RLE Run)**: Run length $R$ is decoded via ULEB128 from Section 2. A single byte from Section 4 is replicated $R$ times in $D$.
+- **0xF3..0xFA (Direct 1-Byte Literal Run)**: Emits $L = op - 0xF3 + 1$ ($1..8$) literals from Section 4 with zero framing overhead.
 
 ---
 
-## 6. Декодер секции литералов (Section 4)
+## 7. Literal Stream Decompression (Section 4)
 
-Если во фрейме сброшен флаг `FLAG_NIBBLE` (0x80), Секция 4 представляет собой открытый поток литералов. Если флаг `FLAG_NIBBLE` установлен, Секция 4 декодируется до начала обработки потока команд.
+### 7.1. 4-Lane Interleaved Vector Asymmetric Numeral Systems (V-ANS 4x)
 
-### 6.1. 4-поточный энтропийный декодер V-ANS
+When `FLAG_NIBBLE` (0x80) is set and Section 4 begins with `VA\x01` (`0x014156`), literals are entropy-decoded using a 4-lane interleaved tANS state machine:
+- The header supplies uncompressed literal length $L_{\text{orig}}$ (uint32 LE), a 128-byte upper-triangular covariance frequency matrix ($16 \times 16$), and four initial 32-bit state variables $(X_0, X_1, X_2, X_3)$.
+- Decompression proceeds in round-robin fashion across all four states, achieving zero loop-carried dependencies and saturating superscalar ALU/vector units.
 
-При наличии сигнатуры `VA\x01` (`0x014156`) Секция 4 декодируется векторным асимметричным нумерационным автоматом V-ANS.
-- Заголовок V-ANS: 4 байта сигнатуры, 4 байта несжатого размера литералов ($L_{\text{orig}}$), 128 байтов упакованной верхней треугольной ковариационной матрицы частот $16 \times 16$, 16 байтов начальных состояний 4 чередующихся каналов $X_0, X_1, X_2, X_3$.
-- 4 канала декодируются с чередованием, гарантируя независимость инструкций и параллельное исполнение в SIMD-регистрах CPU без взаимных блокировок.
+### 7.2. Nibble-Plane Splitting
 
-### 6.2. Декодер расщеплённых полубайтовых плоскостей (Nibble-Planes)
-
-При отсутствии сигнатуры `VA\x01` Секция 4 интерпретируется как двухплоскостной массив:
-- Байты 0..3: Число литералов $N$ (uint32 LE).
-- Байты 4..7: Размер плоскости младших полубайтов $L_{\text{low}} = (N + 1) / 2$.
-- Плоскость старших полубайтов распаковывается через Nibble-RLE токены:
-  $$run\_len = (token \gg 4) + 1, \quad high\_nibble = (token \ \& \ 0x0F) \ll 4$$
-- Плоскость младших полубайтов объединяется с полученными старшими полубайтами операцией побитового ИЛИ:
-  $$dst[2j] \leftarrow dst[2j] \ | \ (pair \gg 4), \quad dst[2j + 1] \leftarrow dst[2j + 1] \ | \ (pair \ \& \ 0x0F)$$
+If `VA\x01` is absent, Section 4 contains two planes:
+- Low nibble plane length $L_{\text{low}} = (N + 1) / 2$.
+- High nibbles are expanded via Nibble-RLE: $run\_len = (token \gg 4) + 1$, $high = (token \ \& \ 0x0F) \ll 4$.
+- Low nibble pairs are unpacked and merged via bitwise OR:
+  $$D[2j] \leftarrow D[2j] \ | \ (pair \gg 4), \quad D[2j + 1] \leftarrow D[2j + 1] \ | \ (pair \ \& \ 0x0F)$$
 
 ---
 
-## 7. Грамматики структурного сжатия PWS
+## 8. Pareto-Wave Synthesis (PWS) Structural Grammars
 
-Фреймы с сигнатурой `PW\x01` развёртывают контекстно-свободные грамматики иерархического ациклического орграфа (H-DAG) без использования рекурсивного стека вызовов:
-1. Заголовок определяет количество правил на 5 уровнях иерархии:
-   - $L_1$: 2-байтовые терминальные пары ($N_1 \le 64$).
-   - $L_2$: 4-байтовые бинарные объединения правил $L_1$ ($N_2 \le 32$).
-   - $L_3$: 8-байтовые слова ($N_3 \le 16$).
-   - $L_4$: 16-байтовые блоки ($N_4 \le 16$).
-   - $L_5$: 32-байтовые блоки ($N_5 \le 8$).
-2. Декодер строит массив прямых расширений в статической памяти и развёртывает поток аксиомы за один линейный проход со скоростью свыше **40 ГБ/с**.
+Frames prefixed with `PW\x01` expand non-recursive Hierarchical Acyclic Direct Graphs (H-DAG):
+1. The header establishes grammar rule budgets across 5 hierarchic layers:
+   - $L_1$: 2-byte terminal pairs ($N_1 \le 64$).
+   - $L_2$: 4-byte compounds ($N_2 \le 32$).
+   - $L_3$: 8-byte quadwords ($N_3 \le 16$).
+   - $L_4$: 16-byte blocks ($N_4 \le 16$).
+   - $L_5$: 32-byte blocks ($N_5 \le 8$).
+2. The decompressor populates expansion lookup arrays in static memory and unrolls the axiom stream in a single linear pass exceeding **40 GB/s**.
 
 ---
 
-## 8. Архитектурные и алгебраические преобразования
+## 9. Architectural and Algebraic Pre-Filters
 
-### 8.1. Инволюции симплектического пространства $Sp(4, \mathbb{F}_{2^8})$
+### 9.1. Symplectic Phase-Space Involutions $Sp(4, \mathbb{F}_{2^8})$
 
-Для фреймов с сигнатурой `"SYMP"` применяется обратная трансвекция фазового пространства. По теореме Лиувилля и следствию из формализации в Lean 4, матрица сдвига $T_S$ над $\mathbb{F}_{2^8}$ является **строгой инволюцией**:
+Frames marked with `"SYMP"` apply a symplectic shear transformation. As proven in Lean 4, the phase shear $T_S$ over $\mathbb{F}_{2^8}$ satisfies:
 
 $$T_S^2 \equiv I \implies T_S^{-1} \equiv T_S$$
 
-Декодирование выполняется тем же самым алгоритмом, что и кодирование:
-- 4-байтовый вектор фазового пространства $(x_0, x_1, p_0, p_1)$ преобразуется сдвигом импульсов:
+Decompression is algebraically identical to compression:
+- Phase vector $(x_0, x_1, p_0, p_1)$ undergoes momentum shearing:
   $$p_0 \leftarrow p_0 \oplus (S_{00} \bullet x_0) \oplus (S_{01} \bullet x_1)$$
   $$p_1 \leftarrow p_1 \oplus (S_{01} \bullet x_0) \oplus (S_{11} \bullet x_1)$$
-где $\bullet$ обозначает умножение в поле Галуа $GF(2^8)$ по неприводимому многочлену AES $0x11B$.
+where $\bullet$ denotes multiplication in $GF(2^8)$ modulo the AES polynomial $x^8 + x^4 + x^3 + x + 1 = \mathtt{0x11B}$.
 
-### 8.2. 2-адические вейвлеты Паскаля над $\mathbb{Z}_2$
+### 9.2. 2-Adic Mahler Ultrametric Pascal Wavelets
 
-Для фреймов `"MAHL"` применяется обратное волновое преобразование Паскаля. Нижнетреугольная матрица Паскаля $B$ унипотентна, её определитель $\det(B) \equiv 1 \pmod{256}$, что гарантирует точную обратимость в кольце $\mathbb{Z}/256\mathbb{Z}$ без деления:
+Frames marked with `"MAHL"` apply an inverse Pascal transform over $\mathbb{Z}_2$. The lower-triangular Pascal matrix $B$ satisfies $\det(B) \equiv 1 \pmod{256}$, ensuring exact invertibility without division:
 
 ```c
 for (int s = 15; s >= 1; s--) {
@@ -419,54 +424,50 @@ for (int s = 15; s >= 1; s--) {
 }
 ```
 
-### 8.3. Коллимация ветвлений x86 (Bra86) и BCJ-Split
+### 9.3. x86 Instruction Collimation (Bra86) and BCJ-Split
 
-- **BCJ-Split (`FLAG_BCJ_SPLIT = 0x20`)**: 32-битные смещения инструкций `CALL` (`0xE8`) и `JMP` (`0xE9`) вынесены в 4 раздельные байтовые плоскости $B_0, B_1, B_2, B_3$. Декодер восстанавливает смещения в поток машинного кода, после чего применяет обратный фильтр Bra86.
-- **Обратный фильтр Bra86**: Соответствует нормативному алгоритму 7-Zip Bra86 x86. Преобразует нормализованные адреса обратно в относительные смещения со сдвигом счетчика команд $PC = ip + p + 4$.
+- **BCJ-Split (`FLAG_BCJ_SPLIT = 0x20`)**: 32-bit displacements of `CALL` (`0xE8`) and `JMP` (`0xE9`) instructions are isolated into 4 separate byte planes $(B_0, B_1, B_2, B_3)$. The decompressor restores displacements into the code plane before invoking inverse Bra86 filtering.
+- **Inverse Bra86 Filter**: Normative 7-Zip Bra86 state machine converts absolute target addresses back to relative displacements using program counter base $PC = ip + p + 4$.
 
-### 8.4. Аффинная калибровка команд ARM64
+### 9.4. ARM64 Affine Branch Target Uncollimation
 
-Для инструкций `B` (`0x14000000`) и `BL` (`0x94000000`) архитектуры AArch64 (32-битные слова с маской `0x7C000000 == 0x14000000`) декодер деинвертирует адресную поправку:
+For AArch64 branch instructions `B` (`0x14000000`) and `BL` (`0x94000000`) identified by mask `v & 0x7C000000 == 0x14000000`, the relative displacement is restored:
 
 $$dest = (v - (pc \gg 2)) \ \& \ \mathtt{0x03FFFFFF} \ | \ (v \ \& \ \mathtt{0xFC000000})$$
 
 ---
 
-## 9. Критерии соответствия декодера (Conformance Requirements)
+## 10. Conformance Requirements and Zero-Allocation Invariant
 
-Любой декодер, претендующий на совместимость со стандартом PRZM, **ДОЛЖЕН** удовлетворять следующим обязательным требованиям:
+A compliant decompressor MUST satisfy the following normative requirements:
 
-1. **Побитовая эквивалентность (Lossless Invariant)**: Декодер обязан восстанавливать байтовую последовательность, идентичную оригиналу с точностью до бита.
-2. **Контракт нулевых динамических аллокаций (Zero-Allocation Contract)**:
-   - Во время выполнения процедуры `przm_decompress()` реализация **НЕ ДОЛЖНА** вызывать функции динамического выделения памяти кучи (`malloc`, `realloc`, `free`, `mmap`, оператор `new`).
-   - Все вспомогательные структуры, таблицы и промежуточные плоскости обязаны размещаться либо на стеке вызовов, либо в предопределённых статических буферах локальной памяти потока (Thread-Local Storage, TLS).
-3. **Безопасность границ памяти (Memory Safety)**:
-   - Декодер **НЕ ДОЛЖЕН** осуществлять чтение за пределами предоставленного входного буфера `src[0..src_len-1]`.
-   - Декодер **НЕ ДОЛЖЕН** осуществлять запись за пределами буфера вывода `dst[0..dst_capacity-1]`.
-   - Любое повреждение битового потока, попытка обращения к данным до начала буфера ($dst\_pos < d$) или невалидный опкод **ДОЛЖНЫ** приводить к немедленному возврату кода ошибки без сбоев (`SIGSEGV`, `panic`).
-4. **Контракт интерфейса вызова (ABI)**:
-   - Декодер предоставляет функцию инспекции заголовка `przm_get_uncompressed_size(src, src_len)`, возвращающую $U_{\text{size}}$ за время $O(1)$.
-   - Буфер вывода предоставляется вызывающей стороной с емкостью не менее $U_{\text{size}} + 64$ байта.
-
----
-
-## 10. Соображения безопасности (Security Considerations)
-
-1. **Атаки типа «Zip-бомба» (Denial of Service via Decompression Ratio)**:
-   Заголовок PRZM содержит точный несжатый размер $U_{\text{size}}$, ограниченный константой `PRZM_MAX_BLOCK_SIZE` (16 МиБ на один фрейм). Вызывающая сторона обязана проверять $U_{\text{size}}$ до выделения буфера памяти, чтобы исключить исчерпание оперативной памяти хоста.
-2. **Атаки с переполнением буфера (Buffer Overrun)**:
-   Все операции векторного копирования (`copy_match`) и сброса литералов защищены жесткими условиями остатка буфера вывода и верифицируются относительно $U_{\text{size}}$. Наличие гарантированного 64-байтового защитного интервала в конце буфера предотвращает фатальные сбои при векторных 64-битных инструкциях записи.
-3. **Неинициализированная память**:
-   Каждая позиция выходного буфера от 0 до $U_{\text{size}}-1$ явно перезаписывается литералами или матчами; чтение неинициализированной памяти исключено структурой грамматики.
+1. **Deterministic Losslessness**: The decoded output SHALL be byte-for-byte identical to the pre-compression input.
+2. **Zero-Allocation Contract (`0 B/op, 0 malloc/free calls`)**:
+   - The decompressor MUST NOT allocate heap memory dynamically (`malloc`, `free`, `realloc`, `mmap`, `new`) during `przm_decompress()`.
+   - All state structures, lookup arrays, and scratch buffers MUST reside on the stack or within pre-allocated Thread-Local Storage (TLS).
+3. **Memory Boundary Safety**:
+   - The decompressor MUST NOT read past `src_len` or write past $U_{\text{size}} + 64$.
+   - Any corrupt bitstream, invalid opcode, or backward reference past index 0 MUST cause an immediate error return (`PRZM_ERR_*`) without segfault or crash.
+4. **ABI Signature**:
+   - `przm_get_uncompressed_size(src, src_len)` returns $U_{\text{size}}$ in $O(1)$ time.
+   - Destination buffer $D$ MUST be allocated with capacity $\ge U_{\text{size}} + 64$.
 
 ---
 
-## 11. Приложение: Эталонная реализация на Си
+## 11. Security and Robustness Considerations
 
-Эталонный, функционально полный декодер PRZM на чистом C11 опубликован в официальном открытом репозитории проекта:
+1. **Zip-Bomb Mitigation**: Frame headers define $U_{\text{size}}$, strictly bounded by `PRZM_MAX_BLOCK_SIZE` (16 MiB per frame). Callers MUST inspect $U_{\text{size}}$ prior to buffer provisioning to avert memory exhaustion.
+2. **Buffer Overrun Elimination**: Vectorized 64-bit copy operations are guarded by remaining-length checks and bounded by the mandatory 64-byte trailing safety margin.
+3. **Uninitialized Memory Protection**: All output locations within $D[0..U_{\text{size}}-1]$ are written deterministically; uninitialized memory disclosure is mathematically impossible.
 
-- **Публичный заголовочный файл**: [`include/przm_dec.h`](file:///d:/CodingProjects/przm/include/przm_dec.h)
-- **Нормативная реализация**: [`src/przm_dec.c`](file:///d:/CodingProjects/przm/src/przm_dec.c)
-- **Тестовый и верификационный комплекс**: [`tests/test_przm_dec.c`](file:///d:/CodingProjects/przm/tests/test_przm_dec.c)
+---
 
-Исходный код распространяется под свободной лицензией **BSD-3-Clause**, разрешающей неограниченное коммерческое и некоммерческое внедрение в проприетарные и свободные системы, операционные системы, игровые движки и аппаратные прошивки.
+## 12. Annex: Reference Pure C Implementation
+
+The reference decompressor implementing this specification is maintained in the official repository:
+
+- **Public Header**: [`include/przm_dec.h`](file:///d:/CodingProjects/przm/include/przm_dec.h)
+- **Core Implementation**: [`src/przm_dec.c`](file:///d:/CodingProjects/przm/src/przm_dec.c)
+- **Verification Harness**: [`tests/test_przm_dec.c`](file:///d:/CodingProjects/przm/tests/test_przm_dec.c)
+
+The implementation is licensed under the **BSD-3-Clause** open-source license, permitting unrestricted integration into proprietary and open-source operating systems, game engines, and firmware.
