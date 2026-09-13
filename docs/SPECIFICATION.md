@@ -16,10 +16,9 @@ keyword:
   - vans
 author:
   -
-    ins: A. Senya
-    name: Arseny (Lemon4ksan)
-    org: PRZM Project
-    email: lemon4ksan@gmail.com
+    ins: A. Komolov
+    name: Arsenii Komolov
+    email: arsenii.komolov@yandex.ru
     uri: https://github.com/lemon4ksan/przm
 
 --- abstract
@@ -401,10 +400,10 @@ This document requests IANA to register the following media type in the "Media T
   - Magic number(s): `0x4D 0x5A 0x52 0x50` (`"PRZM"` in Little-Endian) at offset 0
   - File extension(s): `.przm`
   - Macintosh file type code(s): N/A
-- **Person & email address to contact for further information**: Arseny (Lemon4ksan) <lemon4ksan@gmail.com>
+- **Person & email address to contact for further information**: Arsenii Komolov <arsenii.komolov@yandex.ru>
 - **Intended usage**: COMMON
 - **Restrictions on usage**: None
-- **Author**: Arseny (Lemon4ksan)
+- **Author**: Arsenii Komolov
 - **Change controller**: IETF / Individual Submission
 
 ## HTTP Content-Coding Registration
@@ -467,8 +466,7 @@ The implementation is licensed under the **BSD-3-Clause** open-source license, p
 # Author's Address
 
 ```text
-Arseny (Lemon4ksan)
-PRZM Project
-Email: lemon4ksan@gmail.com
+Arsenii Komolov
+Email: arsenii.komolov@yandex.ru
 URI:   https://github.com/lemon4ksan/przm
 ```

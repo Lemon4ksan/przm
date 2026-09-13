@@ -111,3 +111,9 @@ Static approaches require human engineers to write and maintain explicit Data De
 PRZM does not combine disparate ideas arbitrarily; it removes the artificial constraints imposed by fifty years of exclusively one-dimensional thinking in data compression.
 
 Where classic 1D compressors treat data as a flat Euclidean tape, PRZM views data through its natural multi-dimensional, curved phase spaces - compressing it at memory-bus line rate along exact geodesic paths.
+
+## Epilogue: The Hardware Limit
+
+Главный вывод (Сентябрь 2026): **Наш C-код алгоритма PRZM уже работает на пределе законов физики.**
+
+Когда смена языка программирования (в рамках эксперимента по полному переписыванию алгоритмов на современный Fortran 90+) не дает ни доли процента прироста скорости, это означает, что вы уперлись не в синтаксис, не в накладные расходы языка и не в компилятор. Вы уперлись в Hardware — в пропускную способность шины памяти (L1/L2 cache bandwidth) и задержки конвейера процессора (instruction latency). Код идеален. Выжать из него больше на текущем поколении кремния физически невозможно.
