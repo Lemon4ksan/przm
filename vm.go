@@ -43,6 +43,8 @@ const (
 	OpMOV        Opcode = 0x0A // Z_d = Z_s1
 	OpADD        Opcode = 0x0B // Z_d[i] = Z_s1[i] + Z_s2[i] (mod 256)
 	OpSUB        Opcode = 0x0C // Z_d[i] = Z_s1[i] - Z_s2[i] (mod 256)
+	OpCMP_EQ     Opcode = 0x0D // Z_d[i] = (Z_s1[i] == Z_s2[i]) ? 0xFF : 0x00
+	OpSKIP_CHUNK Opcode = 0x0E // if (Z_s1 == 0) Skip next chunks
 )
 
 // VMInstruction is a packed 32-bit Turing-incomplete vector instruction:
@@ -94,8 +96,25 @@ func ExecuteProgramScalar(prog *VMProgram, ctx *VMContext, streamData [][]byte, 
 	}
 
 	for *outPtr < uSize {
+		skip := false
 		for i := 0; i < numInsts; i++ {
 			op, dstReg, s1, s2, imm := prog.Instructions[i].Decode()
+
+			if skip {
+				switch op {
+				case OpLOADSTREAM:
+					streamIdx := imm
+					if streamIdx >= 0 && streamIdx < len(streamData) {
+						streamPtrs[streamIdx] += VMRegSize
+						if streamPtrs[streamIdx] > len(streamData[streamIdx]) {
+							streamPtrs[streamIdx] = len(streamData[streamIdx])
+						}
+					}
+				case OpEMIT:
+					*outPtr += VMRegSize
+				}
+				continue
+			}
 
 			switch op {
 			case OpNOP:
@@ -166,6 +185,27 @@ func ExecuteProgramScalar(prog *VMProgram, ctx *VMContext, streamData [][]byte, 
 			case OpSUB:
 				for j := 0; j < VMRegSize; j++ {
 					ctx.Regs[dstReg][j] = ctx.Regs[s1][j] - ctx.Regs[s2][j]
+				}
+
+			case OpCMP_EQ:
+				for j := 0; j < VMRegSize; j++ {
+					if ctx.Regs[s1][j] == ctx.Regs[s2][j] {
+						ctx.Regs[dstReg][j] = 0xFF
+					} else {
+						ctx.Regs[dstReg][j] = 0x00
+					}
+				}
+
+			case OpSKIP_CHUNK:
+				allZero := true
+				for j := 0; j < VMRegSize; j++ {
+					if ctx.Regs[s1][j] != 0 {
+						allZero = false
+						break
+					}
+				}
+				if allZero {
+					skip = true
 				}
 
 			case OpEMIT:
@@ -402,12 +442,16 @@ func VMDecode(src []byte) ([]byte, error) {
 
 	// Attempt SIMD execution if available on architecture
 	if !ExecuteProgramSIMD(prog, ctx, streams, streamPtrs, dst, &outPtr, uSize) {
-		// Pure Go scalar execution fallback
+		// Pure Go scalar execution full reset fallback (unsupported opcode)
 		outPtr = 0
 		for i := range streamPtrs {
 			streamPtrs[i] = 0
 		}
-		clear(ctx.Regs[0][:])
+		for r := range VMNumRegs {
+			clear(ctx.Regs[r][:])
+		}
+	}
+	if outPtr < uSize {
 		if err := ExecuteProgramScalar(prog, ctx, streams, streamPtrs, dst, &outPtr, uSize); err != nil {
 			return nil, err
 		}

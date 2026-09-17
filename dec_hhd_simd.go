@@ -13,6 +13,10 @@ import (
 const DECSIMDEnabled = true
 
 func reconstructDECHHDSIMD(block *DECHHDBlock, dst []byte) bool {
+	if archsimd.X86.AVX512() {
+		return reconstructDECHHDSIMD512(block, dst)
+	}
+
 	M := block.Rows
 	W := block.Stride
 	if M < 2 || W < 2 || len(dst) < M*W {
@@ -56,6 +60,60 @@ func reconstructDECHHDSIMD(block *DECHHDBlock, dst []byte) bool {
 				prevVec := archsimd.LoadUint8x32(dst[rowPrev+j : rowPrev+j+32])
 				res := prevVec.Xor(vVec)
 				res.Store(dst[rowCurr+j : rowCurr+j+32])
+			}
+			for ; j < W; j++ {
+				dst[rowCurr+j] = dst[rowPrev+j] ^ v[j]
+			}
+		}
+	}
+
+	return true
+}
+
+func reconstructDECHHDSIMD512(block *DECHHDBlock, dst []byte) bool {
+	M := block.Rows
+	W := block.Stride
+	if M < 2 || W < 2 || len(dst) < M*W {
+		return false
+	}
+
+	// Row 0: Prefix-XOR from anchor
+	dst[0] = block.Anchor
+	for j := 0; j < W-1; j++ {
+		dst[j+1] = dst[j] ^ block.Ey[j]
+	}
+
+	v := make([]byte, W)
+	curlIdx := 0
+
+	for i := 0; i < M-1; i++ {
+		rowCurr := (i + 1) * W
+		rowPrev := i * W
+
+		v[0] = block.Ex[i]
+		if block.NNZ == 0 {
+			exVal := block.Ex[i]
+			exVec := archsimd.BroadcastUint8x64(exVal)
+			j := 0
+			for ; j+64 <= W; j += 64 {
+				prevVec := archsimd.LoadUint8x64(dst[rowPrev+j : rowPrev+j+64])
+				res := prevVec.Xor(exVec)
+				res.Store(dst[rowCurr+j : rowCurr+j+64])
+			}
+			for ; j < W; j++ {
+				dst[rowCurr+j] = dst[rowPrev+j] ^ exVal
+			}
+		} else {
+			for j := 0; j < W-1; j++ {
+				v[j+1] = v[j] ^ block.Curl[curlIdx]
+				curlIdx++
+			}
+			j := 0
+			for ; j+64 <= W; j += 64 {
+				vVec := archsimd.LoadUint8x64(v[j : j+64])
+				prevVec := archsimd.LoadUint8x64(dst[rowPrev+j : rowPrev+j+64])
+				res := prevVec.Xor(vVec)
+				res.Store(dst[rowCurr+j : rowCurr+j+64])
 			}
 			for ; j < W; j++ {
 				dst[rowCurr+j] = dst[rowPrev+j] ^ v[j]

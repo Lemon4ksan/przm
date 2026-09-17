@@ -401,3 +401,189 @@ func LRGGFDecode(src []byte) ([]byte, error) {
 
 	return dst[:origSize], nil
 }
+
+// Global LRGGF Macro-Deduplication
+const (
+	globalLRGGFMagic0 uint8 = 0x47 // 'G'
+	globalLRGGFMagic1 uint8 = 0x4C // 'L'
+	globalLRGGFVer1   uint8 = 0x01
+)
+
+var (
+	ErrGlobalLRGGFDictSize  = errors.New("przm/global_lrggf: dictionary must be 32KiB")
+)
+
+// GlobalLRGGFEncode compresses src using a 32 KiB dictionary (16 KiB U, 16 KiB V).
+func GlobalLRGGFEncode(src, dict []byte) ([]byte, error) {
+	n := len(src)
+	if n == 0 {
+		return []byte{}, nil
+	}
+	if len(dict) != 32768 {
+		return nil, ErrGlobalLRGGFDictSize
+	}
+
+	U := dict[:16384]
+	V := dict[16384:]
+
+	out := make([]byte, 0, n)
+	out = append(out, globalLRGGFMagic0, globalLRGGFMagic1, globalLRGGFVer1, 0x00)
+
+	var szBuf [4]byte
+	binary.LittleEndian.PutUint32(szBuf[:], uint32(n))
+	out = append(out, szBuf[:]...)
+
+	const blockSize = 64
+	numBlocks := (n + blockSize - 1) / blockSize
+
+	for bIdx := 0; bIdx < numBlocks; bIdx++ {
+		start := bIdx * blockSize
+		end := start + blockSize
+		if end > n {
+			end = n
+		}
+		
+		block := src[start:end]
+		blockLen := len(block)
+		
+		bestI, bestJ := 0, 0
+		bestErrors := blockLen + 1
+		
+		var bestErrIndices []uint8
+		var bestErrVals []byte
+
+		// Combinatorial Greedy Search based on Hamming weight
+		for i := 0; i < 256; i++ {
+			uVec := U[i*blockSize : i*blockSize+blockSize]
+			for j := 0; j < 256; j++ {
+				vVec := V[j*blockSize : j*blockSize+blockSize]
+				
+				errCount := 0
+				for k := 0; k < blockLen; k++ {
+					if block[k] != (uVec[k] ^ vVec[k]) {
+						errCount++
+					}
+				}
+				
+				if errCount < bestErrors {
+					bestErrors = errCount
+					bestI = i
+					bestJ = j
+				}
+			}
+		}
+
+		// Recompute best errors
+		if bestErrors <= blockLen {
+			uVec := U[bestI*blockSize : bestI*blockSize+blockSize]
+			vVec := V[bestJ*blockSize : bestJ*blockSize+blockSize]
+			for k := 0; k < blockLen; k++ {
+				pred := uVec[k] ^ vVec[k]
+				if block[k] != pred {
+					bestErrIndices = append(bestErrIndices, uint8(k))
+					bestErrVals = append(bestErrVals, block[k] ^ pred)
+				}
+			}
+		}
+
+		costFactorized := 3 + 2*bestErrors
+		costRaw := 1 + blockLen
+
+		if costFactorized < costRaw {
+			out = append(out, 0x01)
+			out = append(out, uint8(bestI), uint8(bestJ))
+			out = append(out, uint8(bestErrors))
+			for k := 0; k < bestErrors; k++ {
+				out = append(out, bestErrIndices[k], bestErrVals[k])
+			}
+		} else {
+			out = append(out, 0x00)
+			out = append(out, uint8(blockLen))
+			out = append(out, block...)
+		}
+	}
+	return out, nil
+}
+
+func GlobalLRGGFDecode(src, dict []byte) ([]byte, error) {
+	if len(src) < 8 {
+		return nil, ErrLRGGFCorrupted
+	}
+	if len(dict) != 32768 {
+		return nil, ErrGlobalLRGGFDictSize
+	}
+	if src[0] != globalLRGGFMagic0 || src[1] != globalLRGGFMagic1 || src[2] != globalLRGGFVer1 {
+		return nil, fmt.Errorf("%w: invalid Global LRGGF magic signature", ErrLRGGFCorrupted)
+	}
+
+	origSize := int(binary.LittleEndian.Uint32(src[4:8]))
+	dst := make([]byte, origSize)
+	ptr := 8
+	
+	U := dict[:16384]
+	V := dict[16384:]
+
+	dstOff := 0
+	const blockSize = 64
+
+	for dstOff < origSize {
+		if ptr >= len(src) {
+			return nil, ErrLRGGFCorrupted
+		}
+		flag := src[ptr]
+		ptr++
+
+		if flag == 0x00 {
+			if ptr >= len(src) {
+				return nil, ErrLRGGFCorrupted
+			}
+			blockLen := int(src[ptr])
+			ptr++
+			if ptr+blockLen > len(src) || dstOff+blockLen > origSize {
+				return nil, ErrLRGGFCorrupted
+			}
+			copy(dst[dstOff:dstOff+blockLen], src[ptr:ptr+blockLen])
+			ptr += blockLen
+			dstOff += blockLen
+		} else if flag == 0x01 {
+			if ptr+3 > len(src) {
+				return nil, ErrLRGGFCorrupted
+			}
+			uIdx := int(src[ptr])
+			vIdx := int(src[ptr+1])
+			errCount := int(src[ptr+2])
+			ptr += 3
+
+			if ptr+2*errCount > len(src) {
+				return nil, ErrLRGGFCorrupted
+			}
+
+			blockLen := blockSize
+			if dstOff+blockLen > origSize {
+				blockLen = origSize - dstOff
+			}
+
+			uVec := U[uIdx*blockSize : uIdx*blockSize+blockSize]
+			vVec := V[vIdx*blockSize : vIdx*blockSize+blockSize]
+
+			for k := 0; k < blockLen; k++ {
+				dst[dstOff+k] = uVec[k] ^ vVec[k]
+			}
+
+			for e := 0; e < errCount; e++ {
+				idx := int(src[ptr])
+				val := src[ptr+1]
+				ptr += 2
+				if idx < blockLen {
+					dst[dstOff+idx] ^= val
+				}
+			}
+			dstOff += blockLen
+		} else {
+			return nil, ErrLRGGFCorrupted
+		}
+	}
+
+	return dst, nil
+}
+

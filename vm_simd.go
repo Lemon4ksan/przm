@@ -20,6 +20,10 @@ func ExecuteProgramSIMD(prog *VMProgram, ctx *VMContext, streamData [][]byte, st
 		return false
 	}
 
+	if archsimd.X86.AVX512() {
+		return executeProgramSIMD512(prog, ctx, streamData, streamPtrs, dst, outPtr, uSize, numInsts)
+	}
+
 	var regsLo [VMNumRegs]archsimd.Uint8x32
 	var regsHi [VMNumRegs]archsimd.Uint8x32
 
@@ -30,8 +34,25 @@ func ExecuteProgramSIMD(prog *VMProgram, ctx *VMContext, streamData [][]byte, st
 	}
 
 	for *outPtr+VMRegSize <= uSize {
+		skip := false
 		for i := 0; i < numInsts; i++ {
 			op, dstReg, s1, s2, imm := prog.Instructions[i].Decode()
+
+			if skip {
+				switch op {
+				case OpLOADSTREAM:
+					streamIdx := imm
+					if streamIdx >= 0 && streamIdx < len(streamData) {
+						streamPtrs[streamIdx] += VMRegSize
+						if streamPtrs[streamIdx] > len(streamData[streamIdx]) {
+							streamPtrs[streamIdx] = len(streamData[streamIdx])
+						}
+					}
+				case OpEMIT:
+					*outPtr += VMRegSize
+				}
+				continue
+			}
 
 			switch op {
 			case OpNOP:
@@ -49,7 +70,7 @@ func ExecuteProgramSIMD(prog *VMProgram, ctx *VMContext, streamData [][]byte, st
 					regsHi[dstReg] = archsimd.LoadUint8x32(sBuf[sPtr+32 : sPtr+64])
 					streamPtrs[streamIdx] += VMRegSize
 				} else {
-					return false // fall back to scalar for ragged stream boundary
+					goto Done // fall back to scalar for ragged stream boundary
 				}
 
 			case OpEXPAND:
@@ -73,6 +94,15 @@ func ExecuteProgramSIMD(prog *VMProgram, ctx *VMContext, streamData [][]byte, st
 				regsLo[dstReg] = regsLo[s1].GaloisFieldMul(regsLo[s2])
 				regsHi[dstReg] = regsHi[s1].GaloisFieldMul(regsHi[s2])
 
+			case OpCMP_EQ:
+				regsLo[dstReg] = regsLo[s1].Equal(regsLo[s2]).ToInt8x32().AsUint8x32()
+				regsHi[dstReg] = regsHi[s1].Equal(regsHi[s2]).ToInt8x32().AsUint8x32()
+
+			case OpSKIP_CHUNK:
+				if regsLo[s1].IsZero() && regsHi[s1].IsZero() {
+					skip = true
+				}
+
 			case OpEMIT:
 				p := *outPtr
 				regsLo[dstReg].Store(dst[p : p+32])
@@ -85,11 +115,98 @@ func ExecuteProgramSIMD(prog *VMProgram, ctx *VMContext, streamData [][]byte, st
 		}
 	}
 
-	// If whole blocks were processed and exactly uSize reached, success!
-	if *outPtr == uSize {
-		return true
+Done:
+	for r := range VMNumRegs {
+		regsLo[r].Store(ctx.Regs[r][0:32])
+		regsHi[r].Store(ctx.Regs[r][32:64])
+	}
+	return true
+}
+
+func executeProgramSIMD512(prog *VMProgram, ctx *VMContext, streamData [][]byte, streamPtrs []int, dst []byte, outPtr *int, uSize int, numInsts int) bool {
+	var regs [VMNumRegs]archsimd.Uint8x64
+
+	zeroVec := archsimd.BroadcastUint8x64(0)
+	for r := range VMNumRegs {
+		regs[r] = zeroVec
 	}
 
-	// For the remaining tail (< 64B), execute via scalar fallback
-	return false
+	for *outPtr+VMRegSize <= uSize {
+		skip := false
+		for i := 0; i < numInsts; i++ {
+			op, dstReg, s1, s2, imm := prog.Instructions[i].Decode()
+
+			if skip {
+				switch op {
+				case OpLOADSTREAM:
+					streamIdx := imm
+					if streamIdx >= 0 && streamIdx < len(streamData) {
+						streamPtrs[streamIdx] += VMRegSize
+						if streamPtrs[streamIdx] > len(streamData[streamIdx]) {
+							streamPtrs[streamIdx] = len(streamData[streamIdx])
+						}
+					}
+				case OpEMIT:
+					*outPtr += VMRegSize
+				}
+				continue
+			}
+
+			switch op {
+			case OpNOP:
+				// no-op
+
+			case OpLOADSTREAM:
+				streamIdx := imm
+				if streamIdx < 0 || streamIdx >= len(streamData) {
+					return false
+				}
+				sBuf := streamData[streamIdx]
+				sPtr := streamPtrs[streamIdx]
+				if sPtr+VMRegSize <= len(sBuf) {
+					regs[dstReg] = archsimd.LoadUint8x64(sBuf[sPtr : sPtr+64])
+					streamPtrs[streamIdx] += VMRegSize
+				} else {
+					goto Done // fall back to scalar for ragged stream boundary
+				}
+
+			case OpEXPAND:
+				regs[dstReg] = archsimd.BroadcastUint8x64(byte(imm))
+
+			case OpMOV:
+				regs[dstReg] = regs[s1]
+
+			case OpXOR:
+				regs[dstReg] = regs[s1].Xor(regs[s2])
+
+			case OpTERNLOG:
+				regs[dstReg] = regs[dstReg].Xor(regs[s1].Xor(regs[s2]))
+
+			case OpGFMUL:
+				regs[dstReg] = regs[s1].GaloisFieldMul(regs[s2])
+
+			case OpCMP_EQ:
+				regs[dstReg] = regs[s1].Equal(regs[s2]).ToInt8x64().AsUint8x64()
+
+			case OpSKIP_CHUNK:
+				if regs[s1].Equal(zeroVec).ToBits() == ^uint64(0) {
+					skip = true
+				}
+
+			case OpEMIT:
+				p := *outPtr
+				regs[dstReg].Store(dst[p : p+64])
+				*outPtr += VMRegSize
+
+			default:
+				return false // unsupported SIMD opcode, fallback to scalar
+			}
+		}
+	}
+
+Done:
+	for r := range VMNumRegs {
+		regs[r].Store(ctx.Regs[r][:])
+	}
+	return true
 }

@@ -33,7 +33,7 @@ var (
 //
 //	symbol = (H << 4) | L,   where H in 0..15, L in 0..15.
 type Matrix16x16 struct {
-	Counts [16][16]uint32 // Counts[H][L]
+	Counts [256]uint32 // Counts[symbol]
 	Total  uint32
 }
 
@@ -41,9 +41,7 @@ type Matrix16x16 struct {
 func BuildFrequencyMatrix(src []byte) Matrix16x16 {
 	var m Matrix16x16
 	for _, b := range src {
-		h := b >> 4
-		l := b & 0x0F
-		m.Counts[h][l]++
+		m.Counts[b]++
 	}
 	m.Total = uint32(len(src))
 	return m
@@ -55,7 +53,7 @@ func (m *Matrix16x16) MarginalHigh() [16]uint32 {
 	for h := 0; h < 16; h++ {
 		sum := uint32(0)
 		for l := 0; l < 16; l++ {
-			sum += m.Counts[h][l]
+			sum += m.Counts[(h<<4)|l]
 		}
 		fH[h] = sum
 	}
@@ -68,7 +66,7 @@ func (m *Matrix16x16) MarginalLow() [16]uint32 {
 	for l := 0; l < 16; l++ {
 		sum := uint32(0)
 		for h := 0; h < 16; h++ {
-			sum += m.Counts[h][l]
+			sum += m.Counts[(h<<4)|l]
 		}
 		fL[l] = sum
 	}
@@ -93,7 +91,7 @@ func (m *Matrix16x16) MutualInformation() float64 {
 			continue
 		}
 		for l := 0; l < 16; l++ {
-			c := m.Counts[h][l]
+			c := m.Counts[(h<<4)|l]
 			if c == 0 {
 				continue
 			}
@@ -114,7 +112,7 @@ func (m *Matrix16x16) JointEntropy() float64 {
 	ent := 0.0
 	for h := 0; h < 16; h++ {
 		for l := 0; l < 16; l++ {
-			c := m.Counts[h][l]
+			c := m.Counts[(h<<4)|l]
 			if c > 0 {
 				p := float64(c) / total
 				ent -= p * math.Log2(p)
@@ -133,13 +131,10 @@ func (m *Matrix16x16) Normalize(targetM uint32) [256]uint16 {
 		return norm
 	}
 
-	// Count active symbols
 	active := 0
-	for h := 0; h < 16; h++ {
-		for l := 0; l < 16; l++ {
-			if m.Counts[h][l] > 0 {
-				active++
-			}
+	for s := 0; s < 256; s++ {
+		if m.Counts[s] > 0 {
+			active++
 		}
 	}
 
@@ -166,20 +161,17 @@ func (m *Matrix16x16) Normalize(targetM uint32) [256]uint16 {
 	rems := make([]remainder, 0, active)
 
 	allocated := uint32(0)
-	for h := 0; h < 16; h++ {
-		for l := 0; l < 16; l++ {
-			c := m.Counts[h][l]
-			if c > 0 {
-				s := (h << 4) | l
-				prod := uint64(c) * uint64(remTarget)
-				add := uint32(prod / total)
-				norm[s] = 1 + uint16(add)
-				allocated += 1 + add
-				rems = append(rems, remainder{
-					sym: s,
-					rem: prod % total,
-				})
-			}
+	for s := 0; s < 256; s++ {
+		c := m.Counts[s]
+		if c > 0 {
+			prod := uint64(c) * uint64(remTarget)
+			add := uint32(prod / total)
+			norm[s] = 1 + uint16(add)
+			allocated += 1 + add
+			rems = append(rems, remainder{
+				sym: s,
+				rem: prod % total,
+			})
 		}
 	}
 
@@ -199,9 +191,9 @@ func (m *Matrix16x16) Normalize(targetM uint32) [256]uint16 {
 
 // VANSModel holds the distribution and decoding lookup tables for V-ANS.
 type VANSModel struct {
-	Freq   [256]uint16
-	CDF    [257]uint16
-	Lookup [vansM]uint8
+	Freq        [256]uint16
+	CDF         [257]uint16
+	DecodeTable [vansM]uint32
 }
 
 // NewVANSModel creates a precomputed V-ANS model from a 16x16 joint frequency matrix.
@@ -214,7 +206,10 @@ func NewVANSModel(m *Matrix16x16) *VANSModel {
 		model.CDF[s] = uint16(cdf)
 		f := uint32(model.Freq[s])
 		for j := uint32(0); j < f; j++ {
-			model.Lookup[cdf+j] = uint8(s)
+			slot := cdf + j
+			slot_minus_c := j
+			entry := uint32(s) | (slot_minus_c << 8) | ((f - 1) << 20)
+			model.DecodeTable[slot] = entry
 		}
 		cdf += f
 	}
@@ -232,7 +227,10 @@ func NewVANSModelFromFreq(freq [256]uint16) *VANSModel {
 		model.CDF[s] = uint16(cdf)
 		f := uint32(model.Freq[s])
 		for j := uint32(0); j < f; j++ {
-			model.Lookup[cdf+j] = uint8(s)
+			slot := cdf + j
+			slot_minus_c := j
+			entry := uint32(s) | (slot_minus_c << 8) | ((f - 1) << 20)
+			model.DecodeTable[slot] = entry
 		}
 		cdf += f
 	}
@@ -457,14 +455,15 @@ func VANSDecode4x(src []byte) ([]byte, error) {
 		lane := i & 3
 
 		slot := x[lane] & (vansM - 1)
-		s := model.Lookup[slot]
+		entry := model.DecodeTable[slot]
+		s := byte(entry)
 		dst[i] = s
 
-		f := uint32(model.Freq[s])
-		c := uint32(model.CDF[s])
+		slot_minus_c := (entry >> 8) & 0xFFF
+		f := (entry >> 20) + 1
 
 		// Inverse state transition
-		x[lane] = f*(x[lane]>>12) + (slot - c)
+		x[lane] = f*(x[lane]>>12) + slot_minus_c
 
 		// Renormalization: restore bytes while x[lane] < vansL
 		for x[lane] < vansL {
