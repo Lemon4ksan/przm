@@ -6,6 +6,7 @@ package przm_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"os/exec"
@@ -87,6 +88,52 @@ func TestPureCDecompressorInterop(t *testing.T) {
 			}(),
 			levels: []int{1, 2, 3, 4},
 		},
+		{
+			name: "IsoQuantMultiChannelRGBA",
+			data: func() []byte {
+				buf := make([]byte, 1024*4)
+				for i := 0; i < 1024; i++ {
+					baseVal := uint8(i % 128)
+					buf[i*4+0] = baseVal
+					buf[i*4+1] = baseVal ^ 0x05
+					buf[i*4+2] = baseVal ^ 0x0A
+					buf[i*4+3] = 0xFF
+				}
+				return buf
+			}(),
+			levels: []int{1, 2, 3, 4},
+		},
+		{
+			name: "IsoQuantShaderSPIRV",
+			data: func() []byte {
+				buf := make([]byte, 2048)
+				binary.LittleEndian.PutUint32(buf[0:4], 0x07230203) // SPIR-V Magic
+				binary.LittleEndian.PutUint32(buf[4:8], 0x00010500) // Version 1.5
+				for i := 8; i < len(buf); i += 4 {
+					buf[i] = uint8(i % 64)
+					buf[i+1] = uint8((i + 1) % 64)
+					buf[i+2] = uint8((i + 2) % 64)
+					buf[i+3] = 0x3F // IEEE float exp ~ 1.0
+				}
+				return buf
+			}(),
+			levels: []int{1, 2, 3, 4},
+		},
+		{
+			name: "HeisenbergMultiChannelRGB",
+			data: func() []byte {
+				buf := make([]byte, 3072)
+				for i := 0; i < 1024; i++ {
+					x := uint8((i % 64) + 1)
+					y := uint8(((i / 64) % 64) + 1)
+					buf[i*3+0] = x
+					buf[i*3+1] = y
+					buf[i*3+2] = przm.GF256Mul(x, y)
+				}
+				return buf
+			}(),
+			levels: []int{1, 2, 3, 4},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -124,4 +171,122 @@ func TestPureCDecompressorInterop(t *testing.T) {
 			}
 		})
 	}
+
+	// Test direct Go-compressed IsoQuant frame interop with Pure C decompressor
+	t.Run("DirectIsoQuantFrame", func(t *testing.T) {
+		raw := make([]byte, 4096)
+		for i := 0; i < 1024; i++ {
+			b := uint8(i % 128)
+			raw[i*4+0] = b
+			raw[i*4+1] = b ^ 0x03
+			raw[i*4+2] = b ^ 0x07
+			raw[i*4+3] = 0xFF
+		}
+
+		compressed, err := przm.CompressIsoQuant(raw)
+		if err != nil {
+			t.Fatalf("CompressIsoQuant failed: %v", err)
+		}
+
+		inPrzm := filepath.Join(tmpDir, "isoquant_direct.przm")
+		outBin := filepath.Join(tmpDir, "isoquant_direct.out")
+
+		if err := os.WriteFile(inPrzm, compressed, 0644); err != nil {
+			t.Fatalf("failed to write compressed file: %v", err)
+		}
+
+		cmd := exec.Command(cBinPath, inPrzm, outBin)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("C decompressor failed on IsoQuant frame (exit status %v):\nOutput:\n%s", err, string(output))
+		}
+
+		decompressed, err := os.ReadFile(outBin)
+		if err != nil {
+			t.Fatalf("failed to read C decompressed file: %v", err)
+		}
+
+		if !bytes.Equal(decompressed, raw) {
+			t.Fatalf("Direct IsoQuant interop mismatch: got %d bytes, want %d bytes", len(decompressed), len(raw))
+		}
+	})
+
+	// Test direct Go-compressed Heisenberg frame interop with Pure C decompressor
+	t.Run("DirectHeisenbergFrame_Stride3", func(t *testing.T) {
+		raw := make([]byte, 3072)
+		for i := 0; i < 1024; i++ {
+			x := uint8((i % 64) + 1)
+			y := uint8(((i / 64) % 64) + 1)
+			raw[i*3+0] = x
+			raw[i*3+1] = y
+			raw[i*3+2] = przm.GF256Mul(x, y)
+		}
+
+		compressed, err := przm.CompressHeisenberg(raw, 3)
+		if err != nil {
+			t.Fatalf("CompressHeisenberg failed: %v", err)
+		}
+
+		inPrzm := filepath.Join(tmpDir, "heis3_direct.przm")
+		outBin := filepath.Join(tmpDir, "heis3_direct.out")
+
+		if err := os.WriteFile(inPrzm, compressed, 0644); err != nil {
+			t.Fatalf("failed to write compressed file: %v", err)
+		}
+
+		cmd := exec.Command(cBinPath, inPrzm, outBin)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("C decompressor failed on Heisenberg Stride 3 frame (exit status %v):\nOutput:\n%s", err, string(output))
+		}
+
+		decompressed, err := os.ReadFile(outBin)
+		if err != nil {
+			t.Fatalf("failed to read C decompressed file: %v", err)
+		}
+
+		if !bytes.Equal(decompressed, raw) {
+			t.Fatalf("Direct Heisenberg Stride 3 interop mismatch: got %d bytes, want %d bytes", len(decompressed), len(raw))
+		}
+	})
+
+	t.Run("DirectHeisenbergFrame_Stride4", func(t *testing.T) {
+		raw := make([]byte, 4096)
+		for i := 0; i < 1024; i++ {
+			x := uint8((i % 64) + 1)
+			y := uint8(((i / 64) % 64) + 1)
+			raw[i*4+0] = x
+			raw[i*4+1] = y
+			raw[i*4+2] = przm.GF256Mul(x, y)
+			raw[i*4+3] = 0xFF
+		}
+
+		compressed, err := przm.CompressHeisenberg(raw, 3)
+		if err != nil {
+			t.Fatalf("CompressHeisenberg failed: %v", err)
+		}
+
+		inPrzm := filepath.Join(tmpDir, "heis4_direct.przm")
+		outBin := filepath.Join(tmpDir, "heis4_direct.out")
+
+		if err := os.WriteFile(inPrzm, compressed, 0644); err != nil {
+			t.Fatalf("failed to write compressed file: %v", err)
+		}
+
+		cmd := exec.Command(cBinPath, inPrzm, outBin)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("C decompressor failed on Heisenberg Stride 4 frame (exit status %v):\nOutput:\n%s", err, string(output))
+		}
+
+		decompressed, err := os.ReadFile(outBin)
+		if err != nil {
+			t.Fatalf("failed to read C decompressed file: %v", err)
+		}
+
+		if !bytes.Equal(decompressed, raw) {
+			t.Fatalf("Direct Heisenberg Stride 4 interop mismatch: got %d bytes, want %d bytes", len(decompressed), len(raw))
+		}
+	})
 }
+

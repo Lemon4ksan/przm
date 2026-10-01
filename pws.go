@@ -99,6 +99,26 @@ func (g *GrammarH_DAG5) ExpandL4String(idx int) string {
 	return string(g.ExpL4[idx][:])
 }
 
+// ExpandL2String returns the human-readable string for a 4-byte Layer 2 rule.
+func (g *GrammarH_DAG5) ExpandL2String(idx int) string {
+	if idx >= len(g.L2) {
+		return ""
+	}
+	var b [4]byte
+	binary.LittleEndian.PutUint32(b[:], g.ExpL2[idx])
+	return string(b[:])
+}
+
+// ExpandL3String returns the human-readable string for an 8-byte Layer 3 rule.
+func (g *GrammarH_DAG5) ExpandL3String(idx int) string {
+	if idx >= len(g.L3) {
+		return ""
+	}
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], g.ExpL3[idx])
+	return string(b[:])
+}
+
 // InduceGrammar5 induces a 5-layer H-DAG grammar (2B, 4B, 8B, 16B, 32B) over src.
 func InduceGrammar5(src []byte) (*GrammarH_DAG5, []uint16) {
 	sp := grammarScratchpadPool.Get()
@@ -111,7 +131,7 @@ func InduceGrammar5(src []byte) (*GrammarH_DAG5, []uint16) {
 }
 
 func induceGrammar5WithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_DAG5, []uint16) {
-	baseG, tokens := induceGrammarWithScratchpad(src, sp)
+	baseG, tokens := induceGrammarWithScratchpadNoPrune(src, sp)
 
 	g := &GrammarH_DAG5{
 		L1: baseG.L1,
@@ -120,6 +140,8 @@ func induceGrammar5WithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_
 	}
 
 	if len(g.L3) == 0 || len(tokens) < 4 {
+		g, tokens = FoldCanonicalGrammar5(g, tokens, &sp.kb)
+		g, tokens = PruneGrammar5(g, tokens, sp)
 		g.BuildExpansionTables()
 		return g, tokens
 	}
@@ -128,9 +150,7 @@ func induceGrammar5WithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_
 	// Phase 4: Induce Layer 4 Rules (16-byte pairs: L3 + L3)
 	// ==========================================
 	sp.cands = sp.cands[:0]
-	var dirtyL4 [16]uint32
-	dirtyL4Count := 0
-	clear(sp.freq256[:])
+	sp.dirtyL1 = sp.dirtyL1[:0]
 
 	l3Count := uint16(len(g.L3))
 	tLen := len(tokens)
@@ -138,26 +158,21 @@ func induceGrammar5WithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_
 		tA, tB := tokens[i], tokens[i+1]
 		if tA >= 1024 && tA < 1024+l3Count && tB >= 1024 && tB < 1024+l3Count {
 			pk := (uint32(tA-1024) << 4) | uint32(tB-1024)
-			if sp.freq256[pk] == 0 && dirtyL4Count < len(dirtyL4) {
-				dirtyL4[dirtyL4Count] = pk
-				dirtyL4Count++
+			if sp.freq256[pk] == 0 {
+				sp.dirtyL1 = append(sp.dirtyL1, pk)
 			}
 			sp.freq256[pk]++
 		}
 	}
 
-	for idx := 0; idx < dirtyL4Count; idx++ {
-		pk := dirtyL4[idx]
+	for _, pk := range sp.dirtyL1 {
 		c := int(sp.freq256[pk])
 		if c >= 2 { // Maneth threshold: occ >= 2 is profitable for 16B rules
 			sp.cands = insertTopCand(sp.cands, maxL4Rules, pairCandidate{key: pk, count: c})
 		}
 	}
 
-	l4Limit := len(sp.cands)
-	if l4Limit > maxL4Rules {
-		l4Limit = maxL4Rules
-	}
+	l4Limit := min(len(sp.cands), maxL4Rules)
 
 	for i := 0; i < l4Limit; i++ {
 		k := sp.cands[i].key
@@ -168,36 +183,24 @@ func induceGrammar5WithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_
 		sp.pairTo256[k] = l4ID + 1
 	}
 
-	// Substitute Layer 4 rules (token base 2048)
+	// Substitute Layer 4 rules with Knuth-Bendix confluent rewriting
 	if len(g.L4) > 0 {
-		outTokens := sp.otherBuffer(tokens)
-		for i := 0; i < tLen; {
-			if i < tLen-1 && tokens[i] >= 1024 && tokens[i] < 1024+l3Count &&
-				tokens[i+1] >= 1024 && tokens[i+1] < 1024+l3Count {
-				pk := (uint32(tokens[i]-1024) << 4) | uint32(tokens[i+1]-1024)
-				if id := sp.pairTo256[pk]; id > 0 {
-					outTokens = append(outTokens, 2048+uint16(id-1))
-					i += 2
-					continue
-				}
-			}
-			outTokens = append(outTokens, tokens[i])
-			i++
-		}
+		tokens = KBConfluentSubstituteL4(tokens, sp.otherBuffer(tokens), sp.pairTo256[:], sp.freq256[:], l3Count)
 		for i := 0; i < l4Limit; i++ {
 			sp.pairTo256[sp.cands[i].key] = 0
 		}
-		tokens = outTokens
 	}
+	for _, pk := range sp.dirtyL1 {
+		sp.freq256[pk] = 0
+	}
+	sp.dirtyL1 = sp.dirtyL1[:0]
 
 	// ==========================================
 	// Phase 5: Induce Layer 5 Rules (32-byte pairs: L4 + L4)
 	// ==========================================
 	if len(g.L4) > 0 && len(tokens) >= 4 {
 		sp.cands = sp.cands[:0]
-		var dirtyL5 [16]uint32
-		dirtyL5Count := 0
-		clear(sp.freq256[:])
+		sp.dirtyL1 = sp.dirtyL1[:0]
 
 		l4Count := uint16(len(g.L4))
 		tLen = len(tokens)
@@ -205,26 +208,21 @@ func induceGrammar5WithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_
 			tA, tB := tokens[i], tokens[i+1]
 			if tA >= 2048 && tA < 2048+l4Count && tB >= 2048 && tB < 2048+l4Count {
 				pk := (uint32(tA-2048) << 4) | uint32(tB-2048)
-				if sp.freq256[pk] == 0 && dirtyL5Count < len(dirtyL5) {
-					dirtyL5[dirtyL5Count] = pk
-					dirtyL5Count++
+				if sp.freq256[pk] == 0 {
+					sp.dirtyL1 = append(sp.dirtyL1, pk)
 				}
 				sp.freq256[pk]++
 			}
 		}
 
-		for idx := 0; idx < dirtyL5Count; idx++ {
-			pk := dirtyL5[idx]
+		for _, pk := range sp.dirtyL1 {
 			c := int(sp.freq256[pk])
 			if c >= 2 {
 				sp.cands = insertTopCand(sp.cands, maxL5Rules, pairCandidate{key: pk, count: c})
 			}
 		}
 
-		l5Limit := len(sp.cands)
-		if l5Limit > maxL5Rules {
-			l5Limit = maxL5Rules
-		}
+		l5Limit := min(len(sp.cands), maxL5Rules)
 
 		for i := 0; i < l5Limit; i++ {
 			k := sp.cands[i].key
@@ -235,28 +233,24 @@ func induceGrammar5WithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_
 			sp.pairTo256[k] = l5ID + 1
 		}
 
-		// Substitute Layer 5 rules (token base 4096)
+		// Substitute Layer 5 rules with Knuth-Bendix confluent rewriting
 		if len(g.L5) > 0 {
-			outTokens := sp.otherBuffer(tokens)
-			for i := 0; i < tLen; {
-				if i < tLen-1 && tokens[i] >= 2048 && tokens[i] < 2048+l4Count &&
-					tokens[i+1] >= 2048 && tokens[i+1] < 2048+l4Count {
-					pk := (uint32(tokens[i]-2048) << 4) | uint32(tokens[i+1]-2048)
-					if id := sp.pairTo256[pk]; id > 0 {
-						outTokens = append(outTokens, 4096+uint16(id-1))
-						i += 2
-						continue
-					}
-				}
-				outTokens = append(outTokens, tokens[i])
-				i++
-			}
+			tokens = KBConfluentSubstituteL5(tokens, sp.otherBuffer(tokens), sp.pairTo256[:], sp.freq256[:], l4Count)
 			for i := 0; i < l5Limit; i++ {
 				sp.pairTo256[sp.cands[i].key] = 0
 			}
-			tokens = outTokens
 		}
+		for _, pk := range sp.dirtyL1 {
+			sp.freq256[pk] = 0
+		}
+		sp.dirtyL1 = sp.dirtyL1[:0]
 	}
+
+	// Knuth-Bendix canonical folding across all layers (eliminate duplicates)
+	g, tokens = FoldCanonicalGrammar5(g, tokens, &sp.kb)
+
+	// Unified 5-layer Maneth bottom-up utility pruning
+	g, tokens = PruneGrammar5(g, tokens, sp)
 
 	g.BuildExpansionTables()
 	return g, tokens
@@ -372,7 +366,7 @@ func PWSEncode(src []byte) ([]byte, error) {
 
 // PWSDecode performs instantaneous 256-bit AVX-Wave zero-stack decompression.
 func PWSDecode(src []byte) ([]byte, error) {
-	if len(src) < 24 {
+	if len(src) < 20 {
 		return nil, ErrPWSCorrupted
 	}
 

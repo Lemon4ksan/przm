@@ -56,6 +56,38 @@ static void test_get_uncompressed_size(void) {
     sz = przm_get_uncompressed_size(frame_pws, sizeof(frame_pws));
     TEST_ASSERT(sz == 128, "PWS size mismatch");
 
+    uint8_t frame_isoq[20];
+    write_u32_le(frame_isoq, PRZM_MAGIC_ISOQUANT);
+    frame_isoq[4] = 0x01; /* Mode = Collimated */
+    write_u32_le(frame_isoq + 8, 8192);
+    sz = przm_get_uncompressed_size(frame_isoq, sizeof(frame_isoq));
+    TEST_ASSERT(sz == 8192, "IsoQuant size mismatch");
+
+    uint8_t frame_gctr[10];
+    write_u32_le(frame_gctr, PRZM_MAGIC_GCTR);
+    frame_gctr[4] = 0; /* op_id */
+    frame_gctr[5] = 1; /* sub_fmt */
+    write_u32_le(frame_gctr + 6, 1207);
+    sz = przm_get_uncompressed_size(frame_gctr, sizeof(frame_gctr));
+    TEST_ASSERT(sz == 1207, "GCTR size mismatch");
+
+    uint8_t frame_heis[12];
+    write_u32_le(frame_heis, PRZM_MAGIC_HEISENBERG);
+    write_u32_le(frame_heis + 4, 6144);
+    frame_heis[8] = 3; /* Stride = 3 */
+    frame_heis[9] = 1; /* Mode = Foliated */
+    frame_heis[10] = 0;
+    frame_heis[11] = 0;
+    sz = przm_get_uncompressed_size(frame_heis, sizeof(frame_heis));
+    TEST_ASSERT(sz == 6144, "Heisenberg size mismatch");
+
+    uint8_t frame_cshd[24];
+    memset(frame_cshd, 0, sizeof(frame_cshd));
+    write_u32_le(frame_cshd, PRZM_MAGIC_CELLULAR_SHEAF);
+    write_u32_le(frame_cshd + 4, 4096);
+    sz = przm_get_uncompressed_size(frame_cshd, sizeof(frame_cshd));
+    TEST_ASSERT(sz == 4096, "Cellular Sheaf size mismatch");
+
     TEST_PASS("przm_get_uncompressed_size");
 }
 
@@ -219,6 +251,317 @@ static void test_pws_grammar(void) {
     TEST_PASS("pws_grammar");
 }
 
+/* 7. Test IsoQuant 4D Quaternionic Isoclinic Uncollimation */
+static void test_isoquant_uncollimation(void) {
+    uint8_t orig[32] = {
+        0x01, 0x02, 0x03, 0x04, 0x10, 0x20, 0x30, 0x40,
+        0xAA, 0xBB, 0xCC, 0xDD, 0x55, 0x66, 0x77, 0x88,
+        0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
+        0x42, 0x69, 0x99, 0xAA, 0xFE, 0xDC, 0xBA, 0x98
+    };
+
+    uint8_t qL_inv[4] = {1, 0x33, 0x33, 0};
+    uint8_t qR_inv[4] = {1, 0, 0x77, 0x77};
+
+    /* Involutive property: unit quaternions (sum == 1) are self-inverse.
+     * Unrotating twice must bit-exactly restore orig! */
+    uint8_t buf[32];
+    memcpy(buf, orig, 32);
+
+    przm_status_t status = przm_isoquant_unrotate_inplace(buf, 32, qL_inv, qR_inv);
+    TEST_ASSERT(status == PRZM_OK, "First unrotate failed");
+    TEST_ASSERT(memcmp(buf, orig, 32) != 0, "Rotation was a no-op");
+
+    status = przm_isoquant_unrotate_inplace(buf, 32, qL_inv, qR_inv);
+    TEST_ASSERT(status == PRZM_OK, "Second unrotate failed");
+    TEST_ASSERT(memcmp(buf, orig, 32) == 0, "Double unrotate failed to reconstruct original bytes!");
+
+    /* Frame decompression test: Mode 1 (Collimated) */
+    uint8_t frame[20 + 32];
+    write_u32_le(frame, PRZM_MAGIC_ISOQUANT);
+    frame[4] = 1; /* Mode = Collimated */
+    frame[5] = 0; frame[6] = 0; frame[7] = 0;
+    write_u32_le(frame + 8, 32); /* orig_len = 32 */
+    memcpy(frame + 12, qL_inv, 4);
+    memcpy(frame + 16, qR_inv, 4);
+
+    /* Construct payload by rotating orig once */
+    uint8_t payload[32];
+    memcpy(payload, orig, 32);
+    przm_isoquant_unrotate_inplace(payload, 32, qL_inv, qR_inv);
+    memcpy(frame + 20, payload, 32);
+
+    uint8_t dst[128];
+    int64_t res = przm_decompress(frame, sizeof(frame), dst, sizeof(dst));
+    TEST_ASSERT(res == 32, "IsoQuant decompression returned wrong size");
+    TEST_ASSERT(memcmp(dst, orig, 32) == 0, "IsoQuant decompress failed to match original data!");
+
+    TEST_PASS("isoquant_uncollimation");
+}
+
+/* 8. Test Galois Computational Trace Reduction (GCTR) Decompression */
+static void test_gctr_decompression(void) {
+    uint8_t pws_frame[64];
+    size_t fptr = 0;
+    pws_frame[fptr++] = 'P'; pws_frame[fptr++] = 'W'; pws_frame[fptr++] = 0x01; pws_frame[fptr++] = 0x00;
+    write_u32_le(pws_frame + fptr, 4); fptr += 4;
+    write_u32_le(pws_frame + fptr, 1); fptr += 4;
+    pws_frame[fptr++] = 1; pws_frame[fptr++] = 1; pws_frame[fptr++] = 0; pws_frame[fptr++] = 0; pws_frame[fptr++] = 0;
+    pws_frame[fptr++] = 0; pws_frame[fptr++] = 0; pws_frame[fptr++] = 0;
+    pws_frame[fptr++] = 'H'; pws_frame[fptr++] = 'e';
+    pws_frame[fptr++] = 0; pws_frame[fptr++] = 0;
+    pws_frame[fptr++] = 0xD0;
+
+    uint8_t gctr_frame[10 + 64];
+    write_u32_le(gctr_frame, PRZM_MAGIC_GCTR);
+    gctr_frame[4] = 0; /* OpGCTRBypass */
+    gctr_frame[5] = 2; /* GCTRSubPWS */
+    write_u32_le(gctr_frame + 6, 4); /* OrigSize = 4 */
+    memcpy(gctr_frame + 10, pws_frame, fptr);
+
+    uint8_t dst[128];
+    int64_t res = przm_decompress(gctr_frame, 10 + fptr, dst, sizeof(dst));
+    TEST_ASSERT(res == 4, "GCTR PWS decompress size mismatch");
+    TEST_ASSERT(memcmp(dst, "HeHe", 4) == 0, "GCTR payload mismatch");
+
+    TEST_PASS("gctr_decompression");
+}
+
+/* 9. Test Discrete Heisenberg Group H_3(F_{2^8}) Involutive Unfoliation */
+static void test_heisenberg_unfoliation(void) {
+    /* 1. Test Stride 3 (RGB/Triplets) Involution */
+    uint8_t orig3[24] = {
+        0x10, 0x20, 0x30,  /* Triplet 0 */
+        0xAB, 0xCD, 0xEF,  /* Triplet 1 */
+        0x42, 0x69, 0x99,  /* Triplet 2 */
+        0xFF, 0x01, 0x55,  /* Triplet 3 */
+        0x00, 0x11, 0x22,  /* Triplet 4 */
+        0x33, 0x44, 0x55,  /* Triplet 5 */
+        0x66, 0x77, 0x88,  /* Triplet 6 */
+        0x99, 0xAA, 0xBB   /* Triplet 7 */
+    };
+    uint8_t buf3[24];
+    memcpy(buf3, orig3, 24);
+
+    /* First unfoliation modifies channel z (indices 2, 5, 8, ...) */
+    int status = przm_heisenberg_unfoliate_inplace(buf3, 24, 3);
+    TEST_ASSERT(status == PRZM_OK, "First unfoliate stride 3 failed");
+    TEST_ASSERT(memcmp(buf3, orig3, 24) != 0, "Foliation stride 3 was a no-op");
+    /* Channel x and y must remain identical */
+    for (size_t i = 0; i < 24; i += 3) {
+        TEST_ASSERT(buf3[i] == orig3[i], "Channel x modified");
+        TEST_ASSERT(buf3[i + 1] == orig3[i + 1], "Channel y modified");
+    }
+
+    /* Second unfoliation must reconstruct original bytes bit-exactly (Involution) */
+    status = przm_heisenberg_unfoliate_inplace(buf3, 24, 3);
+    TEST_ASSERT(status == PRZM_OK, "Second unfoliate stride 3 failed");
+    TEST_ASSERT(memcmp(buf3, orig3, 24) == 0, "Involution failed for stride 3!");
+
+    /* 2. Test Stride 4 (RGBA/Quads) Involution */
+    uint8_t orig4[32] = {
+        0x10, 0x20, 0x30, 0xFF,
+        0xAB, 0xCD, 0xEF, 0x80,
+        0x42, 0x69, 0x99, 0x00,
+        0x55, 0xAA, 0x33, 0xCC,
+        0x12, 0x34, 0x56, 0x78,
+        0x9A, 0xBC, 0xDE, 0xF0,
+        0x11, 0x22, 0x33, 0x44,
+        0x55, 0x66, 0x77, 0x88
+    };
+    uint8_t buf4[32];
+    memcpy(buf4, orig4, 32);
+
+    status = przm_heisenberg_unfoliate_inplace(buf4, 32, 4);
+    TEST_ASSERT(status == PRZM_OK, "First unfoliate stride 4 failed");
+    TEST_ASSERT(memcmp(buf4, orig4, 32) != 0, "Foliation stride 4 was a no-op");
+    for (size_t i = 0; i < 32; i += 4) {
+        TEST_ASSERT(buf4[i] == orig4[i], "Channel x modified");
+        TEST_ASSERT(buf4[i + 1] == orig4[i + 1], "Channel y modified");
+        TEST_ASSERT(buf4[i + 3] == orig4[i + 3], "Channel w modified (pass-through violated)");
+    }
+
+    status = przm_heisenberg_unfoliate_inplace(buf4, 32, 4);
+    TEST_ASSERT(status == PRZM_OK, "Second unfoliate stride 4 failed");
+    TEST_ASSERT(memcmp(buf4, orig4, 32) == 0, "Involution failed for stride 4!");
+
+    /* 3. Test Frame Decompression: Mode 1 (Foliated Raw) */
+    uint8_t frame_m1[12 + 24];
+    write_u32_le(frame_m1, PRZM_MAGIC_HEISENBERG);
+    write_u32_le(frame_m1 + 4, 24);
+    frame_m1[8] = 3; /* Stride = 3 */
+    frame_m1[9] = 1; /* Mode = Foliated */
+    frame_m1[10] = 0;
+    frame_m1[11] = 0;
+
+    /* Construct payload by foliating orig3 once */
+    memcpy(frame_m1 + 12, orig3, 24);
+    przm_heisenberg_unfoliate_inplace(frame_m1 + 12, 24, 3);
+
+    uint8_t dst_frame[128];
+    int64_t res_frame = przm_decompress(frame_m1, sizeof(frame_m1), dst_frame, sizeof(dst_frame));
+    TEST_ASSERT(res_frame == 24, "Heisenberg Mode 1 decompression returned wrong size");
+    TEST_ASSERT(memcmp(dst_frame, orig3, 24) == 0, "Heisenberg Mode 1 decompress mismatch!");
+
+    /* 4. Test Frame Decompression: Mode 0 (Raw Bypass) */
+    uint8_t frame_m0[12 + 24];
+    write_u32_le(frame_m0, PRZM_MAGIC_HEISENBERG);
+    write_u32_le(frame_m0 + 4, 24);
+    frame_m0[8] = 3;
+    frame_m0[9] = 0; /* Mode = Raw Bypass */
+    frame_m0[10] = 0;
+    frame_m0[11] = 0;
+    memcpy(frame_m0 + 12, orig3, 24);
+
+    res_frame = przm_decompress(frame_m0, sizeof(frame_m0), dst_frame, sizeof(dst_frame));
+    TEST_ASSERT(res_frame == 24, "Heisenberg Mode 0 decompression returned wrong size");
+    TEST_ASSERT(memcmp(dst_frame, orig3, 24) == 0, "Heisenberg Mode 0 decompress mismatch!");
+
+    TEST_PASS("heisenberg_unfoliation");
+}
+
+/* 10. Test Cellular Sheaves with Discrete Hodge Laplacians (CSHD) */
+static void test_cellular_sheaf_decompression(void) {
+    uint8_t dst[256];
+    memset(dst, 0, sizeof(dst));
+
+    /* 1. Test Raw Passthrough Mode */
+    uint8_t raw_data[16] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+                            0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+    uint8_t frame_raw[24 + 16];
+    memset(frame_raw, 0, 24);
+    write_u32_le(frame_raw, PRZM_MAGIC_CELLULAR_SHEAF);
+    write_u32_le(frame_raw + 4, 16);
+    frame_raw[13] = 1; /* Twist */
+    frame_raw[16] = (uint8_t)(PRZM_CSHD_FLAG_RAW & 0xFF);
+    frame_raw[17] = (uint8_t)((PRZM_CSHD_FLAG_RAW >> 8) & 0xFF);
+    memcpy(frame_raw + 24, raw_data, 16);
+
+    int64_t dec_raw = przm_decompress(frame_raw, sizeof(frame_raw), dst, sizeof(dst));
+    TEST_ASSERT(dec_raw == 16, "CSHD Raw decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, raw_data, 16) == 0, "CSHD Raw decompress data mismatch");
+
+    /* 2. Test Curl-Free Harmonic Frame (W=8, M=4, N=32) */
+    uint8_t eh[7] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+    uint8_t ev[3] = {0x10, 0x20, 0x30};
+    uint8_t expected_cf[32];
+    expected_cf[0] = 0x42;
+    for (int j = 0; j < 7; j++) {
+        expected_cf[j + 1] = expected_cf[j] ^ eh[j];
+    }
+    for (int i = 1; i < 4; i++) {
+        uint8_t v = ev[i - 1];
+        for (int j = 0; j < 8; j++) {
+            expected_cf[i * 8 + j] = expected_cf[(i - 1) * 8 + j] ^ v;
+        }
+    }
+
+    uint8_t frame_cf[24 + 7 + 3];
+    memset(frame_cf, 0, 24);
+    write_u32_le(frame_cf, PRZM_MAGIC_CELLULAR_SHEAF);
+    write_u32_le(frame_cf + 4, 32);
+    frame_cf[8] = 8;  frame_cf[9] = 0;  /* W = 8 */
+    frame_cf[10] = 4; frame_cf[11] = 0; /* M = 4 */
+    frame_cf[12] = 0x42;                /* Anchor */
+    frame_cf[13] = 1;                   /* Twist = 1 */
+    frame_cf[14] = 0; frame_cf[15] = 0; /* Betti1 = 0 */
+    frame_cf[16] = (uint8_t)(PRZM_CSHD_FLAG_CURL_FREE & 0xFF);
+    frame_cf[17] = (uint8_t)((PRZM_CSHD_FLAG_CURL_FREE >> 8) & 0xFF);
+    memcpy(frame_cf + 24, eh, 7);
+    memcpy(frame_cf + 31, ev, 3);
+
+    memset(dst, 0, sizeof(dst));
+    int64_t dec_cf = przm_decompress(frame_cf, sizeof(frame_cf), dst, sizeof(dst));
+    TEST_ASSERT(dec_cf == 32, "CSHD Curl-Free decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, expected_cf, 32) == 0, "CSHD Curl-Free decompress data mismatch");
+
+    /* Also verify direct przm_cellular_sheaf_decompress call */
+    memset(dst, 0, sizeof(dst));
+    int64_t direct_cf = przm_cellular_sheaf_decompress(frame_cf, sizeof(frame_cf), dst, sizeof(dst));
+    TEST_ASSERT(direct_cf == 32, "Direct przm_cellular_sheaf_decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, expected_cf, 32) == 0, "Direct przm_cellular_sheaf_decompress data mismatch");
+
+    /* 3. Test Constant Boundaries (Harmonic Generators h1 and h2) */
+    uint8_t gamma_h = 0x01;
+    uint8_t gamma_v = 0x04;
+    uint8_t expected_const[32];
+    expected_const[0] = 0x55;
+    for (int j = 0; j < 7; j++) {
+        expected_const[j + 1] = expected_const[j] ^ gamma_h;
+    }
+    for (int i = 1; i < 4; i++) {
+        for (int j = 0; j < 8; j++) {
+            expected_const[i * 8 + j] = expected_const[(i - 1) * 8 + j] ^ gamma_v;
+        }
+    }
+
+    uint8_t frame_const[24 + 2];
+    memset(frame_const, 0, 24);
+    write_u32_le(frame_const, PRZM_MAGIC_CELLULAR_SHEAF);
+    write_u32_le(frame_const + 4, 32);
+    frame_const[8] = 8;  frame_const[9] = 0;  /* W = 8 */
+    frame_const[10] = 4; frame_const[11] = 0; /* M = 4 */
+    frame_const[12] = 0x55;                   /* Anchor */
+    frame_const[13] = 1;                      /* Twist = 1 */
+    frame_const[14] = 2; frame_const[15] = 0; /* Betti1 = 2 */
+    uint16_t const_flags = PRZM_CSHD_FLAG_CURL_FREE | PRZM_CSHD_FLAG_CONST_EH | PRZM_CSHD_FLAG_CONST_EV;
+    frame_const[16] = (uint8_t)(const_flags & 0xFF);
+    frame_const[17] = (uint8_t)((const_flags >> 8) & 0xFF);
+    frame_const[24] = gamma_h;
+    frame_const[25] = gamma_v;
+
+    memset(dst, 0, sizeof(dst));
+    int64_t dec_const = przm_decompress(frame_const, sizeof(frame_const), dst, sizeof(dst));
+    TEST_ASSERT(dec_const == 32, "CSHD Constant Boundary decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, expected_const, 32) == 0, "CSHD Constant Boundary decompress data mismatch");
+
+    /* 4. Test Sparse Curl Frame (W=4, M=3, N=12, 1 non-zero face curl) */
+    uint8_t eh_sp[3] = {0x01, 0x02, 0x03};
+    uint8_t ev_sp[2] = {0x04, 0x08};
+    uint8_t expected_sp[12];
+    expected_sp[0] = 0x10;
+    expected_sp[1] = 0x10 ^ 0x01; /* 0x11 */
+    expected_sp[2] = 0x11 ^ 0x02; /* 0x13 */
+    expected_sp[3] = 0x13 ^ 0x03; /* 0x10 */
+
+    /* Row 1: face index 1 (i=0, j=1) has curl 0x0F */
+    /* V1(0)=0x04, V1(1)=0x04, V1(2)=0x04^0x0F=0x0B, V1(3)=0x0B */
+    expected_sp[4] = expected_sp[0] ^ 0x04; /* 0x14 */
+    expected_sp[5] = expected_sp[1] ^ 0x04; /* 0x15 */
+    expected_sp[6] = expected_sp[2] ^ 0x0B; /* 0x18 */
+    expected_sp[7] = expected_sp[3] ^ 0x0B; /* 0x1B */
+
+    /* Row 2: no non-zeros on row 1, V2(j) = 0x08 everywhere */
+    expected_sp[8]  = expected_sp[4] ^ 0x08; /* 0x1C */
+    expected_sp[9]  = expected_sp[5] ^ 0x08; /* 0x1D */
+    expected_sp[10] = expected_sp[6] ^ 0x08; /* 0x10 */
+    expected_sp[11] = expected_sp[7] ^ 0x08; /* 0x13 */
+
+    uint8_t frame_sp[24 + 3 + 2 + 4 + 5];
+    memset(frame_sp, 0, 24);
+    write_u32_le(frame_sp, PRZM_MAGIC_CELLULAR_SHEAF);
+    write_u32_le(frame_sp + 4, 12);
+    frame_sp[8] = 4;  frame_sp[9] = 0;  /* W = 4 */
+    frame_sp[10] = 3; frame_sp[11] = 0; /* M = 3 */
+    frame_sp[12] = 0x10;                /* Anchor */
+    frame_sp[13] = 1;                   /* Twist = 1 */
+    frame_sp[14] = 0; frame_sp[15] = 0; /* Betti1 = 0 */
+    frame_sp[16] = (uint8_t)(PRZM_CSHD_FLAG_SPARSE_CURL & 0xFF);
+    frame_sp[17] = (uint8_t)((PRZM_CSHD_FLAG_SPARSE_CURL >> 8) & 0xFF);
+    memcpy(frame_sp + 24, eh_sp, 3);
+    memcpy(frame_sp + 27, ev_sp, 2);
+    write_u32_le(frame_sp + 29, 1); /* NNZ = 1 */
+    write_u32_le(frame_sp + 33, 1); /* Face Index = 1 */
+    frame_sp[37] = 0x0F;            /* Curl Val = 0x0F */
+
+    memset(dst, 0, sizeof(dst));
+    int64_t dec_sp = przm_decompress(frame_sp, sizeof(frame_sp), dst, sizeof(dst));
+    TEST_ASSERT(dec_sp == 12, "CSHD Sparse Curl decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, expected_sp, 12) == 0, "CSHD Sparse Curl decompress data mismatch");
+
+    TEST_PASS("cellular_sheaf_decompression");
+}
+
 int main(int argc, char** argv) {
     if (argc == 3) {
         /* CLI decompression mode: test_przm_dec <in.przm> <out.bin> */
@@ -276,7 +619,12 @@ int main(int argc, char** argv) {
     test_standard_fused_raw();
     test_standard_fused_lz();
     test_pws_grammar();
+    test_isoquant_uncollimation();
+    test_gctr_decompression();
+    test_heisenberg_unfoliation();
+    test_cellular_sheaf_decompression();
 
     printf("\n>>> ALL TESTS PASSED SUCCESSFULLY! (0 Allocations, 100%% Lossless) <<<\n");
     return 0;
 }
+

@@ -5,6 +5,7 @@
 *.so
 *.dylib
 *.dll
+*.olean*
 
 # Build directories
 build/

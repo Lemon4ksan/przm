@@ -204,37 +204,49 @@ func unpackNibblePlanes(src []byte, bPtr *[]byte) ([]byte, error) {
 
 // Decompress decodes a PRZM-compressed byte slice back to original uncompressed bytes.
 func Decompress(src []byte) ([]byte, error) {
+	return DecompressTo(src, nil)
+}
+
+// DecompressTo decodes a PRZM-compressed frame into a destination buffer dst.
+// Strictly guarantees 0 heap allocations if dst has capacity >= uncompressed size + 64.
+func DecompressTo(src, dst []byte) ([]byte, error) {
 	if len(src) == 0 {
 		return []byte{}, nil
 	}
 
 	if len(src) >= 4 {
-		// 32-bit magic formats (h-MDS, TDA, Spectral, Poincare, Clifford, GCTR)
+		// 32-bit magic formats (h-MDS, TDA, Spectral, Poincare, Clifford, GCTR, Heisenberg)
 		switch binary.LittleEndian.Uint32(src[0:4]) {
 		case HMDSMagic:
-			return DecompressHMDS(src, nil)
+			return DecompressHMDS(src, dst)
 		case TDAMagic:
-			return DecompressTDA(src, nil)
+			return DecompressTDA(src, dst)
 		case SpectralMagic:
-			return DecompressSpectralUnitary(src, nil)
+			return DecompressSpectralUnitary(src, dst)
 		case SymplecticMagic:
-			return DecompressSymplectic(src, nil)
+			return DecompressSymplectic(src, dst)
 		case MahlerMagic:
-			return DecompressMahler(src, nil)
+			return DecompressMahler(src, dst)
 		case SheafMagic:
-			return DecompressSheafTrellis(src, nil)
+			return DecompressSheafTrellis(src, dst)
 		case ARM64Magic:
-			return DecompressARM64(src, nil)
+			return DecompressARM64(src, dst)
 		case MacroTrellisMagic:
-			return DecompressMacroTrellis(src, nil)
+			return DecompressMacroTrellis(src, dst)
 		case DependentSheafMagic:
-			return DecompressDependentSheaf(src, nil)
+			return DecompressDependentSheaf(src, dst)
 		case PoincareMagic:
 			return DecodeHyperbolicAST(src)
 		case CliffordMagic:
 			return DecodeCliffordRotors(src)
 		case GCTRMagic:
-			return DecompressGCTR(src, nil)
+			return DecompressGCTR(src, dst)
+		case IsoQuantMagic:
+			return DecompressIsoQuant(src, dst)
+		case HeisenbergMagic:
+			return DecompressHeisenberg(src, dst)
+		case CellularSheafMagic:
+			return DecompressCellularSheaf(src, dst)
 		}
 
 		// 3-byte versioned ISA formats (Zero-Schema VM, PWS, GGTC)
@@ -266,7 +278,10 @@ func Decompress(src []byte) ([]byte, error) {
 
 	// Safety padding (64 bytes) prevents vector load/store boundary faults
 	// Aligned to 64-byte L1 cacheline boundary to eliminate split-cacheline penalties
-	dst := bufkit.AlignedBytes(allocSize+64, bufkit.CacheLineSize)
+	if dst == nil || cap(dst) < allocSize+64 {
+		dst = bufkit.AlignedBytes(allocSize+64, bufkit.CacheLineSize)
+	}
+	dst = dst[:uSize]
 	baseDst := unsafe.Pointer(&dst[0])
 
 	// Fast-path: Raw uncompressed payload
@@ -775,9 +790,11 @@ func Decompress(src []byte) ([]byte, error) {
 			if litPtr+runLen > len(lits) {
 				return nil, fmt.Errorf("%w: literal stream truncated", ErrCorruptedFrame)
 			}
-			pDst := unsafe.Add(baseDst, dstPos)
-			pSrc := unsafe.Pointer(&lits[litPtr])
-			*(*uint64)(pDst) = *(*uint64)(pSrc)
+			if litPtr+8 <= len(lits) && dstPos+8 <= len(dst) {
+				*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Pointer(&lits[litPtr]))
+			} else {
+				copy(dst[dstPos:dstPos+runLen], lits[litPtr:litPtr+runLen])
+			}
 			litPtr += runLen
 			dstPos += runLen
 		}

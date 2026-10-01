@@ -139,6 +139,9 @@ func BenchmarkSheafTrellis_Decompress(b *testing.B) {
 		dst := bufkit.AlignedBytes(len(ds.data)+64, bufkit.CacheLineSize)
 
 		b.Run(ds.name, func(b *testing.B) {
+			// Warmup run to prime deterministic scratchpads/buffers before timing
+			_, _ = przm.DecompressSheafTrellis(comp, dst)
+
 			b.SetBytes(int64(len(ds.data)))
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -186,3 +189,81 @@ func TestSheafTrellis_CompressionRatio(t *testing.T) {
 			ds.name, len(ds.data), len(comp), ratio, saved)
 	}
 }
+
+func TestTropicalSemiring_Associativity(t *testing.T) {
+	// Generate arbitrary transition matrices
+	makeMat := func(seed int32) przm.TropicalMatrix4 {
+		var mat przm.TropicalMatrix4
+		for i := 0; i < 4; i++ {
+			for j := 0; j < 4; j++ {
+				mat.M[i][j] = (seed*17 + int32(i*7) + int32(j*13)) % 100
+			}
+		}
+		return mat
+	}
+
+	A := makeMat(1)
+	B := makeMat(2)
+	C := makeMat(3)
+
+	// Test (A (x) B) (x) C == A (x) (B (x) C)
+	var AB, BC, left, right przm.TropicalMatrix4
+	przm.TropicalMul4(&A, &B, &AB)
+	przm.TropicalMul4(&AB, &C, &left)
+
+	przm.TropicalMul4(&B, &C, &BC)
+	przm.TropicalMul4(&A, &BC, &right)
+
+	if left != right {
+		t.Fatalf("Associativity violation: left=%+v, right=%+v", left, right)
+	}
+
+	// Test Identity: A (x) I == A == I (x) A
+	I := przm.TropicalIdentity4()
+	var AI, IA przm.TropicalMatrix4
+	przm.TropicalMul4(&A, &I, &AI)
+	przm.TropicalMul4(&I, &A, &IA)
+
+	if AI != A || IA != A {
+		t.Fatalf("Identity violation: AI=%+v, IA=%+v, A=%+v", AI, IA, A)
+	}
+}
+
+func TestBlellochPrefixScan(t *testing.T) {
+	n := 16
+	mats := make([]przm.TropicalMatrix4, n)
+	for i := 0; i < n; i++ {
+		var m przm.TropicalMatrix4
+		for r := 0; r < 4; r++ {
+			for c := 0; c < 4; c++ {
+				m.M[r][c] = int32((i+1)*11 + r*5 + c*3)
+			}
+		}
+		mats[i] = m
+	}
+
+	// Serial reduction
+	serial := mats[0]
+	for i := 1; i < n; i++ {
+		var next przm.TropicalMatrix4
+		przm.TropicalMul4(&serial, &mats[i], &next)
+		serial = next
+	}
+
+	// Parallel Blelloch reduction
+	tree := make([]przm.TropicalMatrix4, n)
+	par := przm.BlellochReduction(mats, tree)
+
+	if serial != par {
+		t.Fatalf("Blelloch reduction mismatch:\nserial=%+v\npar=%+v", serial, par)
+	}
+
+	// Prefix scan
+	prefixes := make([]przm.TropicalMatrix4, n)
+	przm.BlellochPrefixScan(mats, prefixes, tree)
+
+	if prefixes[n-1] != serial {
+		t.Fatalf("Blelloch prefix scan last element mismatch:\nexpected=%+v\ngot=%+v", serial, prefixes[n-1])
+	}
+}
+

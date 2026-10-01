@@ -65,9 +65,10 @@ func EncodeChunkStream(chunks [][]byte) ([][]byte, error) {
 		// Check if we can inherit the grammar from the previous chunk
 		canInherit := false
 		var inheritedFrame []byte
+		var candTokens []uint16
 
 		if ctx.HasGrammar && len(ctx.Grammar.L1) > 0 {
-			candTokens := substituteGrammar(chunk, &ctx.Grammar)
+			candTokens = substituteGrammar(chunk, &ctx.Grammar)
 			reduction := float64(len(chunk)) / float64(len(candTokens))
 			if reduction >= 1.25 {
 				inheritedFrame = packInheritedFrame(chunk, candTokens)
@@ -136,9 +137,118 @@ func DecodeChunkStream(frames [][]byte) ([][]byte, error) {
 }
 
 // substituteGrammar applies an existing pre-warmed grammar to raw bytes.
-// substituteGrammar applies an existing pre-warmed grammar to raw bytes using
+// substituteGrammarHierarchical applies an existing pre-warmed grammar hierarchically
+// using Knuth-Bendix Church-Rosser confluent rewriting across Layers 1, 2, and 3.
+func substituteGrammarHierarchical(src []byte, g *GrammarH_DAG) []uint16 {
+	n := len(src)
+	if n == 0 {
+		return nil
+	}
+
+	sp := grammarScratchpadPool.Get()
+	defer grammarScratchpadPool.Put(sp)
+
+	sp.ensureTokens(n)
+	tokens := sp.tokensA[:n]
+	for i, b := range src {
+		tokens[i] = uint16(b)
+	}
+
+	numL1 := len(g.L1)
+	numL2 := len(g.L2)
+	numL3 := len(g.L3)
+
+	// Phase 1: L1 Knuth-Bendix substitution
+	if numL1 > 0 {
+		sp.dirtyL1 = sp.dirtyL1[:0]
+		for i := 0; i < n-1; i++ {
+			pk := (uint32(src[i]) << 8) | uint32(src[i+1])
+			if sp.freqL1[pk] == 0 {
+				sp.dirtyL1 = append(sp.dirtyL1, pk)
+			}
+			sp.freqL1[pk]++
+		}
+		for id, r := range g.L1 {
+			pk := (uint32(r.U) << 8) | uint32(r.V)
+			sp.pairToL1[pk] = uint8(id + 1)
+		}
+		tokens = KBConfluentSubstituteL1(tokens, sp.tokensB[:0], sp.pairToL1[:], sp.freqL1[:])
+		for _, r := range g.L1 {
+			pk := (uint32(r.U) << 8) | uint32(r.V)
+			sp.pairToL1[pk] = 0
+		}
+		for _, pk := range sp.dirtyL1 {
+			sp.freqL1[pk] = 0
+		}
+		sp.dirtyL1 = sp.dirtyL1[:0]
+	}
+
+	// Phase 2: L2 Knuth-Bendix substitution
+	if numL2 > 0 && len(tokens) >= 4 {
+		l1Count := uint16(numL1)
+		tLen := len(tokens)
+		for i := 0; i < tLen-1; i++ {
+			tA, tB := tokens[i], tokens[i+1]
+			if tA >= 256 && tA < 256+l1Count && tB >= 256 && tB < 256+l1Count {
+				pk := (uint32(tA-256) << 6) | uint32(tB-256)
+				if sp.freqL2[pk] == 0 {
+					sp.dirtyL1 = append(sp.dirtyL1, pk)
+				}
+				sp.freqL2[pk]++
+			}
+		}
+		for id, r := range g.L2 {
+			pk := (uint32(r.L1A) << 6) | uint32(r.L1B)
+			sp.pairToL2[pk] = uint8(id + 1)
+		}
+		tokens = KBConfluentSubstituteL2(tokens, sp.otherBuffer(tokens), sp.pairToL2[:], sp.freqL2[:], l1Count)
+		for _, r := range g.L2 {
+			pk := (uint32(r.L1A) << 6) | uint32(r.L1B)
+			sp.pairToL2[pk] = 0
+		}
+		for _, pk := range sp.dirtyL1 {
+			sp.freqL2[pk] = 0
+		}
+		sp.dirtyL1 = sp.dirtyL1[:0]
+	}
+
+	// Phase 3: L3 Knuth-Bendix substitution
+	if numL3 > 0 && len(tokens) >= 4 {
+		l2Count := uint16(numL2)
+		tLen := len(tokens)
+		for i := 0; i < tLen-1; i++ {
+			tA, tB := tokens[i], tokens[i+1]
+			if tA >= 512 && tA < 512+l2Count && tB >= 512 && tB < 512+l2Count {
+				pk := (uint32(tA-512) << 5) | uint32(tB-512)
+				if sp.freqL3[pk] == 0 {
+					sp.dirtyL1 = append(sp.dirtyL1, pk)
+				}
+				sp.freqL3[pk]++
+			}
+		}
+		for id, r := range g.L3 {
+			pk := (uint32(r.L2A) << 5) | uint32(r.L2B)
+			sp.pairToL3[pk] = uint8(id + 1)
+		}
+		tokens = KBConfluentSubstituteL3(tokens, sp.otherBuffer(tokens), sp.pairToL3[:], sp.freqL3[:], l2Count)
+		for _, r := range g.L3 {
+			pk := (uint32(r.L2A) << 5) | uint32(r.L2B)
+			sp.pairToL3[pk] = 0
+		}
+		for _, pk := range sp.dirtyL1 {
+			sp.freqL3[pk] = 0
+		}
+		sp.dirtyL1 = sp.dirtyL1[:0]
+	}
+
+	res := make([]uint16, len(tokens))
+	copy(res, tokens)
+	return res
+}
+
+// substituteGrammarGreedy applies an existing pre-warmed grammar to raw bytes using
 // greedy longest-match-first matching (8B -> 4B -> 2B -> 1B).
-func substituteGrammar(src []byte, g *GrammarH_DAG) []uint16 {
+func substituteGrammarGreedy(src []byte, g *GrammarH_DAG) []uint16 {
 	n := len(src)
 	outTokens := make([]uint16, 0, n)
 
@@ -207,6 +317,19 @@ func substituteGrammar(src []byte, g *GrammarH_DAG) []uint16 {
 	}
 
 	return outTokens
+}
+
+// substituteGrammar applies an existing pre-warmed grammar to raw bytes,
+// selecting the minimum size tokenization between hierarchical and greedy parsing.
+func substituteGrammar(src []byte, g *GrammarH_DAG) []uint16 {
+	tokH := substituteGrammarHierarchical(src, g)
+	tokG := substituteGrammarGreedy(src, g)
+	frameH := packInheritedFrame(src, tokH)
+	frameG := packInheritedFrame(src, tokG)
+	if len(frameH) <= len(frameG) {
+		return tokH
+	}
+	return tokG
 }
 
 func packInheritedFrame(src []byte, tokens []uint16) []byte {

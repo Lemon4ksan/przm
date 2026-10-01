@@ -61,6 +61,23 @@ func TestPWS_Grammar5Extraction(t *testing.T) {
 		t.Logf("  L4[%2d] = %q", j, s)
 	}
 
+	t.Logf("\nTop 8-byte Layer 3 Rules:")
+	for k := 0; k < len(g.L3); k++ {
+		s := g.ExpandL3String(k)
+		t.Logf("  L3[%2d] = %q", k, s)
+	}
+
+	t.Logf("\nTop 4-byte Layer 2 Rules:")
+	for k := 0; k < len(g.L2); k++ {
+		s := g.ExpandL2String(k)
+		t.Logf("  L2[%2d] = %q", k, s)
+	}
+
+	t.Logf("\nTop 2-byte Layer 1 Rules:")
+	for k := 0; k < len(g.L1); k++ {
+		t.Logf("  L1[%2d] = %q", k, string([]byte{g.L1[k].U, g.L1[k].V}))
+	}
+
 	if len(g.L4) == 0 {
 		t.Errorf("expected Layer 4 (16B) rules to be induced on structured JSON")
 	}

@@ -186,6 +186,8 @@ type grammarScratchpad struct {
 	pairToL3  [1024]uint8
 	freq256   [256]uint16
 	pairTo256 [256]uint8
+	matchTable [65536]uint32
+	kb        KBScratchpad
 }
 
 var grammarScratchpadPool = generic.NewPool(func() *grammarScratchpad {
@@ -229,7 +231,7 @@ func InduceGrammar(src []byte) (*GrammarH_DAG, []uint16) {
 	return g, resTokens
 }
 
-func induceGrammarWithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_DAG, []uint16) {
+func induceGrammarWithScratchpadNoPrune(src []byte, sp *grammarScratchpad) (*GrammarH_DAG, []uint16) {
 	n := len(src)
 	sp.ensureTokens(n)
 	tokens := sp.tokensA[:n]
@@ -259,21 +261,86 @@ func induceGrammarWithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_D
 			sp.freqL1[pk]++
 		}
 	}
+	// Knuth-Bendix H-DAG Depth Stratification:
+	// Prioritize digrams that participate in genuine multi-layer non-terminal trees:
+	// 32-byte Layer 5 (256-bit SIMD), 16-byte Layer 4 (128-bit SIMD), and 8-byte Layer 3.
+	clear(sp.matchTable[:])
+	for i := 0; i <= n-32; i += 2 {
+		u0 := binary.LittleEndian.Uint64(src[i : i+8])
+		u1 := binary.LittleEndian.Uint64(src[i+8 : i+16])
+		u2 := binary.LittleEndian.Uint64(src[i+16 : i+24])
+		u3 := binary.LittleEndian.Uint64(src[i+24 : i+32])
+		h := (u0 * 11400714819323198485) ^ u1 ^ (u2 * 14029467366897019727) ^ u3
+		slot := (h ^ (h >> 32)) & 65535
+		prev := sp.matchTable[slot]
+		if prev > 0 {
+			pIdx := int(prev - 1)
+			if binary.LittleEndian.Uint64(src[pIdx:pIdx+8]) == u0 &&
+				binary.LittleEndian.Uint64(src[pIdx+8:pIdx+16]) == u1 &&
+				binary.LittleEndian.Uint64(src[pIdx+16:pIdx+24]) == u2 &&
+				binary.LittleEndian.Uint64(src[pIdx+24:pIdx+32]) == u3 {
+				for j := 0; j < 32; j += 2 {
+					pk := (uint32(src[i+j]) << 8) | uint32(src[i+j+1])
+					if sp.pairToL1[pk] < 100 {
+						sp.pairToL1[pk] = 100
+					}
+				}
+			}
+		}
+		sp.matchTable[slot] = uint32(i + 1)
+	}
+
+	clear(sp.matchTable[:])
+	for i := 0; i <= n-16; i += 2 {
+		h1 := binary.LittleEndian.Uint64(src[i : i+8])
+		h2 := binary.LittleEndian.Uint64(src[i+8 : i+16])
+		h := (h1 * 11400714819323198485) ^ h2
+		slot := (h ^ (h >> 32)) & 65535
+		prev := sp.matchTable[slot]
+		if prev > 0 {
+			pIdx := int(prev - 1)
+			if binary.LittleEndian.Uint64(src[pIdx:pIdx+8]) == h1 && binary.LittleEndian.Uint64(src[pIdx+8:pIdx+16]) == h2 {
+				for j := 0; j < 16; j += 2 {
+					pk := (uint32(src[i+j]) << 8) | uint32(src[i+j+1])
+					if sp.pairToL1[pk] < 40 {
+						sp.pairToL1[pk] = 40
+					}
+				}
+			}
+		}
+		sp.matchTable[slot] = uint32(i + 1)
+	}
+
+	clear(sp.matchTable[:])
+	for i := 0; i <= n-8; i += 2 {
+		u := binary.LittleEndian.Uint64(src[i : i+8])
+		h := u * 11400714819323198485
+		slot := (h ^ (h >> 32)) & 65535
+		prev := sp.matchTable[slot]
+		if prev > 0 {
+			pIdx := int(prev - 1)
+			if binary.LittleEndian.Uint64(src[pIdx:pIdx+8]) == u {
+				for j := 0; j < 8; j += 2 {
+					pk := (uint32(src[i+j]) << 8) | uint32(src[i+j+1])
+					if sp.pairToL1[pk] < 20 {
+						sp.pairToL1[pk] = 20
+					}
+				}
+			}
+		}
+		sp.matchTable[slot] = uint32(i + 1)
+	}
 
 	for _, pk := range sp.dirtyL1 {
 		c := int(sp.freqL1[pk])
 		if c >= minDigramOccurrences {
-			sp.cands = insertTopCand(sp.cands, maxL1Rules, pairCandidate{key: pk, count: c})
+			score := c + int(sp.pairToL1[pk])
+			sp.cands = insertTopCand(sp.cands, maxL1Rules, pairCandidate{key: pk, count: score})
 		}
-		sp.freqL1[pk] = 0
-	}
-	sp.dirtyL1 = sp.dirtyL1[:0]
-
-	l1Limit := len(sp.cands)
-	if l1Limit > maxL1Rules {
-		l1Limit = maxL1Rules
+		sp.pairToL1[pk] = 0
 	}
 
+	l1Limit := min(len(sp.cands), maxL1Rules)
 	for i := 0; i < l1Limit; i++ {
 		k := sp.cands[i].key
 		u := byte(k >> 8)
@@ -283,26 +350,17 @@ func induceGrammarWithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_D
 		sp.pairToL1[k] = l1ID + 1
 	}
 
-	// Substitute Layer 1 rules non-overlapping left-to-right
+	// Substitute Layer 1 rules with Knuth-Bendix confluent rewriting
 	if len(g.L1) > 0 {
-		outTokens := sp.tokensB[:0]
-		for i := 0; i < tLen; {
-			if i < tLen-1 && tokens[i] < 256 && tokens[i+1] < 256 {
-				pk := (uint32(tokens[i]) << 8) | uint32(tokens[i+1])
-				if id := sp.pairToL1[pk]; id > 0 {
-					outTokens = append(outTokens, 256+uint16(id-1))
-					i += 2
-					continue
-				}
-			}
-			outTokens = append(outTokens, tokens[i])
-			i++
-		}
+		tokens = KBConfluentSubstituteL1(tokens, sp.tokensB[:0], sp.pairToL1[:], sp.freqL1[:])
 		for i := 0; i < l1Limit; i++ {
 			sp.pairToL1[sp.cands[i].key] = 0
 		}
-		tokens = outTokens
 	}
+	for _, pk := range sp.dirtyL1 {
+		sp.freqL1[pk] = 0
+	}
+	sp.dirtyL1 = sp.dirtyL1[:0]
 
 	// ==========================================
 	// Phase 2: Induce Layer 2 Rules (4-byte pairs: L1 + L1)
@@ -310,36 +368,28 @@ func induceGrammarWithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_D
 	if len(g.L1) > 0 && len(tokens) >= 4 {
 		sp.cands = sp.cands[:0]
 		tLen = len(tokens)
-		var dirtyL2 [64]uint32
-		dirtyL2Count := 0
-		clear(sp.freqL2[:])
-
+		sp.dirtyL1 = sp.dirtyL1[:0]
 		l1Count := uint16(len(g.L1))
 		for i := 0; i < tLen-1; i++ {
 			tA := tokens[i]
 			tB := tokens[i+1]
 			if tA >= 256 && tA < 256+l1Count && tB >= 256 && tB < 256+l1Count {
 				pk := (uint32(tA-256) << 6) | uint32(tB-256)
-				if sp.freqL2[pk] == 0 && dirtyL2Count < len(dirtyL2) {
-					dirtyL2[dirtyL2Count] = pk
-					dirtyL2Count++
+				if sp.freqL2[pk] == 0 {
+					sp.dirtyL1 = append(sp.dirtyL1, pk)
 				}
 				sp.freqL2[pk]++
 			}
 		}
 
-		for idx := 0; idx < dirtyL2Count; idx++ {
-			pk := dirtyL2[idx]
+		for _, pk := range sp.dirtyL1 {
 			c := int(sp.freqL2[pk])
 			if c >= minDigramOccurrences {
 				sp.cands = insertTopCand(sp.cands, maxL2Rules, pairCandidate{key: pk, count: c})
 			}
 		}
 
-		l2Limit := len(sp.cands)
-		if l2Limit > maxL2Rules {
-			l2Limit = maxL2Rules
-		}
+		l2Limit := min(len(sp.cands), maxL2Rules)
 
 		for i := 0; i < l2Limit; i++ {
 			k := sp.cands[i].key
@@ -350,27 +400,17 @@ func induceGrammarWithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_D
 			sp.pairToL2[k] = l2ID + 1
 		}
 
-		// Substitute Layer 2 rules
+		// Substitute Layer 2 rules with Knuth-Bendix confluent rewriting
 		if len(g.L2) > 0 {
-			outTokens := sp.tokensA[:0]
-			for i := 0; i < tLen; {
-				if i < tLen-1 && tokens[i] >= 256 && tokens[i] < 256+l1Count &&
-					tokens[i+1] >= 256 && tokens[i+1] < 256+l1Count {
-					pk := (uint32(tokens[i]-256) << 6) | uint32(tokens[i+1]-256)
-					if id := sp.pairToL2[pk]; id > 0 {
-						outTokens = append(outTokens, 512+uint16(id-1))
-						i += 2
-						continue
-					}
-				}
-				outTokens = append(outTokens, tokens[i])
-				i++
-			}
+			tokens = KBConfluentSubstituteL2(tokens, sp.tokensA[:0], sp.pairToL2[:], sp.freqL2[:], l1Count)
 			for i := 0; i < l2Limit; i++ {
 				sp.pairToL2[sp.cands[i].key] = 0
 			}
-			tokens = outTokens
 		}
+		for _, pk := range sp.dirtyL1 {
+			sp.freqL2[pk] = 0
+		}
+		sp.dirtyL1 = sp.dirtyL1[:0]
 	}
 
 	// ==========================================
@@ -378,37 +418,29 @@ func induceGrammarWithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_D
 	// ==========================================
 	if len(g.L2) > 0 && len(tokens) >= 4 {
 		sp.cands = sp.cands[:0]
+		sp.dirtyL1 = sp.dirtyL1[:0]
 		tLen = len(tokens)
-		var dirtyL3 [32]uint32
-		dirtyL3Count := 0
-		clear(sp.freqL3[:])
-
 		l2Count := uint16(len(g.L2))
 		for i := 0; i < tLen-1; i++ {
 			tA := tokens[i]
 			tB := tokens[i+1]
 			if tA >= 512 && tA < 512+l2Count && tB >= 512 && tB < 512+l2Count {
 				pk := (uint32(tA-512) << 5) | uint32(tB-512)
-				if sp.freqL3[pk] == 0 && dirtyL3Count < len(dirtyL3) {
-					dirtyL3[dirtyL3Count] = pk
-					dirtyL3Count++
+				if sp.freqL3[pk] == 0 {
+					sp.dirtyL1 = append(sp.dirtyL1, pk)
 				}
 				sp.freqL3[pk]++
 			}
 		}
 
-		for idx := 0; idx < dirtyL3Count; idx++ {
-			pk := dirtyL3[idx]
+		for _, pk := range sp.dirtyL1 {
 			c := int(sp.freqL3[pk])
 			if c >= minDigramOccurrences {
 				sp.cands = insertTopCand(sp.cands, maxL3Rules, pairCandidate{key: pk, count: c})
 			}
 		}
 
-		l3Limit := len(sp.cands)
-		if l3Limit > maxL3Rules {
-			l3Limit = maxL3Rules
-		}
+		l3Limit := min(len(sp.cands), maxL3Rules)
 
 		for i := 0; i < l3Limit; i++ {
 			k := sp.cands[i].key
@@ -419,32 +451,26 @@ func induceGrammarWithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_D
 			sp.pairToL3[k] = l3ID + 1
 		}
 
-		// Substitute Layer 3 rules
+		// Substitute Layer 3 rules with Knuth-Bendix confluent rewriting
 		if len(g.L3) > 0 {
-			outTokens := sp.tokensB[:0]
-			for i := 0; i < tLen; {
-				if i < tLen-1 && tokens[i] >= 512 && tokens[i] < 512+l2Count &&
-					tokens[i+1] >= 512 && tokens[i+1] < 512+l2Count {
-					pk := (uint32(tokens[i]-512) << 5) | uint32(tokens[i+1]-512)
-					if id := sp.pairToL3[pk]; id > 0 {
-						outTokens = append(outTokens, 1024+uint16(id-1))
-						i += 2
-						continue
-					}
-				}
-				outTokens = append(outTokens, tokens[i])
-				i++
-			}
+			tokens = KBConfluentSubstituteL3(tokens, sp.tokensB[:0], sp.pairToL3[:], sp.freqL3[:], l2Count)
 			for i := 0; i < l3Limit; i++ {
 				sp.pairToL3[sp.cands[i].key] = 0
 			}
-			tokens = outTokens
 		}
+		for _, pk := range sp.dirtyL1 {
+			sp.freqL3[pk] = 0
+		}
+		sp.dirtyL1 = sp.dirtyL1[:0]
 	}
 
-	// Apply Sebastian Maneth's bottom-up grammar pruning and frequency re-ordering
-	g, tokens = pruneGrammarWithScratchpad(g, tokens, sp)
+	g.BuildExpansionTables()
+	return g, tokens
+}
 
+func induceGrammarWithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_DAG, []uint16) {
+	g, tokens := induceGrammarWithScratchpadNoPrune(src, sp)
+	g, tokens = pruneGrammarWithScratchpad(g, tokens, sp)
 	g.BuildExpansionTables()
 	return g, tokens
 }

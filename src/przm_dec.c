@@ -172,6 +172,119 @@ PRZM_INLINE uint8_t gf256_mul(uint8_t a, uint8_t b) {
 }
 
 /* ============================================================================
+ * 3.1. 4D IsoQuant Quaternionic Inverse Collimation In-Place (Magic 'ISOQ')
+ * ============================================================================ */
+
+przm_status_t przm_isoquant_unrotate_inplace(uint8_t* dst, size_t len, const uint8_t qL_inv[4], const uint8_t qR_inv[4]) {
+    if (dst == NULL || qL_inv == NULL || qR_inv == NULL) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+    if (len < 4) {
+        return PRZM_OK;
+    }
+
+    uint8_t a0 = qL_inv[0], a1 = qL_inv[1], a2 = qL_inv[2], a3 = qL_inv[3];
+    uint8_t b0 = qR_inv[0], b1 = qR_inv[1], b2 = qR_inv[2], b3 = qR_inv[3];
+
+    /* Effective quaternion q_eff = qL_inv * qR_inv over H(F_{2^8}) */
+    uint8_t e0 = gf256_mul(a0, b0) ^ gf256_mul(a1, b1) ^ gf256_mul(a2, b2) ^ gf256_mul(a3, b3);
+    uint8_t e1 = gf256_mul(a0, b1) ^ gf256_mul(a1, b0) ^ gf256_mul(a2, b3) ^ gf256_mul(a3, b2);
+    uint8_t e2 = gf256_mul(a0, b2) ^ gf256_mul(a2, b0) ^ gf256_mul(a1, b3) ^ gf256_mul(a3, b1);
+    uint8_t e3 = gf256_mul(a0, b3) ^ gf256_mul(a3, b0) ^ gf256_mul(a1, b2) ^ gf256_mul(a2, b1);
+
+    /* If effective quaternion is identity (1, 0, 0, 0), rotation is trivial */
+    if (e0 == 1 && e1 == 0 && e2 == 0 && e3 == 0) {
+        return PRZM_OK;
+    }
+
+    /* Process 16 bytes (4 quaternions) per iteration for SWAR / SIMD auto-vectorization */
+    size_t limit16 = (len >> 4) << 4;
+    for (size_t i = 0; i < limit16; i += 16) {
+        for (size_t k = 0; k < 16; k += 4) {
+            uint8_t v0 = dst[i + k + 0];
+            uint8_t v1 = dst[i + k + 1];
+            uint8_t v2 = dst[i + k + 2];
+            uint8_t v3 = dst[i + k + 3];
+
+            dst[i + k + 0] = gf256_mul(e0, v0) ^ gf256_mul(e1, v1) ^ gf256_mul(e2, v2) ^ gf256_mul(e3, v3);
+            dst[i + k + 1] = gf256_mul(e0, v1) ^ gf256_mul(e1, v0) ^ gf256_mul(e2, v3) ^ gf256_mul(e3, v2);
+            dst[i + k + 2] = gf256_mul(e0, v2) ^ gf256_mul(e2, v0) ^ gf256_mul(e1, v3) ^ gf256_mul(e3, v1);
+            dst[i + k + 3] = gf256_mul(e0, v3) ^ gf256_mul(e3, v0) ^ gf256_mul(e1, v2) ^ gf256_mul(e2, v1);
+        }
+    }
+
+    /* Process remaining aligned 4-byte quads */
+    for (size_t i = limit16; i + 4 <= len; i += 4) {
+        uint8_t v0 = dst[i + 0];
+        uint8_t v1 = dst[i + 1];
+        uint8_t v2 = dst[i + 2];
+        uint8_t v3 = dst[i + 3];
+
+        dst[i + 0] = gf256_mul(e0, v0) ^ gf256_mul(e1, v1) ^ gf256_mul(e2, v2) ^ gf256_mul(e3, v3);
+        dst[i + 1] = gf256_mul(e0, v1) ^ gf256_mul(e1, v0) ^ gf256_mul(e2, v3) ^ gf256_mul(e3, v2);
+        dst[i + 2] = gf256_mul(e0, v2) ^ gf256_mul(e2, v0) ^ gf256_mul(e1, v3) ^ gf256_mul(e3, v1);
+        dst[i + 3] = gf256_mul(e0, v3) ^ gf256_mul(e3, v0) ^ gf256_mul(e1, v2) ^ gf256_mul(e2, v1);
+    }
+
+    return PRZM_OK;
+}
+
+/* ============================================================================
+ * 3.2. Discrete Heisenberg Group H_3(F_{2^8}) Inverse Foliation In-Place ('HEIS')
+ * ============================================================================ */
+
+int przm_heisenberg_unfoliate_inplace(uint8_t* dst, size_t len, uint8_t stride) {
+    if (dst == NULL) return PRZM_ERR_CORRUPTED_FRAME;
+    if (len < stride) return PRZM_OK;
+
+    if (stride == 3) {
+        /* Unroll 4 triplets (12 bytes) per iteration for instruction-level parallelism */
+        size_t limit12 = (len / 12) * 12;
+        for (size_t i = 0; i < limit12; i += 12) {
+            uint8_t p0 = gf256_mul(dst[i + 0], dst[i + 1]);
+            uint8_t p1 = gf256_mul(dst[i + 3], dst[i + 4]);
+            uint8_t p2 = gf256_mul(dst[i + 6], dst[i + 7]);
+            uint8_t p3 = gf256_mul(dst[i + 9], dst[i + 10]);
+
+            dst[i + 2]  ^= p0;
+            dst[i + 5]  ^= p1;
+            dst[i + 8]  ^= p2;
+            dst[i + 11] ^= p3;
+        }
+
+        /* Remainder triplets */
+        size_t limit = (len / 3) * 3;
+        for (size_t i = limit12; i < limit; i += 3) {
+            dst[i + 2] ^= gf256_mul(dst[i + 0], dst[i + 1]);
+        }
+        return PRZM_OK;
+    } else if (stride == 4) {
+        /* Unroll 4 quads (16 bytes) per iteration */
+        size_t limit16 = (len / 16) * 16;
+        for (size_t i = 0; i < limit16; i += 16) {
+            uint8_t p0 = gf256_mul(dst[i + 0], dst[i + 1]);
+            uint8_t p1 = gf256_mul(dst[i + 4], dst[i + 5]);
+            uint8_t p2 = gf256_mul(dst[i + 8], dst[i + 9]);
+            uint8_t p3 = gf256_mul(dst[i + 12], dst[i + 13]);
+
+            dst[i + 2]  ^= p0;
+            dst[i + 6]  ^= p1;
+            dst[i + 10] ^= p2;
+            dst[i + 14] ^= p3;
+        }
+
+        /* Remainder quads */
+        size_t limit = (len / 4) * 4;
+        for (size_t i = limit16; i < limit; i += 4) {
+            dst[i + 2] ^= gf256_mul(dst[i + 0], dst[i + 1]);
+        }
+        return PRZM_OK;
+    }
+
+    return PRZM_ERR_CORRUPTED_FRAME;
+}
+
+/* ============================================================================
  * 4. Built-in Schema Dictionaries (DictID 1: JSON, DictID 2: Code)
  * ============================================================================ */
 
@@ -474,6 +587,100 @@ PRZM_INLINE void sheaf_collate4(uint8_t* dst, size_t n,
             case 3: dst[i] = f3[i >> 2]; break;
         }
     }
+}
+
+static int decode_trellis_payload(const uint8_t* payload, size_t payload_len, uint8_t* dst, size_t orig_len) {
+    size_t src_ptr = 0;
+    size_t dst_pos = 0;
+    int rq[4] = {1, 4, 8, 16};
+
+    while (src_ptr < payload_len && dst_pos < orig_len) {
+        uint8_t token = payload[src_ptr++];
+        if (token < 0x80) {
+            size_t run_len = (size_t)token + 1;
+            if (src_ptr + run_len > payload_len || dst_pos + run_len > orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(dst + dst_pos, payload + src_ptr, run_len);
+            src_ptr += run_len;
+            dst_pos += run_len;
+        } else if (token < 0xC0) {
+            int rep_idx = (token >> 4) & 3;
+            int len_code = token & 0x0F;
+            size_t m_len = (size_t)len_code + 2;
+            if (len_code == 15) {
+                int extra = 0;
+                if (fast_read_varint(payload, payload_len, &src_ptr, &extra) != PRZM_OK) return PRZM_ERR_CORRUPTED_FRAME;
+                m_len = 17 + (size_t)extra;
+            }
+            int d = rq[rep_idx];
+            if (d <= 0 || dst_pos < (size_t)d || dst_pos + m_len > orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+            for (size_t k = 0; k < m_len; k++) {
+                dst[dst_pos + k] = dst[dst_pos - d + k];
+            }
+            switch (rep_idx) {
+                case 0: rq[0] = d; break;
+                case 1: { int tmp = rq[0]; rq[0] = rq[1]; rq[1] = tmp; break; }
+                case 2: { int r0 = rq[0], r1 = rq[1]; rq[0] = rq[2]; rq[1] = r0; rq[2] = r1; break; }
+                case 3: { int r0 = rq[0], r1 = rq[1], r2 = rq[2]; rq[0] = rq[3]; rq[1] = r0; rq[2] = r1; rq[3] = r2; break; }
+            }
+            dst_pos += m_len;
+        } else {
+            int len_code = token & 0x1F;
+            size_t m_len = (size_t)len_code + 3;
+            if (src_ptr + 2 > payload_len) return PRZM_ERR_CORRUPTED_FRAME;
+            int d = (int)read_u16_le(payload + src_ptr);
+            src_ptr += 2;
+            if (len_code == 31) {
+                int extra = 0;
+                if (fast_read_varint(payload, payload_len, &src_ptr, &extra) != PRZM_OK) return PRZM_ERR_CORRUPTED_FRAME;
+                m_len = 34 + (size_t)extra;
+            }
+            if (d <= 0 || dst_pos < (size_t)d || dst_pos + m_len > orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+            for (size_t k = 0; k < m_len; k++) {
+                dst[dst_pos + k] = dst[dst_pos - d + k];
+            }
+            rq[3] = rq[2]; rq[2] = rq[1]; rq[1] = rq[0]; rq[0] = d;
+            dst_pos += m_len;
+        }
+    }
+    return (dst_pos == orig_len) ? PRZM_OK : PRZM_ERR_CORRUPTED_FRAME;
+}
+
+static int64_t decompress_sheaf(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap) {
+    if (src_len < 12) return PRZM_ERR_CORRUPTED_FRAME;
+    uint8_t mode = src[4];
+    size_t orig_len = (size_t)read_u32_le(src + 8);
+    if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+    if (dst_cap < orig_len + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
+
+    if (mode == 0) {
+        if (src_len < 12 + orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        memcpy(dst, src + 12, orig_len);
+        return (int64_t)orig_len;
+    } else if (mode == 1) {
+        if (decode_trellis_payload(src + 12, src_len - 12, dst, orig_len) != PRZM_OK) {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+        return (int64_t)orig_len;
+    } else if (mode == 2) {
+        if (src_len < 28) return PRZM_ERR_CORRUPTED_FRAME;
+        size_t l0 = (size_t)read_u32_le(src + 12);
+        size_t l1 = (size_t)read_u32_le(src + 16);
+        size_t l2 = (size_t)read_u32_le(src + 20);
+        size_t l3 = (size_t)read_u32_le(src + 24);
+        if (l0 + l1 + l2 + l3 != orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        if (orig_len > sizeof(tls_split_scratch)) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+
+        if (decode_trellis_payload(src + 28, src_len - 28, tls_split_scratch, orig_len) != PRZM_OK) {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+        const uint8_t* f0 = tls_split_scratch;
+        const uint8_t* f1 = tls_split_scratch + l0;
+        const uint8_t* f2 = tls_split_scratch + l0 + l1;
+        const uint8_t* f3 = tls_split_scratch + l0 + l1 + l2;
+        sheaf_collate4(dst, orig_len, f0, f1, f2, f3);
+        return (int64_t)orig_len;
+    }
+    return PRZM_ERR_UNSUPPORTED_MODE;
 }
 
 /* ============================================================================
@@ -830,8 +1037,299 @@ static int pws_decode(const uint8_t* src, size_t src_len, uint8_t* dst, size_t d
 }
 
 /* ============================================================================
+ * 12b. Galois Superoptimized JIT & Trace Annihilation (GCTR) Inverse Engine
+ * ============================================================================ */
+
+static void przm_gctr_inverse_inplace(uint8_t* dst, size_t n, uint8_t op_id) {
+    switch (op_id) {
+        case 0: /* OpGCTRBypass */
+            break;
+
+        case 1: /* OpGCTXORDelta1 */
+            for (size_t i = 1; i < n; i++) {
+                dst[i] ^= dst[i - 1];
+            }
+            break;
+
+        case 2: /* OpGCTXORDelta2 */
+            if (n >= 2) {
+                size_t i = 2;
+                uint16_t prev = read_u16_le(dst);
+                for (; i + 2 <= n; i += 2) {
+                    uint16_t curr = read_u16_le(dst + i);
+                    prev ^= curr;
+                    write_u16_le(dst + i, prev);
+                }
+                for (; i < n; i++) {
+                    dst[i] ^= dst[i - 2];
+                }
+            }
+            break;
+
+        case 3: /* OpGCTXORDelta4 */
+            if (n >= 4) {
+                size_t i = 4;
+                uint32_t prev = read_u32_le(dst);
+                for (; i + 4 <= n; i += 4) {
+                    uint32_t curr = read_u32_le(dst + i);
+                    prev ^= curr;
+                    write_u32_le(dst + i, prev);
+                }
+                for (; i < n; i++) {
+                    dst[i] ^= dst[i - 4];
+                }
+            }
+            break;
+
+        case 4: /* OpGCTXORDelta8 */
+            if (n >= 8) {
+                size_t i = 8;
+                uint64_t prev = read_u64_le(dst);
+                for (; i + 8 <= n; i += 8) {
+                    uint64_t curr = read_u64_le(dst + i);
+                    prev ^= curr;
+                    write_u64_le(dst + i, prev);
+                }
+                for (; i < n; i++) {
+                    dst[i] ^= dst[i - 8];
+                }
+            }
+            break;
+
+        case 5: /* OpGCTZModDelta1 */
+            for (size_t i = 1; i < n; i++) {
+                dst[i] = (uint8_t)(dst[i] + dst[i - 1]);
+            }
+            break;
+
+        case 6: /* OpGCTZModDelta4 */
+            for (size_t i = 4; i < n; i++) {
+                dst[i] = (uint8_t)(dst[i] + dst[i - 4]);
+            }
+            break;
+
+        case 7: /* OpGCTZModSecondOrder */
+            for (size_t i = 2; i < n; i++) {
+                uint8_t diff = dst[i];
+                uint8_t d0 = (uint8_t)(dst[i - 1] - dst[i - 2]);
+                uint8_t d1 = (uint8_t)(diff + d0);
+                dst[i] = (uint8_t)(dst[i - 1] + d1);
+            }
+            break;
+
+        default:
+            break;
+    }
+}
+
+int64_t przm_gctr_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap) {
+    if (src == NULL || dst == NULL) return PRZM_ERR_CORRUPTED_FRAME;
+    if (src_len < PRZM_GCTR_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+    if (read_u32_le(src) != PRZM_MAGIC_GCTR) return PRZM_ERR_INVALID_MAGIC;
+
+    uint8_t op_id = src[4];
+    uint8_t sub_fmt = src[5];
+    size_t orig_len = (size_t)read_u32_le(src + 6);
+
+    if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+    if (dst_cap < orig_len + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
+    if (orig_len == 0) return 0;
+
+    const uint8_t* inner_src = src + PRZM_GCTR_HEADER_SIZE;
+    size_t inner_len = src_len - PRZM_GCTR_HEADER_SIZE;
+
+    if (sub_fmt == 0x01) { /* GCTRSubVANS */
+        int err = vans_decode4x(inner_src, inner_len, dst, orig_len);
+        if (err != PRZM_OK) return err;
+    } else if (sub_fmt == 0x02) { /* GCTRSubPWS */
+        int dec = pws_decode(inner_src, inner_len, dst, dst_cap);
+        if (dec < 0) return (int64_t)dec;
+        if ((size_t)dec != orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+    } else {
+        return PRZM_ERR_UNSUPPORTED_MODE;
+    }
+
+    przm_gctr_inverse_inplace(dst, orig_len, op_id);
+    return (int64_t)orig_len;
+}
+
+/* ============================================================================
+ * 12.1. Cellular Sheaves with Discrete Hodge Laplacians ('CSHD', 0x44485343)
+ * ============================================================================ */
+
+int64_t przm_cellular_sheaf_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap) {
+    if (src == NULL || dst == NULL) return PRZM_ERR_CORRUPTED_FRAME;
+    if (src_len < PRZM_CELLULAR_SHEAF_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+    if (read_u32_le(src) != PRZM_MAGIC_CELLULAR_SHEAF) return PRZM_ERR_INVALID_MAGIC;
+
+    size_t orig_len = (size_t)read_u32_le(src + 4);
+    if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+    if (dst_cap < orig_len + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
+    if (orig_len == 0) return 0;
+
+    uint16_t W = read_u16_le(src + 8);
+    uint16_t M = read_u16_le(src + 10);
+    uint8_t anchor = src[12];
+    uint8_t twist = src[13];
+    uint16_t flags = read_u16_le(src + 16);
+
+    const uint8_t* payload = src + PRZM_CELLULAR_SHEAF_HEADER_SIZE;
+    size_t payload_len = src_len - PRZM_CELLULAR_SHEAF_HEADER_SIZE;
+
+    /* Handle Cascaded PWS if set */
+    if ((flags & PRZM_CSHD_FLAG_CASCADED_PWS) != 0) {
+        int dec = pws_decode(payload, payload_len, tls_lits_scratch, PRZM_TLS_SCRATCH_SIZE);
+        if (dec < 0) return (int64_t)dec;
+        payload = tls_lits_scratch;
+        payload_len = (size_t)dec;
+    }
+
+    if ((flags & (PRZM_CSHD_FLAG_CURL_FREE | PRZM_CSHD_FLAG_SPARSE_CURL)) == 0) {
+        /* Raw passthrough */
+        if (payload_len < orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        memcpy(dst, payload, orig_len);
+        return (int64_t)orig_len;
+    }
+
+    if (W < 2 || M < 2 || (size_t)W * (size_t)M > orig_len) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    size_t pos = 0;
+    uint8_t gamma_h = 0;
+    uint8_t gamma_v = 0;
+
+    if ((flags & PRZM_CSHD_FLAG_CONST_EH) != 0) {
+        if (pos >= payload_len) return PRZM_ERR_CORRUPTED_FRAME;
+        gamma_h = payload[pos++];
+    }
+    if ((flags & PRZM_CSHD_FLAG_CONST_EV) != 0) {
+        if (pos >= payload_len) return PRZM_ERR_CORRUPTED_FRAME;
+        gamma_v = payload[pos++];
+    }
+
+    const uint8_t* Eh = NULL;
+    if ((flags & PRZM_CSHD_FLAG_CONST_EH) == 0) {
+        if (pos + (W - 1) > payload_len) return PRZM_ERR_CORRUPTED_FRAME;
+        Eh = payload + pos;
+        pos += (W - 1);
+    }
+
+    const uint8_t* Ev = NULL;
+    if ((flags & PRZM_CSHD_FLAG_CONST_EV) == 0) {
+        if (pos + (M - 1) > payload_len) return PRZM_ERR_CORRUPTED_FRAME;
+        Ev = payload + pos;
+        pos += (M - 1);
+    }
+
+    uint32_t nnz = 0;
+    const uint8_t* curl_data = NULL;
+    if ((flags & PRZM_CSHD_FLAG_SPARSE_CURL) != 0) {
+        if (pos + 4 > payload_len) return PRZM_ERR_CORRUPTED_FRAME;
+        nnz = read_u32_le(payload + pos);
+        pos += 4;
+        if (pos + (size_t)nnz * 5 > payload_len) return PRZM_ERR_CORRUPTED_FRAME;
+        curl_data = payload + pos;
+        pos += (size_t)nnz * 5;
+    }
+
+    /* Row 0: Prefix-XOR from anchor */
+    dst[0] = anchor;
+    if ((flags & PRZM_CSHD_FLAG_CONST_EH) != 0) {
+        if (twist <= 1) {
+            for (uint16_t j = 0; j < W - 1; j++) {
+                dst[j + 1] = dst[j] ^ gamma_h;
+            }
+        } else {
+            for (uint16_t j = 0; j < W - 1; j++) {
+                dst[j + 1] = gf256_mul(twist, dst[j]) ^ gamma_h;
+            }
+        }
+    } else {
+        if (twist <= 1) {
+            for (uint16_t j = 0; j < W - 1; j++) {
+                dst[j + 1] = dst[j] ^ Eh[j];
+            }
+        } else {
+            for (uint16_t j = 0; j < W - 1; j++) {
+                dst[j + 1] = gf256_mul(twist, dst[j]) ^ Eh[j];
+            }
+        }
+    }
+
+    /* Rows 1 to M - 1: Vector row sweep */
+    if (nnz == 0) {
+        /* Fast path: Curl-Free */
+        for (uint16_t i = 1; i < M; i++) {
+            uint8_t v = ((flags & PRZM_CSHD_FLAG_CONST_EV) != 0) ? gamma_v : Ev[i - 1];
+            size_t row_curr = (size_t)i * W;
+            size_t row_prev = (size_t)(i - 1) * W;
+
+            if (twist <= 1) {
+                uint64_t v64 = (uint64_t)v * 0x0101010101010101ULL;
+                size_t j = 0;
+                for (; j + 8 <= W; j += 8) {
+                    uint64_t prev = read_u64_le(dst + row_prev + j);
+                    write_u64_le(dst + row_curr + j, prev ^ v64);
+                }
+                for (; j < W; j++) {
+                    dst[row_curr + j] = dst[row_prev + j] ^ v;
+                }
+            } else {
+                for (uint16_t j = 0; j < W; j++) {
+                    dst[row_curr + j] = gf256_mul(twist, dst[row_prev + j]) ^ v;
+                }
+            }
+        }
+    } else {
+        /* Sparse Curl stream */
+        uint32_t curl_idx = 0;
+        uint32_t next_k = 0;
+        uint8_t next_c = 0;
+        if (nnz > 0) {
+            next_k = read_u32_le(curl_data);
+            next_c = curl_data[4];
+        }
+
+        for (uint16_t i = 1; i < M; i++) {
+            uint8_t v = ((flags & PRZM_CSHD_FLAG_CONST_EV) != 0) ? gamma_v : Ev[i - 1];
+            size_t row_curr = (size_t)i * W;
+            size_t row_prev = (size_t)(i - 1) * W;
+
+            dst[row_curr + 0] = (twist <= 1) ? (dst[row_prev + 0] ^ v)
+                                             : (gf256_mul(twist, dst[row_prev + 0]) ^ v);
+
+            for (uint16_t j = 0; j < W - 1; j++) {
+                uint32_t cur_k = (uint32_t)(i - 1) * (uint32_t)(W - 1) + (uint32_t)j;
+                if (curl_idx < nnz && cur_k == next_k) {
+                    v ^= next_c;
+                    curl_idx++;
+                    if (curl_idx < nnz) {
+                        next_k = read_u32_le(curl_data + curl_idx * 5);
+                        next_c = curl_data[curl_idx * 5 + 4];
+                    }
+                }
+                dst[row_curr + j + 1] = (twist <= 1) ? (dst[row_prev + j + 1] ^ v)
+                                                     : (gf256_mul(twist, dst[row_prev + j + 1]) ^ v);
+            }
+        }
+    }
+
+    /* Copy trailing remainder bytes if any */
+    size_t grid_size = (size_t)M * (size_t)W;
+    size_t rem = orig_len - grid_size;
+    if (rem > 0) {
+        if (pos + rem > payload_len) return PRZM_ERR_CORRUPTED_FRAME;
+        memcpy(dst + grid_size, payload + pos, rem);
+    }
+
+    return (int64_t)orig_len;
+}
+
+/* ============================================================================
  * 13. Public API Implementation: przm_get_uncompressed_size
  * ============================================================================ */
+
 
 int64_t przm_get_uncompressed_size(const uint8_t* src, size_t src_len) {
     if (src == NULL || src_len < 4) return PRZM_ERR_CORRUPTED_FRAME;
@@ -843,6 +1341,22 @@ int64_t przm_get_uncompressed_size(const uint8_t* src, size_t src_len) {
         magic == PRZM_MAGIC_SHEAF || magic == PRZM_MAGIC_MAHLER) {
         if (src_len < 12) return PRZM_ERR_CORRUPTED_FRAME;
         return (int64_t)read_u32_le(src + 8);
+    }
+    if (magic == PRZM_MAGIC_ISOQUANT) {
+        if (src_len < PRZM_ISOQUANT_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+        return (int64_t)read_u32_le(src + 8);
+    }
+    if (magic == PRZM_MAGIC_GCTR) {
+        if (src_len < PRZM_GCTR_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+        return (int64_t)read_u32_le(src + 6);
+    }
+    if (magic == PRZM_MAGIC_HEISENBERG) {
+        if (src_len < PRZM_HEISENBERG_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+        return (int64_t)read_u32_le(src + 4);
+    }
+    if (magic == PRZM_MAGIC_CELLULAR_SHEAF) {
+        if (src_len < PRZM_CELLULAR_SHEAF_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+        return (int64_t)read_u32_le(src + 4);
     }
 
     /* 3-byte Versioned ISA signatures */
@@ -1335,6 +1849,87 @@ int64_t przm_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t
         return PRZM_ERR_UNSUPPORTED_MODE;
     }
 
+    /* 1.4. Galois Superoptimized JIT & Trace Annihilation ('GCTR', 0x47435452) */
+    if (magic == PRZM_MAGIC_GCTR) {
+        return przm_gctr_decompress(src, src_len, dst, dst_cap);
+    }
+
+    /* 1.5. IsoQuant 4D Quaternionic Collimation Frame ('ISOQ', 0x514F5349) */
+    if (magic == PRZM_MAGIC_ISOQUANT) {
+        if (src_len < PRZM_ISOQUANT_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+        uint8_t mode = src[4];
+        size_t orig_len = (size_t)read_u32_le(src + 8);
+        if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        if (dst_cap < orig_len + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
+
+        uint8_t qL_inv[4] = {src[12], src[13], src[14], src[15]};
+        uint8_t qR_inv[4] = {src[16], src[17], src[18], src[19]};
+
+        if (mode == 0) {
+            /* Raw passthrough */
+            if (src_len < PRZM_ISOQUANT_HEADER_SIZE + orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(dst, src + PRZM_ISOQUANT_HEADER_SIZE, orig_len);
+            return (int64_t)orig_len;
+        } else if (mode == 1) {
+            /* Collimated only */
+            if (src_len < PRZM_ISOQUANT_HEADER_SIZE + orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(dst, src + PRZM_ISOQUANT_HEADER_SIZE, orig_len);
+            przm_isoquant_unrotate_inplace(dst, orig_len, qL_inv, qR_inv);
+            return (int64_t)orig_len;
+        } else if (mode == 3) {
+            /* Cascaded PWS */
+            int64_t dec = pws_decode(src + PRZM_ISOQUANT_HEADER_SIZE, src_len - PRZM_ISOQUANT_HEADER_SIZE, dst, dst_cap);
+            if (dec < 0) return dec;
+            przm_isoquant_unrotate_inplace(dst, (size_t)dec, qL_inv, qR_inv);
+            return dec;
+        }
+        return PRZM_ERR_UNSUPPORTED_MODE;
+    }
+
+    /* 1.6. Discrete Heisenberg Group H_3(F_{2^8}) Foliation Frame ('HEIS', 0x53494548) */
+    if (magic == PRZM_MAGIC_HEISENBERG) {
+        if (src_len < PRZM_HEISENBERG_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+        size_t orig_len = (size_t)read_u32_le(src + 4);
+        uint8_t stride = src[8];
+        uint8_t mode = src[9];
+
+        if (stride != 3 && stride != 4) return PRZM_ERR_CORRUPTED_FRAME;
+        if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        if (dst_cap < orig_len + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
+
+        if (mode == 0) {
+            /* Raw passthrough */
+            if (src_len < PRZM_HEISENBERG_HEADER_SIZE + orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(dst, src + PRZM_HEISENBERG_HEADER_SIZE, orig_len);
+            return (int64_t)orig_len;
+        } else if (mode == 1) {
+            /* Foliated uncompressed */
+            if (src_len < PRZM_HEISENBERG_HEADER_SIZE + orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(dst, src + PRZM_HEISENBERG_HEADER_SIZE, orig_len);
+            int err = przm_heisenberg_unfoliate_inplace(dst, orig_len, stride);
+            if (err != PRZM_OK) return err;
+            return (int64_t)orig_len;
+        } else if (mode == 3) {
+            /* Cascaded PWS or nested PRZM compression */
+            const uint8_t* payload = src + PRZM_HEISENBERG_HEADER_SIZE;
+            size_t payload_len = src_len - PRZM_HEISENBERG_HEADER_SIZE;
+            int64_t dec = przm_decompress(payload, payload_len, dst, dst_cap);
+            if (dec < 0) {
+                dec = pws_decode(payload, payload_len, dst, dst_cap);
+            }
+            if (dec < 0) return dec;
+            int err = przm_heisenberg_unfoliate_inplace(dst, (size_t)dec, stride);
+            if (err != PRZM_OK) return err;
+            return dec;
+        }
+        return PRZM_ERR_UNSUPPORTED_MODE;
+    }
+
+    /* 1.7. Cellular Sheaves with Discrete Hodge Laplacians Frame ('CSHD', 0x44485343) */
+    if (magic == PRZM_MAGIC_CELLULAR_SHEAF) {
+        return przm_cellular_sheaf_decompress(src, src_len, dst, dst_cap);
+    }
+
     /* 2. 2-Adic Mahler Frame */
     if (magic == PRZM_MAGIC_MAHLER) {
         if (src_len < 12) return PRZM_ERR_CORRUPTED_FRAME;
@@ -1389,12 +1984,17 @@ int64_t przm_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t
         return PRZM_ERR_UNSUPPORTED_MODE;
     }
 
-    /* 4. Pareto-Wave Synthesis Frame ('PW\x01') */
+    /* 4. Étale Sheaf Trellis Frame ('SHEF', 0x53484546) */
+    if (magic == PRZM_MAGIC_SHEAF) {
+        return decompress_sheaf(src, src_len, dst, dst_cap);
+    }
+
+    /* 5. Pareto-Wave Synthesis Frame ('PW\x01') */
     if (src[0] == PRZM_MAGIC_PWS_0 && src[1] == PRZM_MAGIC_PWS_1 && src[2] == PRZM_VERSION_1) {
         return pws_decode(src, src_len, dst, dst_cap);
     }
 
-    /* 5. Standard Fused Frame ('PRZM') */
+    /* 6. Standard Fused Frame ('PRZM') */
     if (magic == PRZM_MAGIC_STANDARD) {
         return decompress_standard_fused(src, src_len, dst, dst_cap);
     }

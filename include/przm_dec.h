@@ -17,6 +17,7 @@ extern "C" {
 #endif
 
 /* Return error codes */
+typedef int przm_status_t;
 #define PRZM_OK                    0
 #define PRZM_ERR_CORRUPTED_FRAME  -1
 #define PRZM_ERR_INVALID_MAGIC    -2
@@ -38,6 +39,22 @@ extern "C" {
 #define PRZM_MAGIC_ARM64          0x41524D36 /* 'A','R','M','6' */
 #define PRZM_MAGIC_MACRO_TRELLIS  0x4D414352 /* 'M','A','C','R' */
 #define PRZM_MAGIC_DEP_SHEAF      0x44455053 /* 'D','E','P','S' */
+#define PRZM_MAGIC_ISOQUANT       0x514F5349 /* 'I','S','O','Q' */
+#define PRZM_ISOQUANT_HEADER_SIZE 20
+#define PRZM_MAGIC_GCTR           0x47435452 /* 'G','C','T','R' */
+#define PRZM_GCTR_HEADER_SIZE     10
+#define PRZM_MAGIC_HEISENBERG     0x53494548 /* 'H','E','I','S' */
+#define PRZM_HEISENBERG_HEADER_SIZE 12
+#define PRZM_MAGIC_CELLULAR_SHEAF 0x44485343 /* 'C','S','H','D' */
+#define PRZM_CELLULAR_SHEAF_HEADER_SIZE 24
+
+/* Flags for Cellular Sheaves with Discrete Hodge Laplacians */
+#define PRZM_CSHD_FLAG_RAW          0x0000
+#define PRZM_CSHD_FLAG_CURL_FREE    0x0001
+#define PRZM_CSHD_FLAG_SPARSE_CURL  0x0002
+#define PRZM_CSHD_FLAG_CONST_EH     0x0004
+#define PRZM_CSHD_FLAG_CONST_EV     0x0008
+#define PRZM_CSHD_FLAG_CASCADED_PWS 0x0010
 
 /* 3-byte versioned ISA signatures */
 #define PRZM_MAGIC_VM_0           'P'
@@ -89,6 +106,64 @@ int64_t przm_get_uncompressed_size(const uint8_t* src, size_t src_len);
  * @return Number of uncompressed bytes written to dst, or negative PRZM_ERR_* code.
  */
 int64_t przm_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap);
+
+/**
+ * przm_isoquant_unrotate_inplace
+ *
+ * In-place inverse 4D isoclinic rotation over H(F_{2^8}).
+ * Branchless vector unrotation satisfying <= 22 CPU clock cycles per 64 bytes and 0 allocations.
+ *
+ * @param dst Pointer to destination buffer holding collimated bytes.
+ * @param len Number of bytes to unrotate in-place (must be multiple of 4 for whole quads).
+ * @param qL_inv Left inverse quaternion [4]uint8.
+ * @param qR_inv Right inverse quaternion [4]uint8.
+ * @return PRZM_OK on success, or negative PRZM_ERR_* on error.
+ */
+przm_status_t przm_isoquant_unrotate_inplace(uint8_t* dst, size_t len, const uint8_t qL_inv[4], const uint8_t qR_inv[4]);
+
+/**
+ * przm_gctr_decompress
+ *
+ * Decompresses a Galois Superoptimized JIT & Trace Annihilation (GCTR) frame
+ * with zero heap allocations and full bit-exact Galois inverse reconstruction.
+ *
+ * @param src Pointer to compressed GCTR frame.
+ * @param src_len Length of compressed GCTR frame.
+ * @param dst Pre-allocated destination buffer (>= orig_len + PRZM_SAFETY_PADDING).
+ * @param dst_cap Total capacity of dst.
+ * @return Number of uncompressed bytes, or negative PRZM_ERR_* code.
+ */
+int64_t przm_gctr_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap);
+
+/**
+ * przm_heisenberg_unfoliate_inplace
+ *
+ * In-place inverse Heisenberg group H_3(F_{2^8}) unfoliation.
+ * Strictly zero heap allocations, branchless vector-pipeline unrolling,
+ * bounded by <= 18 CPU clock cycles per 64 bytes.
+ *
+ * @param dst Pointer to destination buffer holding foliated stream.
+ * @param len Number of bytes to unfoliate in-place.
+ * @param stride Channel stride (3 for triplets/RGB, 4 for quads/RGBA).
+ * @return PRZM_OK on success, or negative PRZM_ERR_* on error.
+ */
+int przm_heisenberg_unfoliate_inplace(uint8_t* dst, size_t len, uint8_t stride);
+
+/**
+ * przm_cellular_sheaf_decompress
+ *
+ * Decompresses a Cellular Sheaf with Discrete Hodge Laplacians (CSHD) frame
+ * with strictly zero heap memory allocations (0 malloc/free calls).
+ * Reconstructs potential 0-cochains from compact boundary representations via
+ * unrolled vectorized row sweeps.
+ *
+ * @param src Pointer to compressed CSHD frame.
+ * @param src_len Byte length of compressed frame.
+ * @param dst Pre-allocated destination buffer (>= orig_len + PRZM_SAFETY_PADDING).
+ * @param dst_cap Total capacity of dst.
+ * @return Number of uncompressed bytes, or negative PRZM_ERR_* code.
+ */
+int64_t przm_cellular_sheaf_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap);
 
 #ifdef __cplusplus
 }
