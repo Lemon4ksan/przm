@@ -228,13 +228,11 @@ func CompressMargolus(src []byte, level int) ([]byte, error) {
 	copy(tData, src)
 	MargolusEvolveInplace(tData, width, steps, ruleID)
 
+	// Evaluate inner cascade compression via PWS (non-recursive)
 	var compressedPayload []byte
 	var encErr error
 	if n >= 512 {
 		compressedPayload, encErr = PWSEncode(tData)
-	}
-	if encErr != nil || len(compressedPayload) == 0 || len(compressedPayload) >= n {
-		compressedPayload, encErr = Compress(tData, level)
 	}
 
 	if encErr == nil && len(compressedPayload) > 0 && len(compressedPayload)+MargolusHeaderSize < n {

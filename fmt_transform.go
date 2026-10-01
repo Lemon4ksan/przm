@@ -147,14 +147,11 @@ func CompressMobius(src []byte, level int) ([]byte, error) {
 	copy(tData, src)
 	FMTTransformInplace(tData, blockLog2, false)
 
-	// Evaluate inner cascade compression (PWS or standard PRZM)
+	// Evaluate inner cascade compression via PWS (non-recursive)
 	var compressedPayload []byte
 	var encErr error
 	if n >= 512 {
 		compressedPayload, encErr = PWSEncode(tData)
-	}
-	if encErr != nil || len(compressedPayload) == 0 || len(compressedPayload) >= n {
-		compressedPayload, encErr = Compress(tData, level)
 	}
 
 	if encErr == nil && len(compressedPayload) > 0 && len(compressedPayload)+MobiusHeaderSize < n {
