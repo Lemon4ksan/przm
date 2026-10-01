@@ -47,11 +47,10 @@ theorem dec_coboundary_identity (c : ElementaryCell) :
     gf_add (gf_add dy_bot dy_top) (gf_add dx_right dx_left) = 0 := by
   intro dy_top dy_bot dx_left dx_right
   dsimp [dy_top, dy_bot, dx_left, dx_right, gf_add]
-  have h : ∀ a b c d : GF256,
-    ((d ^^^ b) ^^^ (c ^^^ a)) ^^^ ((d ^^^ c) ^^^ (b ^^^ a)) = 0 := by
-    intro a b c d
-    bv_decide
-  exact h c.v00 c.v10 c.v01 c.v11
+  apply UInt8.toBitVec_inj
+  repeat rw [UInt8.toBitVec_xor]
+  rw [UInt8.toBitVec_zero]
+  bv_decide
 
 /-!
   # 2D Prefix-XOR Reconstruction (Curl-Free Separable Case)
@@ -66,6 +65,9 @@ theorem dec_curl_free_reconstruction (a b c : GF256) :
     cell_curl ⟨a, b, c, d⟩ = 0 := by
   intro diff_b diff_c d
   dsimp [cell_curl, d, diff_b, diff_c, gf_add]
+  apply UInt8.toBitVec_inj
+  repeat rw [UInt8.toBitVec_xor]
+  rw [UInt8.toBitVec_zero]
   bv_decide
 
 end PRZM.DECHHD

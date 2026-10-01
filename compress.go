@@ -377,6 +377,10 @@ func isCandidateTDA(src []byte) bool {
 
 // Compress encodes src into PRZM format according to PRZM-SPEC-0.5.
 func Compress(src []byte, level int) ([]byte, error) {
+	return compressInternal(src, level, nil)
+}
+
+func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, error) {
 	uSize := len(src)
 	if uSize == 0 {
 		hdr := [HeaderSize]byte{}
@@ -431,6 +435,8 @@ func Compress(src []byte, level int) ([]byte, error) {
 	var isoquantCandidate []byte
 	var heisenbergCandidate []byte
 	var cellularSheafCandidate []byte
+	var mobiusCandidate []byte
+	var margolusCandidate []byte
 
 
 	// PRZM v0.5 Phase 17: Evaluate Monoidal Dependent-Type Sheaf Stratification for Protobuf/TLV (Theorem 38)
@@ -546,6 +552,22 @@ func Compress(src []byte, level int) ([]byte, error) {
 				cellularSheafCandidate = csOut
 			}
 		}
+
+		// PRZM Milestone 3: Evaluate Fast Möbius Transform (F_2 FMT / Boolean ANF Involution)
+		// Targets executable code, bit-planes, bitmasks, and Boolean truth tables with algebraic structure.
+		if level >= 2 && uSize >= 64 && !highEntropy {
+			if mOut, err := CompressMobius(origSrc, level); err == nil && len(mOut) > 0 && len(mOut) < origUSize {
+				mobiusCandidate = mOut
+			}
+		}
+
+		// PRZM Milestone 3: Evaluate Margolus Reversible Cellular Automata (RCA)
+		// Targets turbulent and pre-compressed containers, textures, and sensory streams.
+		if level >= 2 && uSize >= 32 && !isX86 && !isARM64 && !highEntropy {
+			if margOut, err := CompressMargolus(origSrc, level); err == nil && len(margOut) > 0 && len(margOut) < origUSize {
+				margolusCandidate = margOut
+			}
+		}
 	}
 	flags := uint8(0)
 	callCount := 0
@@ -578,14 +600,14 @@ func Compress(src []byte, level int) ([]byte, error) {
 
 	dictID := uint32(0)
 	var activeMatcher *dictMatcher
-	if !isX86 && !hasStride {
+	if customDict != nil {
+		activeMatcher = &customDict.matcher
+		dictID = customDict.id
+		flags |= FlagDictRef
+	} else if !isX86 && !hasStride {
 		dictID = detectDictionary(src)
-		switch dictID {
-		case DictIDJSON:
+		if dictID == DictIDJSON {
 			activeMatcher = &jsonMatcher
-			flags |= FlagDictRef
-		case DictIDCode:
-			activeMatcher = &codeMatcher
 			flags |= FlagDictRef
 		}
 	}
@@ -1288,8 +1310,8 @@ func Compress(src []byte, level int) ([]byte, error) {
 	sec1Size := 8 // 8-byte distribution params (ModelType = 0 uniform/raw)
 	totalCompressedSize := HeaderSize + frameParamsSize + secDirSize + sec1Size + len(pad.cmdBuf) + len(pad.offsetBuf) + len(litSection)
 
-	// Pareto selection between PWS, Zero-Schema VM, TDA, Hyperbolic, Spectral, HMDS, GCTR, Symplectic, Mahler, Sheaf, ARM64, MacroTrellis, DependentSheaf, IsoQuant, Heisenberg, and Cellular Sheaf candidates
-	bestCandidate := MinNonEmpty(pwsCandidate, vmCandidate, tdaCandidate, hypCandidate, spectralCandidate, hmdsCandidate, gctrCandidate, symplecticCandidate, mahlerCandidate, sheafCandidate, arm64Candidate, macroCandidate, depCandidate, isoquantCandidate, heisenbergCandidate, cellularSheafCandidate)
+	// Pareto selection between candidates
+	bestCandidate := MinNonEmpty(pwsCandidate, vmCandidate, tdaCandidate, hypCandidate, spectralCandidate, hmdsCandidate, gctrCandidate, symplecticCandidate, mahlerCandidate, sheafCandidate, arm64Candidate, macroCandidate, depCandidate, isoquantCandidate, heisenbergCandidate, cellularSheafCandidate, mobiusCandidate, margolusCandidate)
 
 	if len(bestCandidate) > 0 && len(bestCandidate) < totalCompressedSize {
 		return bestCandidate, nil

@@ -32,9 +32,11 @@ const (
 
 // Well-known dictionary identifiers (PRZM-SPEC-0.5 FlagDictRef).
 const (
-	DictIDNone uint32 = 0
-	DictIDJSON uint32 = 1 // Structured web service JSON logs & APIs
-	DictIDCode uint32 = 2 // Source code (Go, C, JS, Rust)
+	DictIDNone        uint32 = 0
+	DictIDJSON        uint32 = 1      // Structured web service JSON logs & APIs
+	DictIDCode        uint32 = 2      // Deprecated: legacy source code dictionary
+	DictIDReservedMax uint32 = 0x0FFF // Reserved for universal open standards
+	DictIDExternalMin uint32 = 0x1000 // Minimum ID for domain-specific / external dictionaries
 )
 
 // Opcode categories (PRZM-SPEC-0.5 Section 3).
@@ -77,6 +79,8 @@ var (
 	ErrOffsetOutOfBounds = errors.New("przm: match offset out of decompressed bounds")
 	ErrBufferTooSmall    = errors.New("przm: output buffer too small")
 	ErrExceedsMaxBlock   = errors.New("przm: uncompressed size exceeds 16 MiB limit")
+	ErrUnknownDict       = errors.New("przm: unknown or unregistered dictionary")
+	ErrInvalidDict       = errors.New("przm: invalid dictionary format")
 )
 
 // FrameHeader holds parsed frame metadata.

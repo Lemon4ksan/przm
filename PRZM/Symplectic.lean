@@ -54,8 +54,6 @@ noncomputable def apply_shear (s : SymplecticShear2x2) (v : SymplecticPhase4) : 
 theorem symplectic_involution (s : SymplecticShear2x2) (v : SymplecticPhase4) :
     apply_shear s (apply_shear s v) = v := by
   dsimp [apply_shear]
-  have h_p0 : v.p0 = v.p0 := rfl
-  have h_p1 : v.p1 = v.p1 := rfl
   have h_q0 :
     gf_add (gf_add v.q0 (gf_add (gf_mul s.s00 v.p0) (gf_mul s.s01 v.p1)))
            (gf_add (gf_mul s.s00 v.p0) (gf_mul s.s01 v.p1)) = v.q0 := by

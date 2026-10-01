@@ -33,7 +33,7 @@ structure ComplexFixed where
   re : Int32
   im : Int32
 
-def FixedPointScale : Int64 := 16384
+def FixedPointScale : Int := 16384
 
 /-!
   # Sylvester-Hadamard Spherical Codes [8, 3, 4]

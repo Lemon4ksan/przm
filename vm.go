@@ -45,6 +45,8 @@ const (
 	OpSUB        Opcode = 0x0C // Z_d[i] = Z_s1[i] - Z_s2[i] (mod 256)
 	OpCMP_EQ     Opcode = 0x0D // Z_d[i] = (Z_s1[i] == Z_s2[i]) ? 0xFF : 0x00
 	OpSKIP_CHUNK Opcode = 0x0E // if (Z_s1 == 0) Skip next chunks
+	OpMARGOLUS   Opcode = 0x0F // Reversible cellular automata block step
+	OpMOBIUS     Opcode = 0x11 // Fast Möbius Transform butterfly grid
 )
 
 // VMInstruction is a packed 32-bit Turing-incomplete vector instruction:

@@ -30,7 +30,8 @@ def decodeResidual (residual : BitVec 8) (x_pred : BitVec 8) : BitVec 8 :=
 /-- Theorem 33.1: Residual Inversion Identity -/
 theorem residual_roundtrip (x x_pred : BitVec 8) :
   decodeResidual (encodeResidual x x_pred) x_pred = x := by
-  unfold decodeResidual encodeResidual
+  dsimp [decodeResidual, encodeResidual]
+  rw [BitVec.add_comm]
   bv_decide
 
 /-- 4-Tap Q8 Predictor scalar product -/
@@ -42,7 +43,7 @@ theorem predict4_reconstruction (x x1 x2 x3 x4 w1 w2 w3 w4 : BitVec 8) :
   let p := predict4 x1 x2 x3 x4 w1 w2 w3 w4
   let res := encodeResidual x p
   decodeResidual res p = x := by
-  unfold decodeResidual encodeResidual predict4
-  bv_decide
+  intro p _res
+  exact residual_roundtrip x p
 
 end PRZM.MicroPredictor

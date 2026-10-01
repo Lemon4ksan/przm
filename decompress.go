@@ -210,6 +210,10 @@ func Decompress(src []byte) ([]byte, error) {
 // DecompressTo decodes a PRZM-compressed frame into a destination buffer dst.
 // Strictly guarantees 0 heap allocations if dst has capacity >= uncompressed size + 64.
 func DecompressTo(src, dst []byte) ([]byte, error) {
+	return decompressWithDictTo(src, dst, nil)
+}
+
+func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, error) {
 	if len(src) == 0 {
 		return []byte{}, nil
 	}
@@ -247,6 +251,10 @@ func DecompressTo(src, dst []byte) ([]byte, error) {
 			return DecompressHeisenberg(src, dst)
 		case CellularSheafMagic:
 			return DecompressCellularSheaf(src, dst)
+		case MobiusMagic:
+			return DecompressMobiusTo(src, dst)
+		case MargolusMagic:
+			return DecompressMargolusTo(src, dst)
 		}
 
 		// 3-byte versioned ISA formats (Zero-Schema VM, PWS, GGTC)
@@ -254,7 +262,7 @@ func DecompressTo(src, dst []byte) ([]byte, error) {
 		case src[0] == vmMagic0 && src[1] == vmMagic1 && src[2] == vmVer1:
 			return VMDecode(src)
 		case src[0] == pwsMagic0 && src[1] == pwsMagic1 && src[2] == pwsVer1:
-			return PWSDecode(src)
+			return PWSDecodeTo(dst, src)
 		case src[0] == ggtcMagic0 && src[1] == ggtcMagic1 && src[2] == ggtcVer1:
 			res, _, err := decodeFullFrame(src)
 			return res, err
@@ -342,7 +350,15 @@ func DecompressTo(src, dst []byte) ([]byte, error) {
 
 	var activeDict [][]byte
 	if (hdr.Flags & FlagDictRef) != 0 {
-		activeDict = getBuiltinDictBytes(hdr.DictID)
+		if customDict != nil && hdr.DictID == customDict.id {
+			activeDict = customDict.tokens
+		} else if hdr.DictID == DictIDJSON {
+			activeDict = jsonMatcher.tokens
+		} else if d := GetDictionary(hdr.DictID); d != nil {
+			activeDict = d.tokens
+		} else {
+			return nil, fmt.Errorf("%w: DictID 0x%08X is not registered", ErrUnknownDict, hdr.DictID)
+		}
 	}
 
 	for dstPos < allocSize && cmdPtr < cmdEnd {

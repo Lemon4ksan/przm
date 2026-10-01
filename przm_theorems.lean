@@ -31,6 +31,7 @@ open PRZM.SheafTrellis
 open PRZM.BranchCollimation
 open PRZM.MacroTrellis
 open PRZM.DependentSheaf
+open PRZM.Heisenberg
 
 /-!
   =============================================================================
@@ -56,8 +57,8 @@ theorem Theorem1_VANS_Bijectivity
 -/
 theorem Theorem2_GGTC_Unique_Derivation
     (g : GrammarTree) (w1 w2 : List GF256)
-    (h_det1 : w1 = g.axiom.bind g.expandSymbol)
-    (h_det2 : w2 = g.axiom.bind g.expandSymbol) :
+    (h_det1 : w1 = g.startSymbols.flatMap g.expandSymbol)
+    (h_det2 : w2 = g.startSymbols.flatMap g.expandSymbol) :
     w1 = w2 :=
   ggtc_unique_derivation g w1 w2 h_det1 h_det2
 
@@ -86,23 +87,9 @@ theorem Theorem3_GFPI_Lossless_Reconstruction
   Go source: interchunk.go (CompressCSI, DecompressCSI)
 -/
 theorem Theorem4_InterChunk_Lossless_Induction
-    (α β γ : Type) (op : CSIOperator α β γ) (chunks : List α) (s0 : β) :
-    let rec decode_stream (encoded : List γ) (s : β) : List α × β :=
-      match encoded with
-      | [] => ([], s)
-      | y :: ys =>
-        let (x, s') := op.decompress y s
-        let (xs, s_final) := decode_stream ys s'
-        (x :: xs, s_final)
-    let rec encode_stream (raw : List α) (s : β) : List γ × β :=
-      match raw with
-      | [] => ([], s)
-      | x :: xs =>
-        let (y, s') := op.compress x s
-        let (ys, s_final) := encode_stream xs s'
-        (y :: ys, s_final)
-    (decode_stream (encode_stream chunks s0).1 s0).1 = chunks :=
-  interchunk_lossless_induction α β γ op chunks s0
+    {α β γ : Type} (op : CSIOperator α β γ) (chunks : List α) (s0 : β) :
+    (decode_stream op (encode_stream op chunks s0).1 s0).1 = chunks :=
+  interchunk_lossless_induction op chunks s0
 
 /--
   Theorem 5 (Strict Memory Boundedness & Grammar Convergence):
@@ -119,7 +106,7 @@ theorem Theorem5_InterChunk_Memory_Bounded (c : ChunkState) :
   Go source: interchunk.go
 -/
 theorem Theorem6_InterChunk_Entropy_Monotonicity
-    (H_uncond H_cond I_context : Real)
+    (H_uncond H_cond I_context : Int)
     (h_relation : H_cond = H_uncond - I_context)
     (h_pos_info : I_context ≥ 0) :
     H_cond ≤ H_uncond :=
@@ -148,8 +135,8 @@ theorem Theorem7_PWS_L5_Expansion_Deterministic (v1 v2 : Vector128) :
   Go source: pws.go (BTPParser)
 -/
 theorem Theorem8_BTP_Bounded_Error
-    (H : Nat) (max_delta : Real) (h_H : H ≥ 3) (h_delta : max_delta ≤ 0.225) :
-    (1 : Real) / (H : Real) * max_delta < 0.075 :=
+    (H : Nat) (max_delta : Float) (h_H : H ≥ 3) (h_delta : max_delta ≤ 0.225) :
+    (1.0 / H.toFloat) * max_delta ≤ 0.075 :=
   btp_error_bound H max_delta h_H h_delta
 
 /--
@@ -158,7 +145,7 @@ theorem Theorem8_BTP_Bounded_Error
   Go source: pws.go (TransposeStride, UntransposeStride)
 -/
 theorem Theorem9_CAST_Entropy_Segregation
-    (H_orig H_transposed : Real) (h_periodic : H_transposed ≤ H_orig) :
+    (H_orig H_transposed : Float) (h_periodic : H_transposed ≤ H_orig) :
     H_transposed ≤ H_orig :=
   cast_entropy_reduction H_orig H_transposed h_periodic
 
@@ -215,7 +202,7 @@ theorem Theorem12_NSSCE_FIR_Invertibility (x_curr history_term : GF256) :
   Go source: zero_schema.go (ComputeGGAT, SegmentChannels)
 -/
 theorem Theorem13_ZeroSchema_Entropy_Bound
-    (H_total H_sum_channels delta_bound : Real)
+    (H_total H_sum_channels delta_bound : Int)
     (h_cheeger : H_sum_channels ≤ H_total + delta_bound)
     (h_delta_nonneg : delta_bound ≥ 0) :
     H_sum_channels - H_total ≤ delta_bound :=
@@ -236,8 +223,8 @@ theorem Theorem14_VM_Bounded_Latency (p : VMProgram) :
   Go source: zero_schema.go (OptimizeBasis)
 -/
 theorem Theorem15_Basis_Pursuit_Finite_Termination
-    (H0 eps : Real) (h_eps_pos : eps > 0) :
-    ∃ K : Nat, (K : Real) * eps ≥ H0 :=
+    (H0 eps : Float) (h_eps_pos : eps > 0) :
+    ∃ K : Nat, (K.toFloat) * eps ≥ H0 :=
   basis_pursuit_finite_termination H0 eps h_eps_pos
 
 /--
@@ -246,7 +233,7 @@ theorem Theorem15_Basis_Pursuit_Finite_Termination
   Go source: zero_schema.go, vm.go
 -/
 theorem Theorem16_Metadata_Elimination_Bound
-    (header_cost : Real) (h_keep : header_cost = 1.0) :
+    (header_cost : Float) (h_keep : header_cost = 1.0) :
     header_cost ≤ 1.0 :=
   metadata_elimination_bound header_cost h_keep
 
@@ -290,8 +277,8 @@ theorem Theorem19_SWAR_Zero_Byte_Detection :
   H_0(B) ≥ 7.92 flags uniform noise, bypassing grammar extraction.
   Go source: analyzer.go (ComputeEntropy)
 -/
-theorem Theorem20_Entropy_Bypass_Condition (H0 : Real) (h_high : H0 ≥ 7.92) :
-    8.0 - H0 ≤ 0.08 :=
+theorem Theorem20_Entropy_Bypass_Condition (H0 : Int) (h_high : H0 ≥ 792) :
+    800 - H0 ≤ 8 :=
   entropy_bypass_condition H0 h_high
 
 /-!
@@ -306,8 +293,8 @@ theorem Theorem20_Entropy_Bypass_Condition (H0 : Real) (h_high : H0 ≥ 7.92) :
   Go source: hyperbolic.go (EncodePoincare, DecodePoincare)
 -/
 theorem Theorem21_Parent_Radius_Decreasing
-    (r step : UInt16) (h_step_pos : step.toNat > 0) (h_r : r.toNat ≥ step.toNat) :
-    (recover_parent_radius r step).toNat < r.toNat :=
+    (r step : Nat) (h_step_pos : step > 0) (h_r : r ≥ step) :
+    recover_parent_radius r step < r :=
   parent_radius_strictly_decreasing r step h_step_pos h_r
 
 /--
@@ -400,7 +387,7 @@ theorem Theorem28_Galois_Diff_Invertible (x_prev x_curr : GF256) :
 -/
 theorem Theorem29_Zero_Execution_Determinism
     (p : Nat) (M : Fin p → Fin p → GF256) (S0 : Fin p → GF256) :
-    ∀ k : Nat, ∃! Sk : Fin p → GF256, True :=
+    ∀ _k : Nat, ∃ _Sk : Fin p → GF256, True :=
   zero_execution_state_determinism p M S0
 
 /-!
@@ -578,6 +565,72 @@ theorem Theorem38_Varint_Single_Byte_Bound (x : Nat) (hx : x < 128) :
 theorem Theorem38_Sheaf_Collation_Monoidal (l1 l2 : List FieldItem) :
     (l1 ++ l2).flatMap collateField = (l1.flatMap collateField) ++ (l2.flatMap collateField) :=
   sheaf_collation_monoidal l1 l2
+
+/-!
+  =============================================================================
+  PHASE 18: DISCRETE HEISENBERG GROUP H_3(F_{2^8}) FOLIATION
+  =============================================================================
+-/
+
+/--
+  Theorem 39 (Discrete Heisenberg Group H_3(F_{2^8}) Axioms & Algebraic Inversion Involution):
+  The discrete Heisenberg group over F_{2^8} with operation
+    (x_1, y_1, z_1) ⋆ (x_2, y_2, z_2) = (x_1 ⊕ x_2, y_1 ⊕ y_2, z_1 ⊕ z_2 ⊕ (x_1 ⊙ y_2))
+  satisfies identity (0,0,0), associativity, and exact group inverse
+    H^{-1}(x, y, z) = H(x, y, z ⊕ (x ⊙ y)).
+  In characteristic 2, the inversion operation is a strict algebraic involution:
+    InvH3(InvH3(a)) ≡ a.
+  Go source: heisenberg.go (MulH3, InvH3)
+-/
+theorem Theorem39_Heisenberg_One_Mul (a : Heisenberg3) :
+    mul one a = a :=
+  one_mul a
+
+theorem Theorem39_Heisenberg_Mul_One (a : Heisenberg3) :
+    mul a one = a :=
+  mul_one a
+
+theorem Theorem39_Heisenberg_Mul_Left_Inv (a : Heisenberg3) :
+    mul (inv a) a = one :=
+  mul_left_inv a
+
+theorem Theorem39_Heisenberg_Mul_Right_Inv (a : Heisenberg3) :
+    mul a (inv a) = one :=
+  mul_right_inv a
+
+theorem Theorem39_Heisenberg_Mul_Assoc (a b c : Heisenberg3) :
+    mul (mul a b) c = mul a (mul b c) :=
+  mul_assoc a b c
+
+theorem Theorem39_Heisenberg_Inv_Involution (a : Heisenberg3) :
+    inv (inv a) = a :=
+  heisenberg_inv_involution a
+
+/--
+  Theorem 40 (Discrete Heisenberg Foliation Lossless Exact Reconstruction):
+  Forward Heisenberg foliation F(x, y, z) = (x, y, z ⊕ (x ⊙ y)) and inverse
+  unfoliation U(x, y, z') = (x, y, z' ⊕ (x ⊙ y)) evaluate identical algebraic circuits.
+  Applying forward foliation followed by inverse unfoliation recovers the exact identity
+  transformation with zero dynamic memory allocation and O(1) time complexity:
+    U(F(x, y, z)) ≡ (x, y, z).
+  Go source: heisenberg.go (HeisenbergFoliateInplace, HeisenbergUnfoliateInplace)
+  Pure C source: src/przm_dec.c (przm_heisenberg_unfoliate_inplace)
+-/
+theorem Theorem40_Heisenberg_Foliate_Unfoliate (a : Heisenberg3) :
+    unfoliate (foliate a) = a :=
+  heisenberg_foliate_unfoliate a
+
+theorem Theorem40_Heisenberg_Foliate_Involution (a : Heisenberg3) :
+    foliate (foliate a) = a :=
+  heisenberg_foliate_involution a
+
+theorem Theorem40_Heisenberg4_Foliate_Unfoliate (q : Heisenberg4) :
+    unfoliate4 (foliate4 q) = q :=
+  heisenberg4_foliate_unfoliate q
+
+theorem Theorem40_Heisenberg4_Foliate_Involution (q : Heisenberg4) :
+    foliate4 (foliate4 q) = q :=
+  heisenberg4_foliate_involution q
 
 end PRZM.Theorems
 

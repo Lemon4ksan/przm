@@ -10,6 +10,7 @@ import (
 	"math/bits"
 
 	"github.com/lemon4ksan/foundation/bufkit"
+	"github.com/lemon4ksan/foundation/generic"
 )
 
 // Frame constants for Cellular Sheaves with Discrete Hodge Laplacians (PRZM-SPEC-0.5 Milestone 3).
@@ -38,6 +39,11 @@ var (
 
 // Candidate strides for autonomous structure discovery.
 var CSHDCandidateStrides = []int{4, 8, 16, 32, 64}
+
+var sheafPayloadPool = generic.NewPool(func() *[]byte {
+	b := bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize)
+	return &b
+})
 
 // CellComplex2D represents an M x W regular 2D cell complex X = (X0, X1, X2) over F_{2^8}.
 // - 0-cells X0: vertices v_{i, j} for i in [0, M-1], j in [0, W-1].
@@ -181,30 +187,30 @@ func Adjoint0(complex CellComplex2D, u Cochain1) Cochain0 {
 		for j := 0; j < W; j++ {
 			val := uint8(0)
 
-			// Horizontal outgoing
+			// Horizontal outgoing: source vertex has coefficient alpha in Coboundary0
 			if j < W-1 {
-				val ^= u.Eh[hRow+j]
-			}
-			// Horizontal incoming
-			if j > 0 {
-				ehIn := u.Eh[hRow+j-1]
+				ehOut := u.Eh[hRow+j]
 				if alpha > 1 {
-					ehIn = GF256Mul(alpha, ehIn)
+					ehOut = GF256Mul(alpha, ehOut)
 				}
-				val ^= ehIn
+				val ^= ehOut
+			}
+			// Horizontal incoming: target vertex has coefficient 1 in Coboundary0
+			if j > 0 {
+				val ^= u.Eh[hRow+j-1]
 			}
 
-			// Vertical outgoing
+			// Vertical outgoing: source vertex has coefficient alpha in Coboundary0
 			if i < M-1 {
-				val ^= u.Ev[i*W+j]
-			}
-			// Vertical incoming
-			if i > 0 {
-				evIn := u.Ev[(i-1)*W+j]
+				evOut := u.Ev[i*W+j]
 				if alpha > 1 {
-					evIn = GF256Mul(alpha, evIn)
+					evOut = GF256Mul(alpha, evOut)
 				}
-				val ^= evIn
+				val ^= evOut
+			}
+			// Vertical incoming: target vertex has coefficient 1 in Coboundary0
+			if i > 0 {
+				val ^= u.Ev[(i-1)*W+j]
 			}
 
 			div[rowOff+j] = val
@@ -810,15 +816,19 @@ func DecompressCellularSheaf(src, dst []byte) ([]byte, error) {
 	payload := src[CellularSheafHeaderSize:]
 
 	// Unpack cascaded PWS payload if present
+	var pBuf *[]byte
 	if (flags & CSHDFlagCascadedPWS) != 0 {
-		innerDec, err := PWSDecode(payload)
+		pBuf = sheafPayloadPool.Get()
+		defer sheafPayloadPool.Put(pBuf)
+
+		innerDec, err := PWSDecodeTo(*pBuf, payload)
 		if err != nil {
 			return nil, err
 		}
 		payload = innerDec
 	}
 
-	if dst == nil || cap(dst) < origLen+64 {
+	if dst == nil || cap(dst) < origLen {
 		dst = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
 	}
 	dst = dst[:origLen]

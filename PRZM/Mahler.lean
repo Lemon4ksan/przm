@@ -48,7 +48,8 @@ structure MahlerVector16 where
 /-- Unimodular determinant invariant: product of diagonal unipotent entries is 1 -/
 theorem mahler_unipotent_det_one :
     (Fin.foldl 16 (fun acc _ => acc * 1) (1 : Nat)) = 1 := by
-  rfl
+  unfold Fin.foldl
+  repeat' (unfold Fin.foldl.loop; dsimp)
 
 /-- Exact lossless elementary step reversibility: (x - y) + y = x mod 256 -/
 theorem mahler_step_reversibility (x y : ByteRing) :

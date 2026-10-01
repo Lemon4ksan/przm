@@ -357,62 +357,20 @@ static const char* const g_dict_json_tokens[64] = {
     ",\"metric\":\"temperature\""
 };
 
-static const char* const g_dict_code_tokens[42] = {
-    /* 0..7: Top 8 Direct 1-byte Opcode Tokens (0xD8 .. 0xDF) */
-    "if err != nil {\n",
-    "return nil, err",
-    "func (",
-    "package ",
-    "import (\n",
-    "return nil",
-    "return err",
-    "for i := 0; i < ",
-
-    /* 8..41: Extended 2-byte Opcode Tokens (0xF2 <tokenID>) */
-    "context.Context",
-    "binary.LittleEndian.",
-    "fmt.Sprintf(",
-    "fmt.Errorf(",
-    "type ",
-    "struct {\n",
-    "interface {\n",
-    "[]byte",
-    "string",
-    "error",
-    "make([]",
-    "append(",
-    "switch ",
-    "default:\n",
-    "continue\n",
-    "const (\n",
-    "var (\n",
-    "sync.Mutex",
-    "sync.Pool",
-    "func (s *",
-    "len(",
-    "return ",
-    "case ",
-    "uint64",
-    "uint32",
-    "int64",
-    "float64",
-    "bool",
-    "true",
-    "false",
-    "nil",
-    "bytes.Buffer"
-};
-
-PRZM_INLINE const char* get_schema_token(uint32_t dict_id, uint8_t token_idx, size_t* out_len) {
-    if (dict_id == 1 && token_idx < (uint8_t)(sizeof(g_dict_json_tokens) / sizeof(g_dict_json_tokens[0]))) {
-        const char* str = g_dict_json_tokens[token_idx];
-        *out_len = strlen(str);
-        return str;
-    }
-    if (dict_id == 2 && token_idx < (uint8_t)(sizeof(g_dict_code_tokens) / sizeof(g_dict_code_tokens[0]))) {
-        const char* str = g_dict_code_tokens[token_idx];
-        *out_len = strlen(str);
-        return str;
+PRZM_INLINE const char* get_schema_token(uint32_t dict_id, uint8_t token_idx,
+                                         const przm_dictionary_t* ext_dict,
+                                         size_t* out_len) {
+    if (dict_id == PRZM_DICT_ID_JSON) {
+        if (token_idx < (uint8_t)(sizeof(g_dict_json_tokens) / sizeof(g_dict_json_tokens[0]))) {
+            const char* str = g_dict_json_tokens[token_idx];
+            *out_len = strlen(str);
+            return str;
+        }
+    } else if (ext_dict != NULL && ext_dict->dict_id == dict_id) {
+        if (token_idx < ext_dict->num_tokens) {
+            *out_len = ext_dict->tokens[token_idx].len;
+            return ext_dict->tokens[token_idx].str;
+        }
     }
     *out_len = 0;
     return NULL;
@@ -1276,8 +1234,10 @@ int64_t przm_cellular_sheaf_decompress(const uint8_t* src, size_t src_len, uint8
                     dst[row_curr + j] = dst[row_prev + j] ^ v;
                 }
             } else {
+                uint8_t cur_v = v;
                 for (uint16_t j = 0; j < W; j++) {
-                    dst[row_curr + j] = gf256_mul(twist, dst[row_prev + j]) ^ v;
+                    dst[row_curr + j] = gf256_mul(twist, dst[row_prev + j]) ^ cur_v;
+                    cur_v = gf256_mul(twist, cur_v);
                 }
             }
         }
@@ -1299,18 +1259,25 @@ int64_t przm_cellular_sheaf_decompress(const uint8_t* src, size_t src_len, uint8
             dst[row_curr + 0] = (twist <= 1) ? (dst[row_prev + 0] ^ v)
                                              : (gf256_mul(twist, dst[row_prev + 0]) ^ v);
 
+            uint8_t cur_v = v;
             for (uint16_t j = 0; j < W - 1; j++) {
                 uint32_t cur_k = (uint32_t)(i - 1) * (uint32_t)(W - 1) + (uint32_t)j;
                 if (curl_idx < nnz && cur_k == next_k) {
-                    v ^= next_c;
+                    if (twist <= 1) {
+                        cur_v ^= next_c;
+                    } else {
+                        cur_v = gf256_mul(twist, cur_v) ^ next_c;
+                    }
                     curl_idx++;
                     if (curl_idx < nnz) {
                         next_k = read_u32_le(curl_data + curl_idx * 5);
                         next_c = curl_data[curl_idx * 5 + 4];
                     }
+                } else if (twist > 1) {
+                    cur_v = gf256_mul(twist, cur_v);
                 }
-                dst[row_curr + j + 1] = (twist <= 1) ? (dst[row_prev + j + 1] ^ v)
-                                                     : (gf256_mul(twist, dst[row_prev + j + 1]) ^ v);
+                dst[row_curr + j + 1] = (twist <= 1) ? (dst[row_prev + j + 1] ^ cur_v)
+                                                     : (gf256_mul(twist, dst[row_prev + j + 1]) ^ cur_v);
             }
         }
     }
@@ -1815,6 +1782,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len, uin
  * ============================================================================ */
 
 int64_t przm_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap) {
+    if (src_len == 0) return 0;
     if (src == NULL || dst == NULL || src_len < 4) return PRZM_ERR_CORRUPTED_FRAME;
 
     uint32_t magic = read_u32_le(src);
@@ -1890,6 +1858,7 @@ int64_t przm_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t
     if (magic == PRZM_MAGIC_HEISENBERG) {
         if (src_len < PRZM_HEISENBERG_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
         size_t orig_len = (size_t)read_u32_le(src + 4);
+        if (orig_len == 0) return 0;
         uint8_t stride = src[8];
         uint8_t mode = src[9];
 

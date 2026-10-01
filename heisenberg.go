@@ -121,19 +121,27 @@ func HeisenbergUnfoliateInplace(data []byte, stride int) {
 // HeisenbergFoliate copies src into dst and applies forward foliation.
 // Supports in-place execution when &dst[0] == &src[0].
 func HeisenbergFoliate(dst, src []byte, stride int) {
-	if &dst[0] != &src[0] {
-		copy(dst, src)
+	if len(src) == 0 || len(dst) == 0 {
+		return
 	}
-	HeisenbergFoliateInplace(dst, stride)
+	n := min(len(dst), len(src))
+	if &dst[0] != &src[0] {
+		copy(dst[:n], src[:n])
+	}
+	HeisenbergFoliateInplace(dst[:n], stride)
 }
 
 // HeisenbergUnfoliate copies src into dst and applies inverse unfoliation.
 // Supports in-place execution when &dst[0] == &src[0].
 func HeisenbergUnfoliate(dst, src []byte, stride int) {
-	if &dst[0] != &src[0] {
-		copy(dst, src)
+	if len(src) == 0 || len(dst) == 0 {
+		return
 	}
-	HeisenbergUnfoliateInplace(dst, stride)
+	n := min(len(dst), len(src))
+	if &dst[0] != &src[0] {
+		copy(dst[:n], src[:n])
+	}
+	HeisenbergUnfoliateInplace(dst[:n], stride)
 }
 
 // EstimateOptimalHeisenberg evaluates empirical cross-channel non-linear covariance
@@ -273,6 +281,9 @@ func CompressHeisenberg(src []byte, level int) ([]byte, error) {
 // DecompressHeisenberg decodes a PRZM_MAGIC_HEISENBERG frame into dst.
 // Strictly guarantees 0 heap allocations if dst has capacity >= origLen + 64.
 func DecompressHeisenberg(src, dst []byte) ([]byte, error) {
+	if len(src) == 0 {
+		return []byte{}, nil
+	}
 	if len(src) < HeisenbergHeaderSize {
 		return nil, ErrHeisenbergCorrupt
 	}
@@ -319,9 +330,12 @@ func DecompressHeisenberg(src, dst []byte) ([]byte, error) {
 		return dst, nil
 
 	case HeisenbergModeCompressed:
-		innerDec, err := DecompressTo(payload, dst)
-		if err != nil {
-			innerDec, err = PWSDecode(payload)
+		var innerDec []byte
+		var err error
+		if len(payload) >= 3 && payload[0] == pwsMagic0 && payload[1] == pwsMagic1 && payload[2] == pwsVer1 {
+			innerDec, err = PWSDecodeTo(dst, payload)
+		} else {
+			innerDec, err = DecompressTo(payload, dst)
 		}
 		if err != nil {
 			return nil, err

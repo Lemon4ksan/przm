@@ -1,9 +1,101 @@
-/-
-  PRZM Mathematical Foundation: Lean 4 Formalization
-  Module: PRZM.GaloisField
-  Pillar: Galois Field Arithmetic, GFPI, and Trace Annihilation
-  Theorems: 3, 27, 28, 29
--/
+import Std.Tactic.BVDecide
+
+def List.flatMap {α β : Type _} : List α → (α → List β) → List β
+  | [], _ => []
+  | x :: xs, f => f x ++ flatMap xs f
+
+@[simp]
+theorem List.flatMap_nil {α β : Type _} (f : α → List β) : ([] : List α).flatMap f = [] := rfl
+
+@[simp]
+theorem List.flatMap_cons {α β : Type _} (x : α) (xs : List α) (f : α → List β) :
+    (x :: xs).flatMap f = f x ++ xs.flatMap f := rfl
+
+@[simp]
+theorem List.flatMap_append {α β : Type _} (l1 l2 : List α) (f : α → List β) :
+    (l1 ++ l2).flatMap f = (l1.flatMap f) ++ (l2.flatMap f) := by
+  induction l1 with
+  | nil => rfl
+  | cons x xs ih =>
+    simp [ih, List.append_assoc]
+
+namespace UInt8
+
+def toBitVec (a : UInt8) : BitVec 8 := BitVec.ofFin a.val
+def ofBitVec (b : BitVec 8) : UInt8 := ⟨b.toFin⟩
+
+@[simp]
+theorem ofBitVec_toBitVec (a : UInt8) : ofBitVec a.toBitVec = a := rfl
+
+@[simp]
+theorem toBitVec_ofBitVec (b : BitVec 8) : (ofBitVec b).toBitVec = b := rfl
+
+theorem toBitVec_inj {a b : UInt8} (h : a.toBitVec = b.toBitVec) : a = b := by
+  rw [← ofBitVec_toBitVec a, ← ofBitVec_toBitVec b, h]
+
+theorem bitvec_ext {a b : BitVec 8} (h : a.toFin.val = b.toFin.val) : a = b := by
+  cases a
+  congr
+  ext
+  exact h
+
+theorem toBitVec_xor (a b : UInt8) : (a ^^^ b).toBitVec = a.toBitVec ^^^ b.toBitVec := by
+  apply bitvec_ext
+  dsimp [toBitVec, BitVec.ofFin, BitVec.xor, BitVec.ofNatLt, BitVec.toFin, Fin.xor, HXor.hXor, Xor.xor, UInt8.xor]
+  have hlt : (a.toBitVec.toNat ^^^ b.toBitVec.toNat) < 2 ^ 8 := BitVec.xor.proof_1 a.toBitVec b.toBitVec
+  exact Nat.mod_eq_of_lt hlt
+
+theorem toBitVec_zero : (0 : UInt8).toBitVec = 0#8 := rfl
+
+@[simp]
+theorem xor_self {a : UInt8} : a ^^^ a = 0 := by
+  apply toBitVec_inj
+  rw [toBitVec_xor, toBitVec_zero]
+  bv_decide
+
+@[simp]
+theorem xor_comm (a b : UInt8) : a ^^^ b = b ^^^ a := by
+  apply toBitVec_inj
+  rw [toBitVec_xor, toBitVec_xor]
+  bv_decide
+
+@[simp]
+theorem xor_assoc (a b c : UInt8) : (a ^^^ b) ^^^ c = a ^^^ (b ^^^ c) := by
+  apply toBitVec_inj
+  rw [toBitVec_xor, toBitVec_xor, toBitVec_xor, toBitVec_xor]
+  bv_decide
+
+@[simp]
+theorem xor_zero {a : UInt8} : a ^^^ 0 = a := by
+  apply toBitVec_inj
+  rw [toBitVec_xor, toBitVec_zero]
+  bv_decide
+
+@[simp]
+theorem zero_xor {a : UInt8} : 0 ^^^ a = a := by
+  apply toBitVec_inj
+  rw [toBitVec_xor, toBitVec_zero]
+  bv_decide
+
+@[simp]
+theorem toBitVec_add (a b : UInt8) : (a + b).toBitVec = a.toBitVec + b.toBitVec := rfl
+
+@[simp]
+theorem toBitVec_sub (a b : UInt8) : (a - b).toBitVec = a.toBitVec - b.toBitVec := rfl
+
+@[simp]
+theorem sub_add_cancel (a b : UInt8) : (a - b) + b = a := by
+  apply toBitVec_inj
+  rw [toBitVec_add, toBitVec_sub]
+  bv_decide
+
+@[simp]
+theorem sub_self (a : UInt8) : a - a = 0 := by
+  apply toBitVec_inj
+  rw [toBitVec_sub, toBitVec_zero]
+  bv_decide
+
+end UInt8
 
 namespace PRZM.GaloisField
 
@@ -45,8 +137,7 @@ theorem gf_add_zero (a : GF256) : gf_add a 0 = a := by
 @[simp]
 theorem gf_zero_add (a : GF256) : gf_add 0 a = a := by
   change 0 ^^^ a = a
-  rw [UInt8.xor_comm]
-  exact UInt8.xor_zero
+  exact UInt8.zero_xor
 
 -- Subtraction is identical to addition in characteristic 2
 theorem gf_sub_eq_add (a b : GF256) : gf_add a b = gf_add a b := rfl
@@ -67,6 +158,10 @@ axiom gf_mul_zero (a : GF256) : gf_mul a 0 = 0
 axiom gf_zero_mul (a : GF256) : gf_mul 0 a = 0
 axiom gf_mul_one (a : GF256) : gf_mul a 1 = a
 axiom gf_mul_distrib (a b c : GF256) : gf_mul a (gf_add b c) = gf_add (gf_mul a b) (gf_mul a c)
+axiom gf_mul_comm (a b : GF256) : gf_mul a b = gf_mul b a
+
+theorem gf_mul_distrib_right (a b c : GF256) : gf_mul (gf_add a b) c = gf_add (gf_mul a c) (gf_mul b c) := by
+  rw [gf_mul_comm (gf_add a b) c, gf_mul_distrib, gf_mul_comm c a, gf_mul_comm c b]
 
 noncomputable def eval_affine (p : AffinePoly) (t : GF256) : GF256 :=
   gf_add p.c0 (gf_mul p.c1 t)
@@ -75,7 +170,7 @@ theorem xor_cancel_right (a b : GF256) : (a ^^^ b) ^^^ b = a := by
   rw [UInt8.xor_assoc, UInt8.xor_self, UInt8.xor_zero]
 
 theorem xor_cancel_left (a b : GF256) : b ^^^ (b ^^^ a) = a := by
-  rw [← UInt8.xor_assoc, UInt8.xor_self, UInt8.xor_comm 0 a, UInt8.xor_zero]
+  rw [← UInt8.xor_assoc, UInt8.xor_self, UInt8.zero_xor]
 
 /-!
   # Theorem 3: Exact Reconstruction over GF(2^8) (Lossless Guarantee)
@@ -147,7 +242,7 @@ theorem galois_diff2_identity (x0 x1 x2 : GF256) :
   dsimp [galois_diff2_forward, gf_add]
   rw [UInt8.xor_assoc]
   have h : x1 ^^^ (x1 ^^^ x0) = x0 := by
-    rw [← UInt8.xor_assoc, UInt8.xor_self, UInt8.xor_comm 0 x0, UInt8.xor_zero]
+    rw [← UInt8.xor_assoc, UInt8.xor_self, UInt8.zero_xor]
   rw [h]
 
 theorem galois_diff2_invertible (x0 x1 x2 : GF256) :

@@ -29,6 +29,7 @@ import PRZM.SheafTrellis
 import PRZM.BranchCollimation
 import PRZM.MacroTrellis
 import PRZM.DependentSheaf
+import PRZM.Heisenberg
 
 /-!
   # PRZM Algorithmic Evolution v0.2 / v0.3 / v0.4 / v0.5 Frontiers
@@ -49,5 +50,6 @@ import PRZM.DependentSheaf
   - Phase 15 (Instruction Branch Collimation): Theorem 36 (Affine Gauge Branch Collimation Invertibility & Target Unification)
   - Phase 16 (Ultra-Long Horizon Holographic Coarse-Graining): Theorem 37 (Holographic Macro-Trellis Exact Lossless Invertibility & Horizon Scaling)
   - Phase 17 (Monoidal Dependent-Type Sheaf Stratification): Theorem 38 (Monoidal Dependent-Type Sheaf Stratification & Fiber Collation Bijectivity)
+  - Phase 18 (Discrete Heisenberg Group Foliation): Theorems 39 (Heisenberg Group Axioms & Algebraic Inversion Involution), 40 (Discrete Heisenberg Foliation Lossless Exact Reconstruction)
 -/
 

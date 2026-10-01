@@ -283,8 +283,14 @@ func TestAdversarialHeisenberg_MalformedFrames(t *testing.T) {
 		validFrame[i] = uint8(i)
 	}
 
-	// 1. Truncated header (< 12 bytes)
-	for l := 0; l < 12; l++ {
+	// 0. Empty frame (0 bytes) gracefully returns []byte{}, nil per contract
+	dec0, err0 := przm.DecompressHeisenberg(validFrame[:0], nil)
+	if err0 != nil || len(dec0) != 0 {
+		t.Fatalf("Empty frame returned error %v, len %d (expected nil, 0)", err0, len(dec0))
+	}
+
+	// 1. Truncated header (1 <= l < 12 bytes)
+	for l := 1; l < 12; l++ {
 		_, err := przm.DecompressHeisenberg(validFrame[:l], nil)
 		if err == nil {
 			t.Fatalf("Truncated frame of length %d accepted without error", l)

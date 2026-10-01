@@ -559,6 +559,89 @@ static void test_cellular_sheaf_decompression(void) {
     TEST_ASSERT(dec_sp == 12, "CSHD Sparse Curl decompress returned wrong length");
     TEST_ASSERT(memcmp(dst, expected_sp, 12) == 0, "CSHD Sparse Curl decompress data mismatch");
 
+    /* 5. Test Curl-Free Harmonic Frame with Galois Twist > 1 (Twist = 2, W = 4, M = 3, N = 12) */
+    uint8_t eh_t2[3] = {0x10, 0x20, 0x30};
+    uint8_t ev_t2[2] = {0x04, 0x08};
+    uint8_t expected_t2[12] = {
+        0x01, 0x12, 0x04, 0x38,
+        0x06, 0x2C, 0x18, 0x50,
+        0x04, 0x48, 0x10, 0xE0
+    };
+    uint8_t frame_t2[24 + 3 + 2];
+    memset(frame_t2, 0, 24);
+    write_u32_le(frame_t2, PRZM_MAGIC_CELLULAR_SHEAF);
+    write_u32_le(frame_t2 + 4, 12);
+    frame_t2[8] = 4;  frame_t2[9] = 0;   /* W = 4 */
+    frame_t2[10] = 3; frame_t2[11] = 0;  /* M = 3 */
+    frame_t2[12] = 0x01;                 /* Anchor */
+    frame_t2[13] = 2;                    /* Twist = 2 */
+    frame_t2[14] = 0; frame_t2[15] = 0;  /* Betti1 = 0 */
+    frame_t2[16] = (uint8_t)(PRZM_CSHD_FLAG_CURL_FREE & 0xFF);
+    frame_t2[17] = (uint8_t)((PRZM_CSHD_FLAG_CURL_FREE >> 8) & 0xFF);
+    memcpy(frame_t2 + 24, eh_t2, 3);
+    memcpy(frame_t2 + 27, ev_t2, 2);
+
+    memset(dst, 0, sizeof(dst));
+    int64_t dec_t2 = przm_decompress(frame_t2, sizeof(frame_t2), dst, sizeof(dst));
+    TEST_ASSERT(dec_t2 == 12, "CSHD Twist=2 Curl-Free returned wrong length");
+    TEST_ASSERT(memcmp(dst, expected_t2, 12) == 0, "CSHD Twist=2 Curl-Free data mismatch");
+
+    /* 6. Test Sparse Curl Frame with Galois Twist > 1 (Twist = 2, W = 4, M = 3, N = 12, NNZ = 1) */
+    uint8_t expected_t2_sp[12] = {
+        0x01, 0x12, 0x04, 0x38,
+        0x06, 0x2C, 0x17, 0x4E,
+        0x04, 0x48, 0x0E, 0xDC
+    };
+    uint8_t frame_t2_sp[24 + 3 + 2 + 4 + 5];
+    memset(frame_t2_sp, 0, 24);
+    write_u32_le(frame_t2_sp, PRZM_MAGIC_CELLULAR_SHEAF);
+    write_u32_le(frame_t2_sp + 4, 12);
+    frame_t2_sp[8] = 4;  frame_t2_sp[9] = 0;   /* W = 4 */
+    frame_t2_sp[10] = 3; frame_t2_sp[11] = 0;  /* M = 3 */
+    frame_t2_sp[12] = 0x01;                    /* Anchor */
+    frame_t2_sp[13] = 2;                       /* Twist = 2 */
+    frame_t2_sp[14] = 0; frame_t2_sp[15] = 0;  /* Betti1 = 0 */
+    frame_t2_sp[16] = (uint8_t)(PRZM_CSHD_FLAG_SPARSE_CURL & 0xFF);
+    frame_t2_sp[17] = (uint8_t)((PRZM_CSHD_FLAG_SPARSE_CURL >> 8) & 0xFF);
+    memcpy(frame_t2_sp + 24, eh_t2, 3);
+    memcpy(frame_t2_sp + 27, ev_t2, 2);
+    write_u32_le(frame_t2_sp + 29, 1); /* NNZ = 1 */
+    write_u32_le(frame_t2_sp + 33, 1); /* Face Index = 1 (i=0, j=1) */
+    frame_t2_sp[37] = 0x0F;            /* Curl Val = 0x0F */
+
+    memset(dst, 0, sizeof(dst));
+    int64_t dec_t2_sp = przm_decompress(frame_t2_sp, sizeof(frame_t2_sp), dst, sizeof(dst));
+    TEST_ASSERT(dec_t2_sp == 12, "CSHD Twist=2 Sparse Curl returned wrong length");
+    TEST_ASSERT(memcmp(dst, expected_t2_sp, 12) == 0, "CSHD Twist=2 Sparse Curl data mismatch");
+
+    /* 7. Test Constant Boundaries with Galois Twist > 1 (Twist = 3, W = 4, M = 3, N = 12) */
+    uint8_t gamma_h_t3 = 0x02;
+    uint8_t gamma_v_t3 = 0x05;
+    uint8_t expected_t3_const[12] = {
+        0x10, 0x32, 0x54, 0xFE,
+        0x35, 0x59, 0xED, 0x2A,
+        0x5A, 0xE4, 0x3D, 0x4D
+    };
+    uint8_t frame_t3_const[24 + 2];
+    memset(frame_t3_const, 0, 24);
+    write_u32_le(frame_t3_const, PRZM_MAGIC_CELLULAR_SHEAF);
+    write_u32_le(frame_t3_const + 4, 12);
+    frame_t3_const[8] = 4;  frame_t3_const[9] = 0;   /* W = 4 */
+    frame_t3_const[10] = 3; frame_t3_const[11] = 0;  /* M = 3 */
+    frame_t3_const[12] = 0x10;                       /* Anchor */
+    frame_t3_const[13] = 3;                          /* Twist = 3 */
+    frame_t3_const[14] = 0; frame_t3_const[15] = 0;  /* Betti1 = 0 */
+    uint16_t const_flags_t3 = PRZM_CSHD_FLAG_CURL_FREE | PRZM_CSHD_FLAG_CONST_EH | PRZM_CSHD_FLAG_CONST_EV;
+    frame_t3_const[16] = (uint8_t)(const_flags_t3 & 0xFF);
+    frame_t3_const[17] = (uint8_t)((const_flags_t3 >> 8) & 0xFF);
+    frame_t3_const[24] = gamma_h_t3;
+    frame_t3_const[25] = gamma_v_t3;
+
+    memset(dst, 0, sizeof(dst));
+    int64_t dec_t3_const = przm_decompress(frame_t3_const, sizeof(frame_t3_const), dst, sizeof(dst));
+    TEST_ASSERT(dec_t3_const == 12, "CSHD Twist=3 Constant Boundary returned wrong length");
+    TEST_ASSERT(memcmp(dst, expected_t3_const, 12) == 0, "CSHD Twist=3 Constant Boundary data mismatch");
+
     TEST_PASS("cellular_sheaf_decompression");
 }
 

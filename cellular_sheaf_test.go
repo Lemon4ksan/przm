@@ -454,3 +454,296 @@ func TestCellularSheaf_PureCDecompressorInterop(t *testing.T) {
 		})
 	}
 }
+
+// ----------------------------------------------------------------------------
+// Discrete Hodge 1-Laplacian Tests: Delta_1 = d1^T d1 + d0 d0^T
+// ----------------------------------------------------------------------------
+
+func TestCellularSheaf_HodgeLaplacian1_MathematicalProperties(t *testing.T) {
+	dimensions := [][2]int{
+		{2, 2}, {3, 3}, {4, 4}, {5, 7}, {8, 8},
+	}
+	twists := []uint8{1, 2, 7, 0x1B, 0xFF}
+
+	for _, dim := range dimensions {
+		M, W := dim[0], dim[1]
+		for _, twist := range twists {
+			complex := przm.CellComplex2D{Rows: M, Cols: W, Twist: twist}
+			rng := rand.New(rand.NewSource(int64(M*31 + W*17 + int(twist))))
+
+			// 1. Exact 1-form test: u = d0(phi) => Delta_{1, up}(u) == 0, Delta_1(u) == d0(Delta_0(phi))
+			phi := make(przm.Cochain0, M*W)
+			for i := range phi {
+				phi[i] = uint8(rng.Intn(256))
+			}
+			uExact := przm.Coboundary0(complex, phi)
+
+			// Delta_1 on exact form
+			lap1Exact := przm.HodgeLaplacian1(complex, uExact)
+
+			// Expected: d0(Delta_0(phi))
+			delta0Phi := przm.HodgeLaplacian0(complex, phi)
+			expectedExact := przm.Coboundary0(complex, delta0Phi)
+
+			if !bytes.Equal(lap1Exact.Eh, expectedExact.Eh) || !bytes.Equal(lap1Exact.Ev, expectedExact.Ev) {
+				t.Fatalf("M=%d, W=%d, Twist=0x%02X: HodgeLaplacian1(d0(phi)) != d0(Delta_0(phi))",
+					M, W, twist)
+			}
+
+			// 2. Co-exact 1-form test: w = d1^T(c) => Delta_{1, down}(w) == 0, Delta_1(w) == d1^T(d1(w))
+			c := make(przm.Cochain2, (M-1)*(W-1))
+			for i := range c {
+				c[i] = uint8(rng.Intn(256))
+			}
+			wCoexact := przm.Adjoint1(complex, c)
+
+			lap1Coexact := przm.HodgeLaplacian1(complex, wCoexact)
+			d1w := przm.Coboundary1(complex, wCoexact)
+			expectedCoexact := przm.Adjoint1(complex, d1w)
+
+			if !bytes.Equal(lap1Coexact.Eh, expectedCoexact.Eh) || !bytes.Equal(lap1Coexact.Ev, expectedCoexact.Ev) {
+				t.Fatalf("M=%d, W=%d, Twist=0x%02X: HodgeLaplacian1(d1^T(c)) != d1^T(d1(w))",
+					M, W, twist)
+			}
+
+			// 3. Self-Adjointness: <Delta_1(u), v> == <u, Delta_1(v)>
+			uRand := przm.Cochain1{
+				Eh: make([]uint8, M*(W-1)),
+				Ev: make([]uint8, (M-1)*W),
+			}
+			vRand := przm.Cochain1{
+				Eh: make([]uint8, M*(W-1)),
+				Ev: make([]uint8, (M-1)*W),
+			}
+			for i := range uRand.Eh {
+				uRand.Eh[i] = uint8(rng.Intn(256))
+				vRand.Eh[i] = uint8(rng.Intn(256))
+			}
+			for i := range uRand.Ev {
+				uRand.Ev[i] = uint8(rng.Intn(256))
+				vRand.Ev[i] = uint8(rng.Intn(256))
+			}
+
+			lap1U := przm.HodgeLaplacian1(complex, uRand)
+			lap1V := przm.HodgeLaplacian1(complex, vRand)
+
+			pairing1 := cochain1Dot(lap1U, vRand)
+			pairing2 := cochain1Dot(uRand, lap1V)
+
+			if pairing1 != pairing2 {
+				t.Fatalf("M=%d, W=%d, Twist=0x%02X: Self-adjointness of Delta_1 failed: <Delta_1 u, v>=0x%02X != <u, Delta_1 v>=0x%02X",
+					M, W, twist, pairing1, pairing2)
+			}
+
+			// 4. Linearity: Delta_1(u ^ v) == Delta_1(u) ^ Delta_1(v)
+			uvSum := przm.Cochain1{
+				Eh: make([]uint8, len(uRand.Eh)),
+				Ev: make([]uint8, len(uRand.Ev)),
+			}
+			for i := range uvSum.Eh {
+				uvSum.Eh[i] = uRand.Eh[i] ^ vRand.Eh[i]
+			}
+			for i := range uvSum.Ev {
+				uvSum.Ev[i] = uRand.Ev[i] ^ vRand.Ev[i]
+			}
+
+			lap1Sum := przm.HodgeLaplacian1(complex, uvSum)
+			for i := range lap1Sum.Eh {
+				if lap1Sum.Eh[i] != (lap1U.Eh[i] ^ lap1V.Eh[i]) {
+					t.Fatalf("M=%d, W=%d, Twist=0x%02X: Delta_1 linearity violated in Eh at index %d",
+						M, W, twist, i)
+				}
+			}
+			for i := range lap1Sum.Ev {
+				if lap1Sum.Ev[i] != (lap1U.Ev[i] ^ lap1V.Ev[i]) {
+					t.Fatalf("M=%d, W=%d, Twist=0x%02X: Delta_1 linearity violated in Ev at index %d",
+						M, W, twist, i)
+				}
+			}
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Cellular Sheaf Direct Reconstruction Tests
+// ----------------------------------------------------------------------------
+
+func TestCellularSheaf_Reconstruct_GuardsAndErrorBranches(t *testing.T) {
+	rep := &przm.SheafBoundaryRep{
+		Anchor:  0x10,
+		Eh:      []uint8{1, 2, 3},
+		Ev:      []uint8{4, 5, 6},
+		ConstEh: false,
+		ConstEv: false,
+	}
+
+	// 1. M < 2
+	c1 := przm.CellComplex2D{Rows: 1, Cols: 4, Twist: 1}
+	dst := make([]byte, 16)
+	if err := przm.ReconstructCellularSheaf(c1, rep, dst); err != przm.ErrCellularSheafBufferTooSmall {
+		t.Fatalf("Expected ErrCellularSheafBufferTooSmall for M=1, got %v", err)
+	}
+
+	// 2. W < 2
+	c2 := przm.CellComplex2D{Rows: 4, Cols: 1, Twist: 1}
+	if err := przm.ReconstructCellularSheaf(c2, rep, dst); err != przm.ErrCellularSheafBufferTooSmall {
+		t.Fatalf("Expected ErrCellularSheafBufferTooSmall for W=1, got %v", err)
+	}
+
+	// 3. len(dst) < M*W
+	c3 := przm.CellComplex2D{Rows: 4, Cols: 4, Twist: 1}
+	smallDst := make([]byte, 15)
+	if err := przm.ReconstructCellularSheaf(c3, rep, smallDst); err != przm.ErrCellularSheafBufferTooSmall {
+		t.Fatalf("Expected ErrCellularSheafBufferTooSmall for len(dst) < M*W, got %v", err)
+	}
+}
+
+func TestCellularSheaf_Reconstruct_AllModesAndBranches(t *testing.T) {
+	type testCase struct {
+		name    string
+		M       int
+		W       int
+		twist   uint8
+		constEh bool
+		constEv bool
+		curls   []przm.SparseFaceCurl
+	}
+
+	cases := []testCase{
+		// Branch: ConstEh=true, ConstEv=true, twist=1, NNZ=0, W >= 8 (SWAR)
+		{name: "Const_Twist1_SWAR", M: 4, W: 16, twist: 1, constEh: true, constEv: true},
+		// Branch: ConstEh=true, ConstEv=true, twist=1, NNZ=0, W not multiple of 8 (Tail)
+		{name: "Const_Twist1_Tail", M: 3, W: 11, twist: 1, constEh: true, constEv: true},
+		// Branch: ConstEh=false, ConstEv=false, twist=1, NNZ=0, W < 8
+		{name: "Var_Twist1_Narrow", M: 4, W: 5, twist: 1, constEh: false, constEv: false},
+		// Branch: ConstEh=true, ConstEv=false, twist=2, NNZ=0 (Galois scaling curl-free)
+		{name: "ConstH_VarV_Twist2", M: 4, W: 8, twist: 2, constEh: true, constEv: false},
+		// Branch: ConstEh=false, ConstEv=true, twist=3, NNZ=0 (Galois scaling curl-free)
+		{name: "VarH_ConstV_Twist3", M: 5, W: 6, twist: 3, constEh: false, constEv: true},
+		// Branch: ConstEh=false, ConstEv=false, twist=1, SparseCurls (hits and misses)
+		{
+			name:    "SparseCurls_Twist1",
+			M:       4,
+			W:       4,
+			twist:   1,
+			constEh: false,
+			constEv: false,
+			curls: []przm.SparseFaceCurl{
+				{Index: 0, Val: 0x42},
+				{Index: 4, Val: 0x77},
+			},
+		},
+		// Branch: ConstEh=true, ConstEv=true, twist=2, SparseCurls (hits and misses with twist)
+		{
+			name:    "SparseCurls_Twist2",
+			M:       4,
+			W:       4,
+			twist:   2,
+			constEh: true,
+			constEv: true,
+			curls: []przm.SparseFaceCurl{
+				{Index: 1, Val: 0x19},
+				{Index: 5, Val: 0x88},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			complex := przm.CellComplex2D{Rows: tc.M, Cols: tc.W, Twist: tc.twist}
+			rep := &przm.SheafBoundaryRep{
+				Anchor:      0x5A,
+				GammaH:      0x03,
+				GammaV:      0x05,
+				ConstEh:     tc.constEh,
+				ConstEv:     tc.constEv,
+				Eh:          make([]uint8, tc.W-1),
+				Ev:          make([]uint8, tc.M-1),
+				SparseCurls: tc.curls,
+				NNZ:         len(tc.curls),
+			}
+			for j := range rep.Eh {
+				rep.Eh[j] = uint8((j + 1) * 7)
+			}
+			for i := range rep.Ev {
+				rep.Ev[i] = uint8((i + 1) * 11)
+			}
+
+			dst := make([]byte, tc.M*tc.W)
+			err := przm.ReconstructCellularSheaf(complex, rep, dst)
+			if err != nil {
+				t.Fatalf("ReconstructCellularSheaf failed: %v", err)
+			}
+
+			// Verify anchor preserved
+			if dst[0] != rep.Anchor {
+				t.Fatalf("dst[0]=0x%02X, expected anchor=0x%02X", dst[0], rep.Anchor)
+			}
+		})
+	}
+}
+
+func TestCellularSheaf_Reconstruct_RoundtripWithDecomposition(t *testing.T) {
+	// Verify that AnalyzeSheafDecomposition -> ReconstructCellularSheaf is bit-exact lossless
+	geometries := [][2]int{
+		{2, 2}, {3, 7}, {4, 8}, {8, 8}, {16, 16}, {5, 13},
+	}
+	twists := []uint8{1, 2, 7, 0x1B}
+
+	for _, geom := range geometries {
+		M, W := geom[0], geom[1]
+		for _, twist := range twists {
+			complex := przm.CellComplex2D{Rows: M, Cols: W, Twist: twist}
+			rng := rand.New(rand.NewSource(int64(M*101 + W*31 + int(twist))))
+
+			// Generate random source buffer
+			src := make([]byte, M*W)
+			for i := range src {
+				src[i] = uint8(rng.Intn(256))
+			}
+
+			rep := przm.AnalyzeSheafDecomposition(src, M, W, twist)
+			if rep == nil {
+				t.Fatalf("AnalyzeSheafDecomposition returned nil for M=%d, W=%d", M, W)
+			}
+
+			dst := make([]byte, M*W)
+			err := przm.ReconstructCellularSheaf(complex, rep, dst)
+			if err != nil {
+				t.Fatalf("ReconstructCellularSheaf error: %v", err)
+			}
+
+			if !bytes.Equal(dst, src) {
+				t.Fatalf("Roundtrip mismatch for M=%d, W=%d, Twist=0x%02X", M, W, twist)
+			}
+		}
+	}
+}
+
+// BenchmarkCellularSheafDecompress verifies zero dynamic heap allocations (0 B/op, 0 allocs/op)
+// during instantaneous decompression of cellular sheaf frames.
+func BenchmarkCellularSheafDecompress(b *testing.B) {
+	orig := make([]byte, 1024)
+	for i := range orig {
+		orig[i] = uint8((i * 3) & 0xFF)
+	}
+	compressed, err := przm.CompressCellularSheaf(orig, 3)
+	if err != nil {
+		b.Fatal(err)
+	}
+	dst := make([]byte, len(orig)+64)
+
+	// Warmup to populate thread pool buffer before timer and alloc tracking
+	_, _ = przm.DecompressCellularSheaf(compressed, dst)
+
+	b.SetBytes(int64(len(orig)))
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err := przm.DecompressCellularSheaf(compressed, dst)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}

@@ -8,6 +8,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"unsafe"
+
+	"github.com/lemon4ksan/foundation/bufkit"
 )
 
 // PWS (Pareto-Wave Synthesis) constants
@@ -366,6 +368,22 @@ func PWSEncode(src []byte) ([]byte, error) {
 
 // PWSDecode performs instantaneous 256-bit AVX-Wave zero-stack decompression.
 func PWSDecode(src []byte) ([]byte, error) {
+	return PWSDecodeTo(nil, src)
+}
+
+// PWSExpansionTables holds flat zero-stack vector tables for Layer 1 through Layer 5 rules.
+type PWSExpansionTables struct {
+	ExpL1 [maxL1Rules]uint16
+	ExpL2 [maxL2Rules]uint32
+	ExpL3 [maxL3Rules]uint64
+	ExpL4 [maxL4Rules][16]byte
+	ExpL5 [maxL5Rules][32]byte
+}
+
+// PWSDecodeTo performs instantaneous 256-bit AVX-Wave zero-stack decompression into dst.
+// Strictly guarantees 0 heap allocations if dst has capacity >= origSize + 32 and stride < 2,
+// or via pool buffer if stride >= 2.
+func PWSDecodeTo(dst, src []byte) ([]byte, error) {
 	if len(src) < 20 {
 		return nil, ErrPWSCorrupted
 	}
@@ -375,11 +393,23 @@ func PWSDecode(src []byte) ([]byte, error) {
 	}
 
 	origSize := int(binary.LittleEndian.Uint32(src[4:8]))
+	if origSize > MaxBlockSize {
+		return nil, ErrPWSCorrupted
+	}
+	if origSize == 0 {
+		return []byte{}, nil
+	}
+
 	numL1 := int(src[12])
 	numL2 := int(src[13])
 	numL3 := int(src[14])
 	numL4 := int(src[15])
 	numL5 := int(src[16])
+
+	if numL1 > maxL1Rules || numL2 > maxL2Rules || numL3 > maxL3Rules ||
+		numL4 > maxL4Rules || numL5 > maxL5Rules {
+		return nil, ErrPWSCorrupted
+	}
 
 	ptr := 20
 	rulesSize := numL1*2 + numL2*2 + numL3*2 + numL4*2 + numL5*2
@@ -387,45 +417,78 @@ func PWSDecode(src []byte) ([]byte, error) {
 		return nil, ErrPWSCorrupted
 	}
 
-	var g GrammarH_DAG5
-	g.L1 = make([]RuleL1, numL1)
+	var exp PWSExpansionTables
+
 	for i := 0; i < numL1; i++ {
-		g.L1[i] = RuleL1{U: src[ptr], V: src[ptr+1]}
+		exp.ExpL1[i] = uint16(src[ptr]) | (uint16(src[ptr+1]) << 8)
 		ptr += 2
 	}
-	g.L2 = make([]RuleL2, numL2)
 	for i := 0; i < numL2; i++ {
-		g.L2[i] = RuleL2{L1A: src[ptr], L1B: src[ptr+1]}
+		l1a, l1b := src[ptr], src[ptr+1]
 		ptr += 2
+		if int(l1a) >= numL1 || int(l1b) >= numL1 {
+			return nil, ErrPWSCorrupted
+		}
+		exp.ExpL2[i] = uint32(exp.ExpL1[l1a]) | (uint32(exp.ExpL1[l1b]) << 16)
 	}
-	g.L3 = make([]RuleL3, numL3)
 	for i := 0; i < numL3; i++ {
-		g.L3[i] = RuleL3{L2A: src[ptr], L2B: src[ptr+1]}
+		l2a, l2b := src[ptr], src[ptr+1]
 		ptr += 2
+		if int(l2a) >= numL2 || int(l2b) >= numL2 {
+			return nil, ErrPWSCorrupted
+		}
+		exp.ExpL3[i] = uint64(exp.ExpL2[l2a]) | (uint64(exp.ExpL2[l2b]) << 32)
 	}
-	g.L4 = make([]RuleL4, numL4)
 	for i := 0; i < numL4; i++ {
-		g.L4[i] = RuleL4{L3A: src[ptr], L3B: src[ptr+1]}
+		l3a, l3b := src[ptr], src[ptr+1]
 		ptr += 2
+		if int(l3a) >= numL3 || int(l3b) >= numL3 {
+			return nil, ErrPWSCorrupted
+		}
+		binary.LittleEndian.PutUint64(exp.ExpL4[i][0:8], exp.ExpL3[l3a])
+		binary.LittleEndian.PutUint64(exp.ExpL4[i][8:16], exp.ExpL3[l3b])
 	}
-	g.L5 = make([]RuleL5, numL5)
 	for i := 0; i < numL5; i++ {
-		g.L5[i] = RuleL5{L4A: src[ptr], L4B: src[ptr+1]}
+		l4a, l4b := src[ptr], src[ptr+1]
 		ptr += 2
+		if int(l4a) >= numL4 || int(l4b) >= numL4 {
+			return nil, ErrPWSCorrupted
+		}
+		copy(exp.ExpL5[i][0:16], exp.ExpL4[l4a][:])
+		copy(exp.ExpL5[i][16:32], exp.ExpL4[l4b][:])
 	}
 
-	g.BuildExpansionTables()
+	stride := int(src[3])
 
-	dst := make([]byte, origSize+32) // 32-byte safety padding for 256-bit stores
-	dstPtr := unsafe.Pointer(&dst[0])
+	// Buffer management
+	outTarget := dst
+	var tmpBuf *[]byte
+	if stride >= 2 {
+		tmpBuf = decLitPool.Get()
+		defer decLitPool.Put(tmpBuf)
+		outTarget = *tmpBuf
+		if cap(outTarget) < origSize+32 {
+			outTarget = bufkit.AlignedBytes(origSize+64, bufkit.CacheLineSize)
+		}
+	} else {
+		if outTarget == nil || cap(outTarget) < origSize+32 {
+			outTarget = bufkit.AlignedBytes(origSize+64, bufkit.CacheLineSize)
+		}
+	}
+	outTarget = outTarget[:origSize]
+
+	dstPtr := unsafe.Pointer(&outTarget[0])
 	pDst := dstPtr
-
 	axiomStream := src[ptr:]
 	axPtr := 0
 	axEnd := len(axiomStream)
 
 	// Single-cycle vector store loop
 	for axPtr < axEnd {
+		if uintptr(pDst) >= uintptr(dstPtr)+uintptr(origSize) {
+			return nil, ErrPWSCorrupted
+		}
+
 		op := axiomStream[axPtr]
 		axPtr++
 
@@ -438,7 +501,10 @@ func PWSDecode(src []byte) ([]byte, error) {
 		// Layer 5 (32 bytes = 256-bit store in 1 instruction)
 		if op >= 0xF4 && op <= 0xFB {
 			id := int(op - 0xF4)
-			*(*[32]byte)(pDst) = g.ExpL5[id]
+			if id >= numL5 {
+				return nil, ErrPWSCorrupted
+			}
+			*(*[32]byte)(pDst) = exp.ExpL5[id]
 			pDst = unsafe.Add(pDst, 32)
 			continue
 		}
@@ -446,7 +512,10 @@ func PWSDecode(src []byte) ([]byte, error) {
 		// Layer 4 (16 bytes = 128-bit store in 1 instruction)
 		if op >= 0xEC && op <= 0xF3 {
 			id := int(op - 0xEC)
-			*(*[16]byte)(pDst) = g.ExpL4[id]
+			if id >= numL4 {
+				return nil, ErrPWSCorrupted
+			}
+			*(*[16]byte)(pDst) = exp.ExpL4[id]
 			pDst = unsafe.Add(pDst, 16)
 			continue
 		}
@@ -454,7 +523,10 @@ func PWSDecode(src []byte) ([]byte, error) {
 		// Layer 3 (8 bytes = 64-bit store)
 		if op >= 0xE0 && op <= 0xEB {
 			id := int(op - 0xE0)
-			*(*uint64)(pDst) = g.ExpL3[id]
+			if id >= numL3 {
+				return nil, ErrPWSCorrupted
+			}
+			*(*uint64)(pDst) = exp.ExpL3[id]
 			pDst = unsafe.Add(pDst, 8)
 			continue
 		}
@@ -462,7 +534,10 @@ func PWSDecode(src []byte) ([]byte, error) {
 		// Layer 2 (4 bytes = 32-bit store)
 		if op >= 0xD0 && op <= 0xDF {
 			id := int(op - 0xD0)
-			*(*uint32)(pDst) = g.ExpL2[id]
+			if id >= numL2 {
+				return nil, ErrPWSCorrupted
+			}
+			*(*uint32)(pDst) = exp.ExpL2[id]
 			pDst = unsafe.Add(pDst, 4)
 			continue
 		}
@@ -470,7 +545,10 @@ func PWSDecode(src []byte) ([]byte, error) {
 		// Layer 1 (2 bytes = 16-bit store)
 		if op >= 0xC0 && op <= 0xCF {
 			id := int(op - 0xC0)
-			*(*uint16)(pDst) = g.ExpL1[id]
+			if id >= numL1 {
+				return nil, ErrPWSCorrupted
+			}
+			*(*uint16)(pDst) = exp.ExpL1[id]
 			pDst = unsafe.Add(pDst, 2)
 			continue
 		}
@@ -493,10 +571,10 @@ func PWSDecode(src []byte) ([]byte, error) {
 			}
 			id := int(axiomStream[axPtr])
 			axPtr++
-			if id >= len(g.ExpL1) {
+			if id >= numL1 {
 				return nil, ErrPWSCorrupted
 			}
-			*(*uint16)(pDst) = g.ExpL1[id]
+			*(*uint16)(pDst) = exp.ExpL1[id]
 			pDst = unsafe.Add(pDst, 2)
 			continue
 		}
@@ -507,10 +585,10 @@ func PWSDecode(src []byte) ([]byte, error) {
 			}
 			id := int(axiomStream[axPtr])
 			axPtr++
-			if id >= len(g.ExpL2) {
+			if id >= numL2 {
 				return nil, ErrPWSCorrupted
 			}
-			*(*uint32)(pDst) = g.ExpL2[id]
+			*(*uint32)(pDst) = exp.ExpL2[id]
 			pDst = unsafe.Add(pDst, 4)
 			continue
 		}
@@ -522,24 +600,24 @@ func PWSDecode(src []byte) ([]byte, error) {
 			id := int(axiomStream[axPtr])
 			axPtr++
 			if id < 32 {
-				if id >= len(g.ExpL3) {
+				if id >= numL3 {
 					return nil, ErrPWSCorrupted
 				}
-				*(*uint64)(pDst) = g.ExpL3[id]
+				*(*uint64)(pDst) = exp.ExpL3[id]
 				pDst = unsafe.Add(pDst, 8)
 			} else if id < 48 {
 				rID := id - 32
-				if rID >= len(g.ExpL4) {
+				if rID >= numL4 {
 					return nil, ErrPWSCorrupted
 				}
-				*(*[16]byte)(pDst) = g.ExpL4[rID]
+				*(*[16]byte)(pDst) = exp.ExpL4[rID]
 				pDst = unsafe.Add(pDst, 16)
 			} else {
 				rID := id - 48
-				if rID >= len(g.ExpL5) {
+				if rID >= numL5 {
 					return nil, ErrPWSCorrupted
 				}
-				*(*[32]byte)(pDst) = g.ExpL5[rID]
+				*(*[32]byte)(pDst) = exp.ExpL5[rID]
 				pDst = unsafe.Add(pDst, 32)
 			}
 			continue
@@ -551,12 +629,16 @@ func PWSDecode(src []byte) ([]byte, error) {
 		return nil, ErrPWSSizeMismatch
 	}
 
-	res := dst[:origSize]
-	stride := int(src[3])
 	if stride >= 2 {
-		return UntransposeStride(res, stride), nil
+		if dst == nil || cap(dst) < origSize+32 {
+			dst = bufkit.AlignedBytes(origSize+64, bufkit.CacheLineSize)
+		}
+		dst = dst[:origSize]
+		UntransposeStrideTo(dst, outTarget[:origSize], stride)
+		return dst, nil
 	}
-	return res, nil
+
+	return outTarget[:origSize], nil
 }
 
 // ============================================================================
@@ -629,29 +711,32 @@ func TransposeStride(src []byte, S int) []byte {
 	return out
 }
 
-// UntransposeStride reconstructs the original stream from S contiguous byte planes.
-func UntransposeStride(src []byte, S int) []byte {
+// UntransposeStrideTo reconstructs the original stream from S contiguous byte planes directly into dst.
+func UntransposeStrideTo(dst, src []byte, S int) {
 	n := len(src)
 	if S <= 1 || n < S {
-		res := make([]byte, n)
-		copy(res, src)
-		return res
+		copy(dst, src)
+		return
 	}
 
 	rows := n / S
 	rem := n % S
-	out := make([]byte, n)
 
 	idx := 0
 	for col := 0; col < S; col++ {
 		for r := 0; r < rows; r++ {
-			out[r*S+col] = src[idx]
+			dst[r*S+col] = src[idx]
 			idx++
 		}
 	}
 	if rem > 0 {
-		copy(out[rows*S:], src[idx:])
+		copy(dst[rows*S:], src[idx:])
 	}
+}
 
+// UntransposeStride reconstructs the original stream from S contiguous byte planes.
+func UntransposeStride(src []byte, S int) []byte {
+	out := make([]byte, len(src))
+	UntransposeStrideTo(out, src, S)
 	return out
 }

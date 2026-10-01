@@ -299,10 +299,10 @@ func TestChallengerM2_EmptyBuffer_EdgeCase(t *testing.T) {
 		t.Fatalf("CompressHeisenberg on empty slice failed: %v", err)
 	}
 
-	// Calling DecompressHeisenberg directly on 0-byte slice returns ErrHeisenbergCorrupt
-	_, decErr := przm.DecompressHeisenberg(comp, nil)
-	if decErr != przm.ErrHeisenbergCorrupt {
-		t.Fatalf("Expected ErrHeisenbergCorrupt when passing 0 bytes to DecompressHeisenberg, got: %v", decErr)
+	// Calling DecompressHeisenberg directly on 0-byte slice returns nil error and 0 length (PROJECT.md Feature 4 contract)
+	dec, decErr := przm.DecompressHeisenberg(comp, nil)
+	if decErr != nil || len(dec) != 0 {
+		t.Fatalf("Expected nil error and empty slice when passing 0 bytes to DecompressHeisenberg, got: %v, len=%d", decErr, len(dec))
 	}
 
 	// Calling DecompressTo directly on 0-byte slice succeeds via wrapper guard
@@ -444,8 +444,8 @@ func TestChallengerM2_MalformedFrame_Robustness(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	t.Run("Go_MalformedFrames", func(t *testing.T) {
-		// 1. Truncated header (< 12 bytes)
-		for sz := 0; sz < 12; sz++ {
+		// 1. Truncated header (1 <= sz < 12 bytes)
+		for sz := 1; sz < 12; sz++ {
 			buf := make([]byte, sz)
 			_, err := przm.DecompressHeisenberg(buf, nil)
 			if err == nil {

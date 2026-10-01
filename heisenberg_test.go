@@ -6,6 +6,7 @@ package przm_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math/rand"
 	"testing"
 
@@ -387,6 +388,137 @@ func BenchmarkHeisenberg_DecompressZeroAlloc(b *testing.B) {
 		_, err := przm.DecompressHeisenberg(compressed, dst)
 		if err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Foliate / Unfoliate & Edge Cases Unit Tests
+// ----------------------------------------------------------------------------
+
+func TestHeisenberg_Foliate_DistinctBuffers(t *testing.T) {
+	lengths := []int{0, 1, 2, 3, 4, 5, 11, 12, 13, 15, 16, 17, 24, 25, 100, 256, 1024}
+	rng := rand.New(rand.NewSource(999))
+
+	for _, length := range lengths {
+		src := make([]byte, length)
+		for i := range src {
+			src[i] = uint8(rng.Intn(256))
+		}
+
+		for _, stride := range []int{3, 4} {
+			dst := make([]byte, length)
+			przm.HeisenbergFoliate(dst, src, stride)
+
+			restored := make([]byte, length)
+			przm.HeisenbergUnfoliate(restored, dst, stride)
+
+			if !bytes.Equal(restored, src) {
+				t.Fatalf("Length %d, Stride %d: Involution mismatch after Foliate -> Unfoliate", length, stride)
+			}
+		}
+	}
+}
+
+func TestHeisenberg_Foliate_InplaceAliased(t *testing.T) {
+	lengths := []int{0, 1, 2, 3, 4, 5, 12, 16, 24, 100, 256}
+	rng := rand.New(rand.NewSource(1001))
+
+	for _, length := range lengths {
+		orig := make([]byte, length)
+		for i := range orig {
+			orig[i] = uint8(rng.Intn(256))
+		}
+
+		for _, stride := range []int{3, 4} {
+			buf := make([]byte, length)
+			copy(buf, orig)
+
+			// Foliate aliased (&buf[0] == &buf[0])
+			przm.HeisenbergFoliate(buf, buf, stride)
+
+			// Unfoliate aliased
+			przm.HeisenbergUnfoliate(buf, buf, stride)
+
+			if !bytes.Equal(buf, orig) {
+				t.Fatalf("Length %d, Stride %d: Aliased in-place involution failed", length, stride)
+			}
+		}
+	}
+}
+
+func TestHeisenberg_Foliate_Equivalence(t *testing.T) {
+	lengths := []int{0, 1, 3, 4, 12, 16, 25, 64, 256}
+	rng := rand.New(rand.NewSource(1002))
+
+	for _, length := range lengths {
+		src := make([]byte, length)
+		for i := range src {
+			src[i] = uint8(rng.Intn(256))
+		}
+
+		for _, stride := range []int{3, 4} {
+			dst1 := make([]byte, length)
+			przm.HeisenbergFoliate(dst1, src, stride)
+
+			dst2 := make([]byte, length)
+			copy(dst2, src)
+			przm.HeisenbergFoliateInplace(dst2, stride)
+
+			if !bytes.Equal(dst1, dst2) {
+				t.Fatalf("Length %d, Stride %d: HeisenbergFoliate != HeisenbergFoliateInplace", length, stride)
+			}
+		}
+	}
+}
+
+func TestHeisenberg_Foliate_ZeroAlloc(t *testing.T) {
+	src := make([]byte, 1024)
+	dst := make([]byte, 1024)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		przm.HeisenbergFoliate(dst, src, 3)
+		przm.HeisenbergUnfoliate(dst, dst, 3)
+	})
+
+	if allocs > 0 {
+		t.Fatalf("HeisenbergFoliate/Unfoliate allocated %v allocs/op, expected 0", allocs)
+	}
+}
+
+func TestHeisenberg_Decompress_ZeroByteInput(t *testing.T) {
+	dst := make([]byte, 64)
+
+	// 1. Valid 0-byte frame with 12-byte header and origLen = 0
+	frame0 := make([]byte, 12)
+	binary.LittleEndian.PutUint32(frame0[0:4], przm.PRZM_MAGIC_HEISENBERG)
+	binary.LittleEndian.PutUint32(frame0[4:8], 0) // origLen = 0
+	frame0[8] = 3                                 // stride = 3
+	frame0[9] = przm.HeisenbergModeRaw
+
+	dec, err := przm.DecompressHeisenberg(frame0, dst)
+	if err != nil {
+		t.Fatalf("DecompressHeisenberg(frame0, dst) failed: %v", err)
+	}
+	if len(dec) != 0 {
+		t.Fatalf("Expected 0 bytes, got %d", len(dec))
+	}
+
+	// 2. Empty slice (0 bytes) gracefully returns []byte{}, nil
+	decEmpty, err := przm.DecompressHeisenberg([]byte{}, dst)
+	if err != nil || len(decEmpty) != 0 {
+		t.Fatalf("Expected []byte{}, nil for empty slice, got: %v, len=%d", err, len(decEmpty))
+	}
+	decNil, err := przm.DecompressHeisenberg(nil, nil)
+	if err != nil || len(decNil) != 0 {
+		t.Fatalf("Expected []byte{}, nil for nil slice, got: %v, len=%d", err, len(decNil))
+	}
+
+	// 3. Truncated non-empty input (1 <= len < 12 bytes) must return ErrHeisenbergCorrupt
+	for l := 1; l < 12; l++ {
+		truncated := make([]byte, l)
+		if _, err := przm.DecompressHeisenberg(truncated, dst); err != przm.ErrHeisenbergCorrupt {
+			t.Fatalf("Expected ErrHeisenbergCorrupt for truncated %d bytes, got: %v", l, err)
 		}
 	}
 }

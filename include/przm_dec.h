@@ -25,6 +25,7 @@ typedef int przm_status_t;
 #define PRZM_ERR_BUFFER_TOO_SMALL -4
 #define PRZM_ERR_EXCEEDS_MAX_BLOCK -5
 #define PRZM_ERR_UNSUPPORTED_MODE -6
+#define PRZM_ERR_UNKNOWN_DICT     -7
 
 /* Core dimensions */
 #define PRZM_HEADER_SIZE          8
@@ -47,6 +48,48 @@ typedef int przm_status_t;
 #define PRZM_HEISENBERG_HEADER_SIZE 12
 #define PRZM_MAGIC_CELLULAR_SHEAF 0x44485343 /* 'C','S','H','D' */
 #define PRZM_CELLULAR_SHEAF_HEADER_SIZE 24
+#define PRZM_MAGIC_MOBIUS         0x49424F4D /* 'M','O','B','I' */
+#define PRZM_MOBIUS_HEADER_SIZE   12
+#define PRZM_MAGIC_MARGOLUS       0x4752414D /* 'M','A','R','G' */
+#define PRZM_MARGOLUS_HEADER_SIZE 16
+
+/* Opcode assignments */
+#define PRZM_OP_MARGOLUS          0x0F
+#define PRZM_OP_MOBIUS            0x11
+
+/* Fast Möbius Transform modes and flags */
+#define PRZM_FMT_MODE_RAW         0x00
+#define PRZM_FMT_MODE_TRANSFORMED 0x01
+#define PRZM_FMT_MODE_COMPRESSED  0x03
+#define PRZM_FMT_FLAG_BIT_LEVEL   0x10
+
+/* Margolus RCA transition rules */
+#define PRZM_MARGOLUS_RULE_BBM        0
+#define PRZM_MARGOLUS_RULE_TRANSPOSE  1
+#define PRZM_MARGOLUS_RULE_ROT180     2
+#define PRZM_MARGOLUS_RULE_ROT90      3
+#define PRZM_MARGOLUS_RULE_XOR        4
+#define PRZM_MARGOLUS_RULE_FLIP_H     5
+#define PRZM_MARGOLUS_RULE_FLIP_V     6
+
+/* Well-known dictionary identifiers */
+#define PRZM_DICT_ID_NONE         0
+#define PRZM_DICT_ID_JSON         1
+#define PRZM_DICT_ID_CODE         2 /* Deprecated */
+#define PRZM_DICT_ID_RESERVED_MAX 0x0FFF
+#define PRZM_DICT_ID_EXTERNAL_MIN 0x1000
+#define PRZM_DICT_MAX_TOKENS      256
+
+typedef struct {
+    const char* str;
+    size_t      len;
+} przm_dict_entry_t;
+
+typedef struct {
+    uint32_t                 dict_id;
+    size_t                   num_tokens;
+    const przm_dict_entry_t* tokens;
+} przm_dictionary_t;
 
 /* Flags for Cellular Sheaves with Discrete Hodge Laplacians */
 #define PRZM_CSHD_FLAG_RAW          0x0000
@@ -106,6 +149,46 @@ int64_t przm_get_uncompressed_size(const uint8_t* src, size_t src_len);
  * @return Number of uncompressed bytes written to dst, or negative PRZM_ERR_* code.
  */
 int64_t przm_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap);
+
+/**
+ * przm_decompress_dict
+ *
+ * Decompresses a PRZM-compressed frame using an optional external dictionary.
+ * Strictly 0 heap allocations, thread-safe, and reentrant.
+ *
+ * @param src Pointer to compressed frame bytes.
+ * @param src_len Byte length of compressed buffer.
+ * @param dst Pre-allocated destination buffer (capacity >= uncompressed_size + PRZM_SAFETY_PADDING).
+ * @param dst_cap Total allocated capacity of dst.
+ * @param dict Optional pointer to caller-managed external dictionary descriptor.
+ * @return Number of uncompressed bytes written to dst, or negative PRZM_ERR_* on failure.
+ */
+int64_t przm_decompress_dict(const uint8_t* src, size_t src_len,
+                             uint8_t* dst, size_t dst_cap,
+                             const przm_dictionary_t* dict);
+
+/**
+ * przm_fmt_transform_inplace / przm_mobius_transform_inplace
+ *
+ * In-place Fast Möbius Transform (F_2 Yates butterfly involution).
+ * Operates across full 2^block_log2 blocks; residual bytes are preserved.
+ * Forward and untransform are algebraically identical: FMT(FMT(X)) == X.
+ */
+int przm_fmt_transform_inplace(uint8_t* dst, size_t len, uint8_t block_log2, uint8_t bit_level);
+int przm_mobius_transform_inplace(uint8_t* dst, size_t len, uint8_t block_log2, uint8_t bit_level);
+int przm_mobius_untransform_inplace(uint8_t* dst, size_t len, uint8_t block_log2, uint8_t bit_level);
+int64_t przm_mobius_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap);
+
+/**
+ * przm_margolus_step_inplace / przm_margolus_reverse_inplace
+ *
+ * Margolus Reversible Cellular Automata on 2D H x W lattice.
+ * Forward evolution and time-reversed inversion execute strictly in-place with 0 allocations.
+ */
+int przm_margolus_step_inplace(uint8_t* dst, size_t H, size_t W, int phase, uint8_t rule_id, int inverse);
+int przm_margolus_reverse_inplace(uint8_t* dst, size_t len, uint16_t width, uint8_t steps, uint8_t rule_id);
+int przm_margolus_inverse_inplace(uint8_t* dst, size_t len, uint16_t width, uint8_t steps, uint8_t rule_id);
+int64_t przm_margolus_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap);
 
 /**
  * przm_isoquant_unrotate_inplace

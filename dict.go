@@ -7,6 +7,10 @@ package przm
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
 )
 
 var jsonTokensRaw = []string{
@@ -78,52 +82,6 @@ var jsonTokensRaw = []string{
 	`,"metric":"temperature"`,
 }
 
-var codeTokensRaw = []string{
-	// Top 8 Direct 1-byte Opcode Tokens (0xD8 .. 0xDF)
-	"if err != nil {\n",
-	"return nil, err",
-	"func (",
-	"package ",
-	"import (\n",
-	"return nil",
-	"return err",
-	"for i := 0; i < ",
-
-	// Extended 2-byte Opcode Tokens (0xF2 <tokenID>)
-	"context.Context",
-	"binary.LittleEndian.",
-	"fmt.Sprintf(",
-	"fmt.Errorf(",
-	"type ",
-	"struct {\n",
-	"interface {\n",
-	"[]byte",
-	"string",
-	"error",
-	"make([]",
-	"append(",
-	"switch ",
-	"default:\n",
-	"continue\n",
-	"const (\n",
-	"var (\n",
-	"sync.Mutex",
-	"sync.Pool",
-	"func (s *",
-	"len(",
-	"return ",
-	"case ",
-	"uint64",
-	"uint32",
-	"int64",
-	"float64",
-	"bool",
-	"true",
-	"false",
-	"nil",
-	"bytes.Buffer",
-}
-
 type dictMatcher struct {
 	id     uint32
 	tokens [][]byte
@@ -131,14 +89,10 @@ type dictMatcher struct {
 	chain  [256]int16
 }
 
-var (
-	jsonMatcher dictMatcher
-	codeMatcher dictMatcher
-)
+var jsonMatcher dictMatcher
 
 func init() {
 	initMatcher(&jsonMatcher, DictIDJSON, jsonTokensRaw)
-	initMatcher(&codeMatcher, DictIDCode, codeTokensRaw)
 }
 
 func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
@@ -166,8 +120,6 @@ func getBuiltinDictBytes(dictID uint32) [][]byte {
 	switch dictID {
 	case DictIDJSON:
 		return jsonMatcher.tokens
-	case DictIDCode:
-		return codeMatcher.tokens
 	default:
 		return nil
 	}
@@ -217,26 +169,224 @@ func detectDictionary(src []byte) uint32 {
 		return DictIDJSON
 	}
 
-	// Code detection: count programming keywords
-	codeHits := 0
-	if bytes.Contains(sample, []byte("func ")) {
-		codeHits += 2
+	return DictIDNone
+}
+
+// PRZMDMagic defines the 32-bit container magic for external dictionaries ('PRZD').
+const PRZMDMagic uint32 = 0x445A5250
+
+// Dictionary represents a compiled schema dictionary for PRZM token matching.
+type Dictionary struct {
+	id      uint32
+	tokens  [][]byte
+	matcher dictMatcher
+}
+
+// ID returns the 32-bit identifier of the dictionary.
+func (d *Dictionary) ID() uint32 {
+	return d.id
+}
+
+// Tokens returns the compiled byte tokens of the dictionary.
+func (d *Dictionary) Tokens() [][]byte {
+	return d.tokens
+}
+
+// NewDictionary creates a custom dictionary from token strings.
+func NewDictionary(id uint32, rawTokens []string) (*Dictionary, error) {
+	if len(rawTokens) == 0 {
+		return nil, fmt.Errorf("%w: dictionary has 0 tokens", ErrInvalidDict)
 	}
-	if bytes.Contains(sample, []byte("package ")) {
-		codeHits += 2
+	if len(rawTokens) > 256 {
+		return nil, fmt.Errorf("%w: dictionary exceeds maximum 256 tokens", ErrInvalidDict)
 	}
-	if bytes.Contains(sample, []byte("import ")) {
-		codeHits += 2
+	d := &Dictionary{
+		id: id,
 	}
-	if bytes.Contains(sample, []byte("return ")) {
-		codeHits++
+	initMatcher(&d.matcher, id, rawTokens)
+	d.tokens = d.matcher.tokens
+	return d, nil
+}
+
+// Bytes serializes the dictionary into the binary PRZMD container format.
+// Layout:
+// [4B Magic: "PRZD"] [1B Version: 1] [1B Flags: 0] [2B TokenCount: N] [4B DictID] [4B Reserved: 0] (16B header)
+// [Table of N uint16_le TokenLengths]
+// [Contiguous Token String Payloads]
+func (d *Dictionary) Bytes() []byte {
+	numTokens := len(d.tokens)
+	totalPayload := 0
+	for _, tok := range d.tokens {
+		totalPayload += len(tok)
 	}
-	if bytes.Contains(sample, []byte("err != nil")) {
-		codeHits += 2
+	bufSize := 16 + numTokens*2 + totalPayload
+	buf := make([]byte, bufSize)
+
+	binary.LittleEndian.PutUint32(buf[0:4], PRZMDMagic)
+	buf[4] = 1 // version 1
+	buf[5] = 0 // flags
+	binary.LittleEndian.PutUint16(buf[6:8], uint16(numTokens))
+	binary.LittleEndian.PutUint32(buf[8:12], d.id)
+	binary.LittleEndian.PutUint32(buf[12:16], 0) // reserved
+
+	lenOffset := 16
+	payloadOffset := 16 + numTokens*2
+	for i, tok := range d.tokens {
+		binary.LittleEndian.PutUint16(buf[lenOffset+i*2:lenOffset+i*2+2], uint16(len(tok)))
+		copy(buf[payloadOffset:], tok)
+		payloadOffset += len(tok)
 	}
-	if codeHits >= 3 {
-		return DictIDCode
+	return buf
+}
+
+// NewDictionaryFromBytes parses a binary PRZMD container into a Dictionary.
+func NewDictionaryFromBytes(data []byte) (*Dictionary, error) {
+	if len(data) < 16 {
+		return nil, fmt.Errorf("%w: data too short for PRZMD header", ErrInvalidDict)
+	}
+	magic := binary.LittleEndian.Uint32(data[0:4])
+	if magic != PRZMDMagic {
+		return nil, fmt.Errorf("%w: invalid PRZMD magic 0x%08X", ErrInvalidDict, magic)
+	}
+	version := data[4]
+	if version != 1 {
+		return nil, fmt.Errorf("%w: unsupported PRZMD version %d", ErrInvalidDict, version)
+	}
+	numTokens := int(binary.LittleEndian.Uint16(data[6:8]))
+	if numTokens <= 0 || numTokens > 256 {
+		return nil, fmt.Errorf("%w: invalid token count %d", ErrInvalidDict, numTokens)
+	}
+	dictID := binary.LittleEndian.Uint32(data[8:12])
+
+	expectedMin := 16 + numTokens*2
+	if len(data) < expectedMin {
+		return nil, fmt.Errorf("%w: truncated PRZMD lengths table", ErrInvalidDict)
 	}
 
-	return DictIDNone
+	rawTokens := make([]string, numTokens)
+	payloadOffset := expectedMin
+	for i := 0; i < numTokens; i++ {
+		tLen := int(binary.LittleEndian.Uint16(data[16+i*2 : 16+i*2+2]))
+		if payloadOffset+tLen > len(data) {
+			return nil, fmt.Errorf("%w: truncated token payload at index %d", ErrInvalidDict, i)
+		}
+		rawTokens[i] = string(data[payloadOffset : payloadOffset+tLen])
+		payloadOffset += tLen
+	}
+
+	return NewDictionary(dictID, rawTokens)
+}
+
+// Global thread-safe dictionary registry.
+var (
+	dictMu       sync.RWMutex
+	dictRegistry = make(map[uint32]*Dictionary)
+)
+
+// RegisterDictionary registers an external dictionary in the global registry.
+func RegisterDictionary(d *Dictionary) error {
+	if d == nil {
+		return fmt.Errorf("%w: nil dictionary", ErrInvalidDict)
+	}
+	dictMu.Lock()
+	defer dictMu.Unlock()
+	dictRegistry[d.id] = d
+	return nil
+}
+
+// UnregisterDictionary removes a dictionary from the global registry.
+func UnregisterDictionary(id uint32) {
+	dictMu.Lock()
+	defer dictMu.Unlock()
+	delete(dictRegistry, id)
+}
+
+// GetDictionary retrieves a registered dictionary by id.
+func GetDictionary(id uint32) *Dictionary {
+	dictMu.RLock()
+	defer dictMu.RUnlock()
+	return dictRegistry[id]
+}
+
+// TrainDictionary computes an optimal token lexicon from a training corpus.
+// It scores candidate n-grams by net compression gain:
+// G(T) = Count(T) * (Length(T) - Cost(T))
+// where Cost(T) = 1 for the top 8 tokens (1-byte opcode) and 2 for the remainder (2-byte opcode).
+func TrainDictionary(corpus [][]byte, dictID uint32, maxTokens int) (*Dictionary, error) {
+	if len(corpus) == 0 {
+		return nil, errors.New("przm: empty corpus for training")
+	}
+	if maxTokens <= 0 {
+		maxTokens = 64
+	}
+	if maxTokens > 256 {
+		maxTokens = 256
+	}
+
+	freq := make(map[string]int)
+	for _, doc := range corpus {
+		n := len(doc)
+		if n < 4 {
+			continue
+		}
+		// Sample common n-grams of lengths 4 to 32
+		maxL := min(n, 32)
+		for l := 4; l <= maxL; l++ {
+			step := 1
+			if l > 8 {
+				step = 2
+			}
+			for i := 0; i+l <= n; i += step {
+				freq[string(doc[i:i+l])]++
+			}
+		}
+	}
+
+	type candidate struct {
+		token string
+		gain  int
+	}
+	var candidates []candidate
+	for tok, count := range freq {
+		if count < 2 {
+			continue
+		}
+		// Tentative gain with 2-byte opcode cost
+		gain := count * (len(tok) - 2)
+		if gain > 0 {
+			candidates = append(candidates, candidate{token: tok, gain: gain})
+		}
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].gain != candidates[j].gain {
+			return candidates[i].gain > candidates[j].gain
+		}
+		return len(candidates[i].token) > len(candidates[j].token)
+	})
+
+	if len(candidates) > maxTokens {
+		candidates = candidates[:maxTokens]
+	}
+
+	if len(candidates) == 0 {
+		return nil, errors.New("przm: could not discover repetitive tokens in corpus")
+	}
+
+	rawTokens := make([]string, len(candidates))
+	for i, c := range candidates {
+		rawTokens[i] = c.token
+	}
+
+	return NewDictionary(dictID, rawTokens)
+}
+
+// CompressWithDict encodes src using an explicit dictionary.
+func CompressWithDict(src []byte, level int, dict *Dictionary) ([]byte, error) {
+	return compressInternal(src, level, dict)
+}
+
+// DecompressWithDict decodes src with an explicit dictionary fallback.
+func DecompressWithDict(src []byte, dict *Dictionary) ([]byte, error) {
+	return decompressWithDictTo(src, nil, dict)
 }

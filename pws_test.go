@@ -171,3 +171,81 @@ func BenchmarkPWS_Throughput(b *testing.B) {
 		}
 	})
 }
+
+// ----------------------------------------------------------------------------
+// Zero-Allocation PWSDecodeTo & UntransposeStrideTo Tests
+// ----------------------------------------------------------------------------
+
+func TestPWSDecodeTo_ZeroAllocAndCorrectness(t *testing.T) {
+	sizes := []int{64, 512, 4096, 65536}
+	corpus := bench.GenerateCorpus(sizes)
+
+	for _, item := range corpus {
+		t.Run(item.Name, func(t *testing.T) {
+			enc, err := przm.PWSEncode(item.Data)
+			if err != nil {
+				t.Fatalf("PWSEncode failed: %v", err)
+			}
+
+			dst := make([]byte, len(item.Data)+64)
+			dec, err := przm.PWSDecodeTo(dst, enc)
+			if err != nil {
+				t.Fatalf("PWSDecodeTo failed: %v", err)
+			}
+
+			if !bytes.Equal(dec, item.Data) {
+				t.Fatalf("PWSDecodeTo roundtrip mismatch on %s", item.Name)
+			}
+
+			// Verify strictly 0 heap allocations
+			allocs := testing.AllocsPerRun(100, func() {
+				_, decErr := przm.PWSDecodeTo(dst, enc)
+				if decErr != nil {
+					t.Fatalf("PWSDecodeTo failed in alloc test: %v", decErr)
+				}
+			})
+
+			if allocs > 0 {
+				t.Fatalf("PWSDecodeTo allocated %v allocs/op on %s, expected 0", allocs, item.Name)
+			}
+		})
+	}
+
+	// Edge case 1: empty slice (< 20 bytes)
+	_, err := przm.PWSDecodeTo(nil, []byte{})
+	if err != przm.ErrPWSCorrupted {
+		t.Fatalf("Expected ErrPWSCorrupted for empty slice, got: %v", err)
+	}
+
+	// Edge case 2: corrupted short header
+	_, err = przm.PWSDecodeTo(nil, []byte{0x50, 0x57, 0x01})
+	if err != przm.ErrPWSCorrupted {
+		t.Fatalf("Expected ErrPWSCorrupted, got %v", err)
+	}
+}
+
+func TestUntransposeStrideTo_EdgeCases(t *testing.T) {
+	src := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9}
+	dst := make([]byte, len(src))
+
+	// Stride <= 1
+	przm.UntransposeStrideTo(dst, src, 1)
+	if !bytes.Equal(dst, src) {
+		t.Fatalf("Stride 1 mismatch: got %v, want %v", dst, src)
+	}
+
+	// Stride > len
+	przm.UntransposeStrideTo(dst, src, 20)
+	if !bytes.Equal(dst, src) {
+		t.Fatalf("Stride > len mismatch: got %v, want %v", dst, src)
+	}
+
+	// Normal stride roundtrip
+	for s := 2; s <= 4; s++ {
+		trans := przm.TransposeStride(src, s)
+		przm.UntransposeStrideTo(dst, trans, s)
+		if !bytes.Equal(dst, src) {
+			t.Fatalf("Stride %d roundtrip mismatch: got %v, want %v", s, dst, src)
+		}
+	}
+}
