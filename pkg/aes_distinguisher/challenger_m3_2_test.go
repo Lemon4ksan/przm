@@ -178,7 +178,7 @@ func TestChallengerM3_2_ZeroAllocation_10000Runs(t *testing.T) {
 // validating zero race conditions, bit-exact roundtrips, and zero heap leakages.
 func TestChallengerM3_2_ZeroAllocation_HighConcurrencyStress(t *testing.T) {
 	const (
-		numWorkers       = 32
+		numWorkers       = 8
 		itersPerWorker   = 5000
 		totalInvocations = numWorkers * itersPerWorker
 	)

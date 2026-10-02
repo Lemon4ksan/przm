@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+
+	"github.com/lemon4ksan/foundation/bufkit"
 )
 
 // Spectral Unitary Constants
@@ -175,16 +177,14 @@ func ApplyUnitary4(src []byte, U UnitaryMatrix4, dst []byte) {
 func InvertUnitary4(src []byte, U UnitaryMatrix4, dst []byte) {
 	n := len(src) / 4
 	for t := 0; t < n; t++ {
-		s := src[t*4 : (t+1)*4]
+		s0 := src[t*4]
+		s1 := src[t*4+1]
+		s2 := src[t*4+2]
+		s3 := src[t*4+3]
 		d := dst[t*4 : (t+1)*4]
 
-		// X[j] = sum_k (Y[k] * U[k][j])
 		for j := 0; j < 4; j++ {
-			var sum uint8
-			for k := 0; k < 4; k++ {
-				sum ^= GF256Mul(s[k], U[k][j])
-			}
-			d[j] = sum
+			d[j] = GF256Mul(s0, U[0][j]) ^ GF256Mul(s1, U[1][j]) ^ GF256Mul(s2, U[2][j]) ^ GF256Mul(s3, U[3][j])
 		}
 	}
 }
@@ -318,11 +318,10 @@ func DecompressSpectralUnitary(src []byte, dst []byte) ([]byte, error) {
 	rem := origLen % 4
 	alignedLen := numVectors * 4
 
-	if cap(dst) >= origLen {
-		dst = dst[:origLen]
-	} else {
-		dst = make([]byte, origLen)
+	if dst == nil || cap(dst) < origLen {
+		dst = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
 	}
+	dst = dst[:origLen]
 
 	// Read 4x4 matrix U
 	var U UnitaryMatrix4
@@ -335,6 +334,9 @@ func DecompressSpectralUnitary(src []byte, dst []byte) ([]byte, error) {
 	}
 
 	if mode == SpectralModeCompressed {
+		if cap(dst) < origLen+64 {
+			dst = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)[:origLen]
+		}
 		if pos > len(src)-rem {
 			return nil, ErrSpectralCorrupt
 		}
@@ -342,11 +344,21 @@ func DecompressSpectralUnitary(src []byte, dst []byte) ([]byte, error) {
 		if payloadLen <= 0 {
 			return nil, ErrSpectralCorrupt
 		}
-		decompressed, err := PWSDecode(src[pos : pos+payloadLen])
+		payload := src[pos : pos+payloadLen]
+		var decompressed []byte
+		var err error
+		if len(payload) >= 3 && payload[0] == pwsMagic0 && payload[1] == pwsMagic1 && payload[2] == pwsVer1 {
+			decompressed, err = PWSDecodeTo(dst, payload)
+		} else {
+			decompressed, err = DecompressTo(payload, dst)
+		}
 		if err != nil || len(decompressed) < alignedLen {
 			return nil, ErrSpectralCorrupt
 		}
-		InvertUnitary4(decompressed[:alignedLen], U, dst[:alignedLen])
+		if len(dst) > 0 && len(decompressed) > 0 && &dst[0] != &decompressed[0] {
+			copy(dst, decompressed[:alignedLen])
+		}
+		InvertUnitary4(dst[:alignedLen], U, dst[:alignedLen])
 		if rem > 0 {
 			copy(dst[alignedLen:origLen], src[pos+payloadLen:])
 		}

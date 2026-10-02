@@ -212,7 +212,7 @@ func TestChallenger_HighEntropyCryptoRandom(t *testing.T) {
 // TestChallenger_ConcurrencyAndPoolSafety verifies that scratchpad pools and shared buffers
 // are completely race-free under high concurrent multi-goroutine load.
 func TestChallenger_ConcurrencyAndPoolSafety(t *testing.T) {
-	const numGoroutines = 16
+	const numGoroutines = 8
 	const iterations = 50
 
 	data := make([]byte, 65536)

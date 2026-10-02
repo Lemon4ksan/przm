@@ -8,6 +8,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+
+	"github.com/lemon4ksan/foundation/bufkit"
 )
 
 // Magic & Opcode constants for Galois Superoptimized JIT & Trace Annihilation (GCTR)
@@ -433,6 +435,11 @@ func DecompressGCTR(src []byte, dst []byte) ([]byte, error) {
 	subFmt := src[5]
 	origLen := int(binary.LittleEndian.Uint32(src[6:10]))
 
+	if dst == nil || cap(dst) < origLen {
+		dst = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
+	}
+	dst = dst[:origLen]
+
 	var innerDec []byte
 	var err error
 
@@ -440,7 +447,14 @@ func DecompressGCTR(src []byte, dst []byte) ([]byte, error) {
 	case GCTRSubVANS:
 		innerDec, err = VANSDecode4x(src[10:])
 	case GCTRSubPWS:
-		innerDec, err = PWSDecode(src[10:])
+		if cap(dst) < origLen+64 {
+			dst = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)[:origLen]
+		}
+		innerDec, err = PWSDecodeTo(dst, src[10:])
+		if err == nil && len(dst) > 0 && len(innerDec) > 0 && &dst[0] != &innerDec[0] {
+			copy(dst, innerDec[:origLen])
+			innerDec = dst
+		}
 	default:
 		return nil, ErrGCTRCorrupted
 	}

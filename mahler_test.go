@@ -308,7 +308,7 @@ func BenchmarkDecompressMahler_Throughput(b *testing.B) {
 	rand.Read(orig)
 
 	compressed := CompressMahler(orig)
-	dst := make([]byte, n)
+	dst := make([]byte, n+64)
 
 	b.SetBytes(int64(n))
 	b.ResetTimer()

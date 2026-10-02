@@ -7,6 +7,8 @@ package przm
 import (
 	"encoding/binary"
 	"errors"
+
+	"github.com/lemon4ksan/foundation/bufkit"
 )
 
 // Magic & Mode constants for 2-Adic Mahler Ultrametric Spectral Transform
@@ -223,10 +225,9 @@ func DecompressMahler(src, dst []byte) ([]byte, error) {
 	payload := src[12:]
 
 	if dst == nil || cap(dst) < origLen {
-		dst = make([]byte, origLen)
-	} else {
-		dst = dst[:origLen]
+		dst = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
 	}
+	dst = dst[:origLen]
 
 	mode := src[4]
 	if mode == MahlerModeRaw {
@@ -247,14 +248,25 @@ func DecompressMahler(src, dst []byte) ([]byte, error) {
 	}
 
 	if mode == MahlerModeCascaded {
-		pwsDec, err := PWSDecode(payload)
+		if cap(dst) < origLen+64 {
+			dst = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)[:origLen]
+		}
+		var innerDec []byte
+		var err error
+		if len(payload) >= 3 && payload[0] == pwsMagic0 && payload[1] == pwsMagic1 && payload[2] == pwsVer1 {
+			innerDec, err = PWSDecodeTo(dst, payload)
+		} else {
+			innerDec, err = DecompressTo(payload, dst)
+		}
 		if err != nil {
 			return nil, err
 		}
-		if len(pwsDec) < origLen {
+		if len(innerDec) < origLen {
 			return nil, ErrMahlerCorrupt
 		}
-		copy(dst, pwsDec[:origLen])
+		if len(dst) > 0 && len(innerDec) > 0 && &dst[0] != &innerDec[0] {
+			copy(dst, innerDec[:origLen])
+		}
 		MahlerInverse16Inplace(dst)
 		return dst, nil
 	}

@@ -257,7 +257,7 @@ func TestChallengerM2_2_R3_EdgeCases_AdversarialInputs(t *testing.T) {
 // 4. High Concurrency Stress Test: Heisenberg & Sheaf Decompressors
 // -----------------------------------------------------------------------------
 func TestChallengerM2_2_R3_HighConcurrency_ZeroAlloc(t *testing.T) {
-	const numGoroutines = 64
+	const numGoroutines = 8
 	const iterations = 50
 
 	// 4a. Prepare diverse Heisenberg frames

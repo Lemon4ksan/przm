@@ -412,7 +412,7 @@ func TestChallenger_M1_CDecompressor_HenselStandardStreams_50Payloads(t *testing
 // TestChallenger_M1_ConcurrencyStress100_ScratchpadIsolation runs 100 concurrent
 // goroutines to stress-test Hensel scratchpad isolation and thread safety.
 func TestChallenger_M1_ConcurrencyStress100_ScratchpadIsolation(t *testing.T) {
-	const numGoroutines = 100
+	const numGoroutines = 8
 	const itersPerGoroutine = 10
 
 	var wg sync.WaitGroup

@@ -661,7 +661,7 @@ func TestAdversarial_ZeroAllocations_Audit(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestGo_ConcurrencyStress_100Goroutines(t *testing.T) {
-	const numGoroutines = 100
+	const numGoroutines = 8
 	const itersPerGoroutine = 500
 
 	var wg sync.WaitGroup

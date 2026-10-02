@@ -8,6 +8,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+
+	"github.com/lemon4ksan/foundation/bufkit"
 )
 
 // Analytical Hyperbolic Multidimensional Scaling (h-MDS) in Minkowski Space M^r.
@@ -378,11 +380,10 @@ func DecompressHMDS(src []byte, dst []byte) ([]byte, error) {
 	rem := origLen % 4
 	alignedLen := numVectors * 4
 
-	if cap(dst) >= origLen {
-		dst = dst[:origLen]
-	} else {
-		dst = make([]byte, origLen)
+	if dst == nil || cap(dst) < origLen {
+		dst = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
 	}
+	dst = dst[:origLen]
 
 	// Read permutation and compute inverse
 	var invPerm [4]int
@@ -396,6 +397,9 @@ func DecompressHMDS(src []byte, dst []byte) ([]byte, error) {
 	pos := 25
 
 	if mode == HMDSModeCompressed {
+		if cap(dst) < origLen+64 {
+			dst = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)[:origLen]
+		}
 		if pos > len(src)-rem {
 			return nil, ErrHMDSCorrupt
 		}
@@ -403,14 +407,29 @@ func DecompressHMDS(src []byte, dst []byte) ([]byte, error) {
 		if payloadLen <= 0 {
 			return nil, ErrHMDSCorrupt
 		}
-		transformed, err := PWSDecode(src[pos : pos+payloadLen])
+		payload := src[pos : pos+payloadLen]
+		var transformed []byte
+		var err error
+		if len(payload) >= 3 && payload[0] == pwsMagic0 && payload[1] == pwsMagic1 && payload[2] == pwsVer1 {
+			transformed, err = PWSDecodeTo(dst, payload)
+		} else {
+			transformed, err = DecompressTo(payload, dst)
+		}
 		if err != nil || len(transformed) < alignedLen {
 			return nil, ErrHMDSCorrupt
 		}
+		if len(dst) > 0 && len(transformed) > 0 && &dst[0] != &transformed[0] {
+			copy(dst, transformed[:alignedLen])
+		}
 		for t := 0; t < numVectors; t++ {
-			for c := 0; c < 4; c++ {
-				dst[t*4+invPerm[c]] = transformed[t*4+c]
-			}
+			v0 := dst[t*4]
+			v1 := dst[t*4+1]
+			v2 := dst[t*4+2]
+			v3 := dst[t*4+3]
+			dst[t*4+invPerm[0]] = v0
+			dst[t*4+invPerm[1]] = v1
+			dst[t*4+invPerm[2]] = v2
+			dst[t*4+invPerm[3]] = v3
 		}
 		if rem > 0 {
 			copy(dst[alignedLen:origLen], src[pos+payloadLen:])

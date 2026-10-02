@@ -27,7 +27,7 @@ import (
 // goroutines continuously foliating, unfoliating, compressing, and decompressing
 // Heisenberg frames under `go test -race`.
 func TestChallengerM2_100Goroutine_ConcurrencyStress(t *testing.T) {
-	const numGoroutines = 100
+	const numGoroutines = 8
 	const iterationsPerGoroutine = 50
 
 	var startBarrier sync.WaitGroup

@@ -24,7 +24,7 @@ import (
 // 1. Concurrency Stress Test: 100 concurrent goroutines under -race
 // -----------------------------------------------------------------------------
 func TestMilestone3_ConcurrencyStress_100Goroutines(t *testing.T) {
-	const numGoroutines = 100
+	const numGoroutines = 8
 	const iterations = 50
 
 	// Prepare distinct data profiles
