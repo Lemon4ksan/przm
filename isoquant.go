@@ -394,14 +394,22 @@ func DecompressIsoQuant(src, dst []byte) ([]byte, error) {
 		return dst, nil
 
 	case IsoQuantModeCompressed:
-		pwsDec, err := PWSDecode(payload)
+		var innerDec []byte
+		var err error
+		if len(payload) >= 3 && payload[0] == pwsMagic0 && payload[1] == pwsMagic1 && payload[2] == pwsVer1 {
+			innerDec, err = PWSDecodeTo(dst, payload)
+		} else {
+			innerDec, err = DecompressTo(payload, dst)
+		}
 		if err != nil {
 			return nil, err
 		}
-		if len(pwsDec) < origLen {
+		if len(innerDec) < origLen {
 			return nil, ErrIsoQuantCorrupt
 		}
-		copy(dst, pwsDec[:origLen])
+		if len(dst) > 0 && len(innerDec) > 0 && &dst[0] != &innerDec[0] {
+			copy(dst, innerDec[:origLen])
+		}
 		IsoQuantUncollimation4DInplace(dst, qLInv, qRInv)
 		return dst, nil
 

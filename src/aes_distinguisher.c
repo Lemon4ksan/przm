@@ -525,7 +525,11 @@ void compute_chi_squared(
     if (z_score) *z_score = z;
 }
 
-static uint32_t s_stride4_counts[256][256];
+#if defined(_MSC_VER)
+static __declspec(thread) uint32_t s_stride4_counts[256][256];
+#else
+static _Thread_local uint32_t s_stride4_counts[256][256];
+#endif
 
 double compute_stride4_entropy(const uint8_t *data, size_t len) {
     if (data == NULL || len <= 4) return 0.0;
@@ -1013,6 +1017,10 @@ int aes_crypto_core_decompress(
 
     if (flags != 1) return -6;
 
+    if ((size_t)num_chunks * PRZM_CRYPTO_CORE_CHUNK_BYTES > (size_t)raw_sz) {
+        return -1;
+    }
+
     chunks = (size_t)num_chunks;
     bitmap_len = (chunks + 7) / 8;
     header_total = PRZM_CRYPTO_CORE_HEADER_SIZE + bitmap_len;
@@ -1051,6 +1059,9 @@ int aes_crypto_core_decompress(
         }
     }
 
+    if (out_pos > (size_t)raw_sz) {
+        return -1;
+    }
     trailing = (size_t)raw_sz - out_pos;
     if (trailing > 0) {
         if (in_pos + trailing > src_len || out_pos + trailing > dst_cap) return -1;

@@ -88,8 +88,27 @@ int main(void) {
         /* Case 3d: Insufficient dst_cap */
         status = aes_crypto_core_decompress(comp, comp_len, decomp, sizeof(raw) - 1, &decomp_len);
         assert(status == -4); /* Buffer too small */
+
+        /* Case 3e: Adversarial header inconsistency (raw_sz = 100, num_chunks = 1 -> num_chunks * 4096 > raw_sz) */
+        {
+            uint8_t malformed[4097], dst_adv[4096];
+            size_t out_len_adv = 0;
+            memset(malformed, 0, sizeof(malformed));
+            uint32_t magic = PRZM_MAGIC_CRYPTO_CORE;
+            uint32_t raw_sz_adv = 100;
+            uint32_t comp_sz_adv = 4097;
+            uint16_t flags_adv = 1, chunks_adv = 1;
+            memcpy(malformed, &magic, 4);
+            memcpy(malformed + 4, &raw_sz_adv, 4);
+            memcpy(malformed + 8, &comp_sz_adv, 4);
+            memcpy(malformed + 12, &flags_adv, 2);
+            memcpy(malformed + 14, &chunks_adv, 2);
+            malformed[16] = 0x01; /* balanced chunk 0 */
+            int ret_adv = aes_crypto_core_decompress(malformed, sizeof(malformed), dst_adv, sizeof(dst_adv), &out_len_adv);
+            assert(ret_adv == -1);
+        }
     }
-    printf("[+] Passed corrupt flags and truncated buffers in decompress\n");
+    printf("[+] Passed corrupt flags, truncated buffers, and adversarial header underflow in decompress\n");
 
     /* 4. Stress test adversarial block64 microcode */
     {

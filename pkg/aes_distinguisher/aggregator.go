@@ -500,6 +500,10 @@ func DecompressCryptoCore(src []byte, dst []byte) (int, error) {
 		return 0, ErrUnsupportedCryptoMode
 	}
 
+	if int(numChunks)*CryptoCoreChunkBytes > int(rawSize) {
+		return 0, ErrCorruptFrame
+	}
+
 	// Mode 1: Cascaded deficit zero-sum reconstruction
 	chunks := int(numChunks)
 	bitmapLen := (chunks + 7) / 8
@@ -547,6 +551,10 @@ func DecompressCryptoCore(src []byte, dst []byte) (int, error) {
 			inPos += CryptoCoreChunkBytes
 			outPos += CryptoCoreChunkBytes
 		}
+	}
+
+	if outPos > int(rawSize) {
+		return 0, ErrCorruptFrame
 	}
 
 	// Trailing unaligned bytes

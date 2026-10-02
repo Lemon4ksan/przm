@@ -6,8 +6,7 @@ package aes_distinguisher
 
 import (
 	"bytes"
-	"fmt"
-	"math"
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -359,7 +358,21 @@ func TestChallenger_AdversarialRobustness(t *testing.T) {
 		t.Fatalf("Expected ErrCorruptFrame on truncated payload, got %v", err)
 	}
 
-	t.Logf("Adversarial robustness checks: ALL 6 ATTACK SCENARIOS SAFELY DEFENDED (0 panics, 0 memory corruption)")
+	// 7. Adversarial header inconsistency: numChunks * 4096 > rawSize
+	malformed := make([]byte, 4097)
+	binary.LittleEndian.PutUint32(malformed[0:4], PRZM_MAGIC_CRYPTO_CORE)
+	binary.LittleEndian.PutUint32(malformed[4:8], 100)   // rawSize = 100
+	binary.LittleEndian.PutUint32(malformed[8:12], 4097) // compSize = 4097
+	binary.LittleEndian.PutUint16(malformed[12:14], 1)   // flags = 1
+	binary.LittleEndian.PutUint16(malformed[14:16], 1)   // numChunks = 1 (1 * 4096 > 100)
+	malformed[16] = 0x01                                 // balanced chunk 0
+	dstAdv := make([]byte, 4096)
+	_, err = DecompressCryptoCore(malformed, dstAdv)
+	if err != ErrCorruptFrame {
+		t.Fatalf("Expected ErrCorruptFrame on numChunks*4096 > rawSize, got %v", err)
+	}
+
+	t.Logf("Adversarial robustness checks: ALL 7 ATTACK SCENARIOS SAFELY DEFENDED (0 panics, 0 memory corruption)")
 }
 
 // TestChallenger_CrossCodec_Go_C performs bidirectional cross-validation between Go and C.
@@ -378,7 +391,6 @@ func TestChallenger_CrossCodec_Go_C(t *testing.T) {
 	rawFile := filepath.Join(tempDir, "payload.raw")
 	goCompFile := filepath.Join(tempDir, "payload_go.comp")
 	cCompFile := filepath.Join(tempDir, "payload_c.comp")
-	goDecompFromC := filepath.Join(tempDir, "payload_go_from_c.raw")
 	cDecompFromGo := filepath.Join(tempDir, "payload_c_from_go.raw")
 
 	type testPayloadSpec struct {

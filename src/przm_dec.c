@@ -1294,6 +1294,332 @@ int64_t przm_cellular_sheaf_decompress(const uint8_t* src, size_t src_len, uint8
 }
 
 /* ============================================================================
+ * 12.2. Fast Möbius Transform Engine ('MOBI', 0x49424F4D)
+ * ============================================================================ */
+
+#define PRZM_FMT_DEFAULT_BLOCK_LOG2 6
+
+PRZM_INLINE void fmt_byte_butterfly_inplace(uint8_t* block, int k) {
+    size_t n = (size_t)1 << k;
+    for (int s = 0; s < k; s++) {
+        size_t step = (size_t)1 << s;
+        size_t stride = step << 1;
+        if (step >= 8) {
+            for (size_t i = 0; i < n; i += stride) {
+                uint8_t* dst_slice = block + i + step;
+                const uint8_t* src_slice = block + i;
+                for (size_t j = 0; j < step; j += 8) {
+                    uint64_t d_val = read_u64_le(dst_slice + j);
+                    uint64_t s_val = read_u64_le(src_slice + j);
+                    write_u64_le(dst_slice + j, d_val ^ s_val);
+                }
+            }
+        } else {
+            for (size_t i = 0; i < n; i += stride) {
+                uint8_t* dst_slice = block + i + step;
+                const uint8_t* src_slice = block + i;
+                for (size_t j = 0; j < step; j++) {
+                    dst_slice[j] ^= src_slice[j];
+                }
+            }
+        }
+    }
+}
+
+PRZM_INLINE void fmt_bit_butterfly_swar_inplace(uint8_t* data, size_t n) {
+    size_t limit8 = (n / 8) * 8;
+    for (size_t i = 0; i < limit8; i += 8) {
+        uint64_t w = read_u64_le(data + i);
+        w ^= (w & 0x5555555555555555ULL) << 1;
+        w ^= (w & 0x3333333333333333ULL) << 2;
+        w ^= (w & 0x0F0F0F0F0F0F0F0FULL) << 4;
+        write_u64_le(data + i, w);
+    }
+    for (size_t i = limit8; i < n; i++) {
+        uint8_t b = data[i];
+        b ^= (uint8_t)((b & 0x55) << 1);
+        b ^= (uint8_t)((b & 0x33) << 2);
+        b ^= (uint8_t)((b & 0x0F) << 4);
+        data[i] = b;
+    }
+}
+
+int przm_fmt_transform_inplace(uint8_t* dst, size_t len, uint8_t block_log2, uint8_t bit_level) {
+    if (dst == NULL || len == 0) return PRZM_OK;
+    if (block_log2 < 4 || block_log2 > 16) {
+        block_log2 = PRZM_FMT_DEFAULT_BLOCK_LOG2;
+    }
+    size_t block_size = (size_t)1 << block_log2;
+    if (block_size == 0 || len < block_size) {
+        return PRZM_OK;
+    }
+
+    size_t num_blocks = len / block_size;
+    size_t total_transformed = num_blocks * block_size;
+
+    if (bit_level) {
+        fmt_bit_butterfly_swar_inplace(dst, total_transformed);
+    }
+
+    for (size_t b = 0; b < num_blocks; b++) {
+        fmt_byte_butterfly_inplace(dst + b * block_size, (int)block_log2);
+    }
+
+    return PRZM_OK;
+}
+
+int przm_mobius_transform_inplace(uint8_t* dst, size_t len, uint8_t block_log2, uint8_t bit_level) {
+    return przm_fmt_transform_inplace(dst, len, block_log2, bit_level);
+}
+
+int przm_mobius_untransform_inplace(uint8_t* dst, size_t len, uint8_t block_log2, uint8_t bit_level) {
+    return przm_fmt_transform_inplace(dst, len, block_log2, bit_level);
+}
+
+int64_t przm_mobius_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap) {
+    if (src_len == 0) return 0;
+    if (src == NULL || dst == NULL || src_len < PRZM_MOBIUS_HEADER_SIZE) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    uint32_t magic = read_u32_le(src);
+    if (magic != PRZM_MAGIC_MOBIUS) {
+        return PRZM_ERR_INVALID_MAGIC;
+    }
+
+    size_t orig_len = (size_t)read_u32_le(src + 4);
+    if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+    if (orig_len == 0) return 0;
+    if (dst_cap < orig_len + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
+
+    uint8_t block_log2 = src[8];
+    if (block_log2 < 4 || block_log2 > 16) {
+        block_log2 = PRZM_FMT_DEFAULT_BLOCK_LOG2;
+    }
+    uint8_t mode_byte = src[9];
+    uint8_t mode = mode_byte & 0x0F;
+    uint8_t bit_level = (mode_byte & PRZM_FMT_FLAG_BIT_LEVEL) ? 1 : 0;
+
+    const uint8_t* payload = src + PRZM_MOBIUS_HEADER_SIZE;
+    size_t payload_len = src_len - PRZM_MOBIUS_HEADER_SIZE;
+
+    switch (mode) {
+    case PRZM_FMT_MODE_RAW:
+        if (payload_len < orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        memcpy(dst, payload, orig_len);
+        return (int64_t)orig_len;
+
+    case PRZM_FMT_MODE_TRANSFORMED:
+        if (payload_len < orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        memcpy(dst, payload, orig_len);
+        przm_fmt_transform_inplace(dst, orig_len, block_log2, bit_level);
+        return (int64_t)orig_len;
+
+    case PRZM_FMT_MODE_COMPRESSED: {
+        int64_t dec;
+        if (payload_len >= 3 && payload[0] == PRZM_MAGIC_PWS_0 &&
+            payload[1] == PRZM_MAGIC_PWS_1 && payload[2] == PRZM_VERSION_1) {
+            dec = pws_decode(payload, payload_len, dst, dst_cap);
+        } else {
+            dec = przm_decompress(payload, payload_len, dst, dst_cap);
+        }
+        if (dec < 0) return dec;
+        if ((size_t)dec < orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        przm_fmt_transform_inplace(dst, (size_t)dec, block_log2, bit_level);
+        return dec;
+    }
+
+    default:
+        return PRZM_ERR_UNSUPPORTED_MODE;
+    }
+}
+
+/* ============================================================================
+ * 12.3. Margolus Reversible Cellular Automata Engine ('MARG', 0x4752414D)
+ * ============================================================================ */
+
+PRZM_INLINE void apply_margolus_block_rule(uint8_t* a, uint8_t* b, uint8_t* c, uint8_t* d,
+                                          uint8_t rule_id, int inverse) {
+    uint8_t va = *a, vb = *b, vc = *c, vd = *d;
+    switch (rule_id) {
+    case PRZM_MARGOLUS_RULE_BBM: {
+        uint8_t diag = (uint8_t)(va & vd & (~vb) & (~vc));
+        uint8_t antidiag = (uint8_t)(vb & vc & (~va) & (~vd));
+        uint8_t mask = (uint8_t)(diag | antidiag);
+        *a = va ^ mask;
+        *b = vb ^ mask;
+        *c = vc ^ mask;
+        *d = vd ^ mask;
+        break;
+    }
+    case PRZM_MARGOLUS_RULE_TRANSPOSE:
+        *b = vc;
+        *c = vb;
+        break;
+    case PRZM_MARGOLUS_RULE_ROT180:
+        *a = vd;
+        *b = vc;
+        *c = vb;
+        *d = va;
+        break;
+    case PRZM_MARGOLUS_RULE_ROT90:
+        if (!inverse) {
+            *a = vc;
+            *b = va;
+            *c = vd;
+            *d = vb;
+        } else {
+            *a = vb;
+            *b = vd;
+            *c = va;
+            *d = vc;
+        }
+        break;
+    case PRZM_MARGOLUS_RULE_XOR:
+        *b = (uint8_t)(vb ^ va);
+        *c = (uint8_t)(vc ^ va);
+        *d = (uint8_t)(vd ^ va);
+        break;
+    case PRZM_MARGOLUS_RULE_FLIP_H:
+        *a = vb;
+        *b = va;
+        *c = vd;
+        *d = vc;
+        break;
+    case PRZM_MARGOLUS_RULE_FLIP_V:
+        *a = vc;
+        *b = vd;
+        *c = va;
+        *d = vb;
+        break;
+    default:
+        break;
+    }
+}
+
+int przm_margolus_step_inplace(uint8_t* dst, size_t H, size_t W, int phase, uint8_t rule_id, int inverse) {
+    if (H < 2 || W < 2 || dst == NULL) return PRZM_OK;
+    size_t w_mask = W - 1;
+    int is_pow2 = (W & w_mask) == 0;
+    size_t half_H = H / 2;
+    size_t half_W = W / 2;
+
+    if (phase == 0) {
+        for (size_t i = 0; i < half_H; i++) {
+            size_t r0 = 2 * i * W;
+            size_t r1 = r0 + W;
+            for (size_t j = 0; j < half_W; j++) {
+                size_t c0 = 2 * j;
+                size_t c1 = c0 + 1;
+
+                size_t i00 = r0 + c0;
+                size_t i01 = r0 + c1;
+                size_t i10 = r1 + c0;
+                size_t i11 = r1 + c1;
+
+                apply_margolus_block_rule(&dst[i00], &dst[i01], &dst[i10], &dst[i11], rule_id, inverse);
+            }
+        }
+    } else {
+        for (size_t i = 0; i < half_H; i++) {
+            size_t r0_idx = 2 * i + 1;
+            size_t r1_idx = r0_idx + 1;
+            if (r1_idx >= H) r1_idx = 0;
+
+            size_t r0 = r0_idx * W;
+            size_t r1 = r1_idx * W;
+
+            for (size_t j = 0; j < half_W; j++) {
+                size_t c0 = 2 * j + 1;
+                size_t c1 = c0 + 1;
+                if (is_pow2) {
+                    c1 &= w_mask;
+                } else if (c1 >= W) {
+                    c1 = 0;
+                }
+
+                size_t i00 = r0 + c0;
+                size_t i01 = r0 + c1;
+                size_t i10 = r1 + c0;
+                size_t i11 = r1 + c1;
+
+                apply_margolus_block_rule(&dst[i00], &dst[i01], &dst[i10], &dst[i11], rule_id, inverse);
+            }
+        }
+    }
+    return PRZM_OK;
+}
+
+int przm_margolus_reverse_inplace(uint8_t* dst, size_t len, uint16_t width, uint8_t steps, uint8_t rule_id) {
+    if (dst == NULL || width < 2 || len < 2 * (size_t)width || steps == 0) {
+        return PRZM_OK;
+    }
+    size_t H = 2 * (len / (2 * (size_t)width));
+    for (int t = (int)steps - 1; t >= 0; t--) {
+        int phase = t & 1;
+        przm_margolus_step_inplace(dst, H, (size_t)width, phase, rule_id, 1);
+    }
+    return PRZM_OK;
+}
+
+int przm_margolus_inverse_inplace(uint8_t* dst, size_t len, uint16_t width, uint8_t steps, uint8_t rule_id) {
+    return przm_margolus_reverse_inplace(dst, len, width, steps, rule_id);
+}
+
+int64_t przm_margolus_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap) {
+    if (src_len == 0) return 0;
+    if (src == NULL || dst == NULL || src_len < PRZM_MARGOLUS_HEADER_SIZE) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    uint32_t magic = read_u32_le(src);
+    if (magic != PRZM_MAGIC_MARGOLUS) {
+        return PRZM_ERR_INVALID_MAGIC;
+    }
+
+    size_t orig_len = (size_t)read_u32_le(src + 4);
+    if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+    if (orig_len == 0) return 0;
+    if (dst_cap < orig_len + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
+
+    uint16_t width = read_u16_le(src + 8);
+    uint8_t steps = src[10];
+    uint8_t rule_id = src[11];
+    uint8_t mode = src[12];
+
+    const uint8_t* payload = src + PRZM_MARGOLUS_HEADER_SIZE;
+    size_t payload_len = src_len - PRZM_MARGOLUS_HEADER_SIZE;
+
+    if (mode == 0) {
+        /* MargolusModeRaw */
+        if (payload_len < orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        memcpy(dst, payload, orig_len);
+        return (int64_t)orig_len;
+    } else if (mode == 1) {
+        /* MargolusModeTransform */
+        if (payload_len < orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        memcpy(dst, payload, orig_len);
+        przm_margolus_reverse_inplace(dst, orig_len, width, steps, rule_id);
+        return (int64_t)orig_len;
+    } else if (mode == 3) {
+        /* MargolusModeCompressed */
+        int64_t dec;
+        if (payload_len >= 3 && payload[0] == PRZM_MAGIC_PWS_0 &&
+            payload[1] == PRZM_MAGIC_PWS_1 && payload[2] == PRZM_VERSION_1) {
+            dec = pws_decode(payload, payload_len, dst, dst_cap);
+        } else {
+            dec = przm_decompress(payload, payload_len, dst, dst_cap);
+        }
+        if (dec < 0) return dec;
+        if ((size_t)dec < orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        przm_margolus_reverse_inplace(dst, (size_t)dec, width, steps, rule_id);
+        return dec;
+    }
+
+    return PRZM_ERR_UNSUPPORTED_MODE;
+}
+
+/* ============================================================================
  * 13. Public API Implementation: przm_get_uncompressed_size
  * ============================================================================ */
 
@@ -1304,6 +1630,14 @@ int64_t przm_get_uncompressed_size(const uint8_t* src, size_t src_len) {
     uint32_t magic = read_u32_le(src);
 
     /* 32-bit Specialized signatures */
+    if (magic == PRZM_MAGIC_MOBIUS) {
+        if (src_len < PRZM_MOBIUS_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+        return (int64_t)read_u32_le(src + 4);
+    }
+    if (magic == PRZM_MAGIC_MARGOLUS) {
+        if (src_len < PRZM_MARGOLUS_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+        return (int64_t)read_u32_le(src + 4);
+    }
     if (magic == PRZM_MAGIC_SYMPLECTIC || magic == PRZM_MAGIC_ARM64 ||
         magic == PRZM_MAGIC_SHEAF || magic == PRZM_MAGIC_MAHLER) {
         if (src_len < 12) return PRZM_ERR_CORRUPTED_FRAME;
@@ -1321,7 +1655,7 @@ int64_t przm_get_uncompressed_size(const uint8_t* src, size_t src_len) {
         if (src_len < PRZM_HEISENBERG_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
         return (int64_t)read_u32_le(src + 4);
     }
-    if (magic == PRZM_MAGIC_CELLULAR_SHEAF) {
+    if (magic == PRZM_CELLULAR_SHEAF_HEADER_SIZE || magic == PRZM_MAGIC_CELLULAR_SHEAF) {
         if (src_len < PRZM_CELLULAR_SHEAF_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
         return (int64_t)read_u32_le(src + 4);
     }
@@ -1354,7 +1688,9 @@ int64_t przm_get_uncompressed_size(const uint8_t* src, size_t src_len) {
  * 14. Standard Fused Frame Decoder Engine ('PRZM', 0x4D5A5250)
  * ============================================================================ */
 
-static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap) {
+static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
+                                         uint8_t* dst, size_t dst_cap,
+                                         const przm_dictionary_t* ext_dict) {
     if (src_len < PRZM_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
 
     uint8_t flags = src[4];
@@ -1593,7 +1929,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len, uin
             /* Direct 1-byte schema token */
             uint8_t tok_id = (uint8_t)(op - 0xD8);
             size_t t_len = 0;
-            const char* str = get_schema_token(dict_id, tok_id, &t_len);
+            const char* str = get_schema_token(dict_id, tok_id, ext_dict, &t_len);
             if (!str || t_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
             memcpy(decode_dst + dst_pos, str, t_len);
             dst_pos += t_len;
@@ -1716,7 +2052,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len, uin
             if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
             uint8_t tok_id = src[cmd_ptr++];
             size_t t_len = 0;
-            const char* str = get_schema_token(dict_id, tok_id, &t_len);
+            const char* str = get_schema_token(dict_id, tok_id, ext_dict, &t_len);
             if (!str || t_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
             memcpy(decode_dst + dst_pos, str, t_len);
             dst_pos += t_len;
@@ -1786,6 +2122,16 @@ int64_t przm_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t
     if (src == NULL || dst == NULL || src_len < 4) return PRZM_ERR_CORRUPTED_FRAME;
 
     uint32_t magic = read_u32_le(src);
+
+    /* 1.8. Fast Möbius Transform Frame ('MOBI', 0x49424F4D) */
+    if (magic == PRZM_MAGIC_MOBIUS) {
+        return przm_mobius_decompress(src, src_len, dst, dst_cap);
+    }
+
+    /* 1.9. Margolus Reversible Cellular Automata Frame ('MARG', 0x4752414D) */
+    if (magic == PRZM_MAGIC_MARGOLUS) {
+        return przm_margolus_decompress(src, src_len, dst, dst_cap);
+    }
 
     /* 1. Symplectic Sp(4, F_{2^8}) Frame */
     if (magic == PRZM_MAGIC_SYMPLECTIC) {
@@ -1965,8 +2311,27 @@ int64_t przm_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t
 
     /* 6. Standard Fused Frame ('PRZM') */
     if (magic == PRZM_MAGIC_STANDARD) {
-        return decompress_standard_fused(src, src_len, dst, dst_cap);
+        return decompress_standard_fused(src, src_len, dst, dst_cap, NULL);
     }
 
     return PRZM_ERR_INVALID_MAGIC;
+}
+
+/* ============================================================================
+ * 16. Public API Implementation: przm_decompress_dict
+ * ============================================================================ */
+
+int64_t przm_decompress_dict(const uint8_t* src, size_t src_len,
+                             uint8_t* dst, size_t dst_cap,
+                             const przm_dictionary_t* dict) {
+    if (src_len == 0) return 0;
+    if (src == NULL || dst == NULL || src_len < 4) return PRZM_ERR_CORRUPTED_FRAME;
+
+    uint32_t magic = read_u32_le(src);
+    if (magic == PRZM_MAGIC_STANDARD) {
+        return decompress_standard_fused(src, src_len, dst, dst_cap, dict);
+    }
+
+    /* Non-standard frames fall through to standard przm_decompress */
+    return przm_decompress(src, src_len, dst, dst_cap);
 }

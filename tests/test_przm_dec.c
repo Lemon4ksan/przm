@@ -24,6 +24,11 @@
 #define TEST_PASS(name) \
     printf("[PASS] %s\n", name)
 
+static inline void write_u16_le(uint8_t* p, uint16_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+}
+
 static inline void write_u32_le(uint8_t* p, uint32_t v) {
     p[0] = (uint8_t)v;
     p[1] = (uint8_t)(v >> 8);
@@ -87,6 +92,26 @@ static void test_get_uncompressed_size(void) {
     write_u32_le(frame_cshd + 4, 4096);
     sz = przm_get_uncompressed_size(frame_cshd, sizeof(frame_cshd));
     TEST_ASSERT(sz == 4096, "Cellular Sheaf size mismatch");
+
+    uint8_t frame_mobi[12];
+    write_u32_le(frame_mobi, PRZM_MAGIC_MOBIUS);
+    write_u32_le(frame_mobi + 4, 4096);
+    frame_mobi[8] = 6; /* blockLog2 = 6 */
+    frame_mobi[9] = 1; /* Transformed mode */
+    frame_mobi[10] = PRZM_OP_MOBIUS;
+    frame_mobi[11] = 0;
+    sz = przm_get_uncompressed_size(frame_mobi, sizeof(frame_mobi));
+    TEST_ASSERT(sz == 4096, "MOBIUS size mismatch");
+
+    uint8_t frame_marg[16];
+    write_u32_le(frame_marg, PRZM_MAGIC_MARGOLUS);
+    write_u32_le(frame_marg + 4, 8192);
+    frame_marg[8] = 8; frame_marg[9] = 0; /* width = 8 */
+    frame_marg[10] = 2; /* steps = 2 */
+    frame_marg[11] = PRZM_MARGOLUS_RULE_BBM;
+    frame_marg[12] = 1; /* Transform mode */
+    sz = przm_get_uncompressed_size(frame_marg, sizeof(frame_marg));
+    TEST_ASSERT(sz == 8192, "MARGOLUS size mismatch");
 
     TEST_PASS("przm_get_uncompressed_size");
 }
@@ -645,6 +670,163 @@ static void test_cellular_sheaf_decompression(void) {
     TEST_PASS("cellular_sheaf_decompression");
 }
 
+/* Test Fast Möbius Transform Involution & Decompression (0 Allocations) */
+static void test_mobius_decompression(void) {
+    /* 1. Verify byte-level involution FMT(FMT(X)) == X */
+    uint8_t orig[128];
+    uint8_t work[128];
+    for (size_t i = 0; i < 128; i++) {
+        orig[i] = (uint8_t)((i * 37 + 11) & 0xFF);
+        work[i] = orig[i];
+    }
+
+    int err = przm_fmt_transform_inplace(work, 128, 6, 0);
+    TEST_ASSERT(err == PRZM_OK, "FMT forward byte failed");
+    TEST_ASSERT(memcmp(work, orig, 128) != 0, "FMT forward should modify data");
+
+    err = przm_fmt_transform_inplace(work, 128, 6, 0);
+    TEST_ASSERT(err == PRZM_OK, "FMT untransform byte failed");
+    TEST_ASSERT(memcmp(work, orig, 128) == 0, "FMT byte involution failed to restore data");
+
+    /* 2. Verify bit-level SWAR involution FMT(FMT(X)) == X */
+    err = przm_fmt_transform_inplace(work, 128, 6, 1);
+    TEST_ASSERT(err == PRZM_OK, "FMT forward bit+byte failed");
+    TEST_ASSERT(memcmp(work, orig, 128) != 0, "FMT forward bit+byte should modify data");
+
+    err = przm_fmt_transform_inplace(work, 128, 6, 1);
+    TEST_ASSERT(err == PRZM_OK, "FMT untransform bit+byte failed");
+    TEST_ASSERT(memcmp(work, orig, 128) == 0, "FMT bit+byte involution failed to restore data");
+
+    /* 3. Test przm_mobius_decompress in ModeRaw */
+    uint8_t frame_raw[12 + 64];
+    write_u32_le(frame_raw, PRZM_MAGIC_MOBIUS);
+    write_u32_le(frame_raw + 4, 64);
+    frame_raw[8] = 6;
+    frame_raw[9] = PRZM_FMT_MODE_RAW;
+    frame_raw[10] = PRZM_OP_MOBIUS;
+    frame_raw[11] = 0;
+    memcpy(frame_raw + 12, orig, 64);
+
+    uint8_t dst[128];
+    memset(dst, 0, sizeof(dst));
+    int64_t dec = przm_decompress(frame_raw, sizeof(frame_raw), dst, sizeof(dst));
+    TEST_ASSERT(dec == 64, "MOBIUS raw decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, orig, 64) == 0, "MOBIUS raw decompress payload mismatch");
+
+    /* 4. Test przm_mobius_decompress in ModeTransformed */
+    uint8_t t_buf[64];
+    memcpy(t_buf, orig, 64);
+    przm_fmt_transform_inplace(t_buf, 64, 6, 0);
+
+    uint8_t frame_trans[12 + 64];
+    write_u32_le(frame_trans, PRZM_MAGIC_MOBIUS);
+    write_u32_le(frame_trans + 4, 64);
+    frame_trans[8] = 6;
+    frame_trans[9] = PRZM_FMT_MODE_TRANSFORMED;
+    frame_trans[10] = PRZM_OP_MOBIUS;
+    frame_trans[11] = 0;
+    memcpy(frame_trans + 12, t_buf, 64);
+
+    memset(dst, 0, sizeof(dst));
+    dec = przm_decompress(frame_trans, sizeof(frame_trans), dst, sizeof(dst));
+    TEST_ASSERT(dec == 64, "MOBIUS transformed decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, orig, 64) == 0, "MOBIUS transformed decompress failed to invert");
+
+    TEST_PASS("mobius_decompression");
+}
+
+/* Test Margolus RCA Reversibility & Decompression across all 7 rules (0 Allocations) */
+static void test_margolus_decompression(void) {
+    uint8_t orig[128];
+    uint8_t work[128];
+    for (size_t i = 0; i < 128; i++) {
+        orig[i] = (uint8_t)((i * 53 + 7) & 0xFF);
+    }
+
+    uint8_t rules[7] = {
+        PRZM_MARGOLUS_RULE_BBM,
+        PRZM_MARGOLUS_RULE_TRANSPOSE,
+        PRZM_MARGOLUS_RULE_ROT180,
+        PRZM_MARGOLUS_RULE_ROT90,
+        PRZM_MARGOLUS_RULE_XOR,
+        PRZM_MARGOLUS_RULE_FLIP_H,
+        PRZM_MARGOLUS_RULE_FLIP_V
+    };
+
+    /* Verify all 7 rules invert bit-exactly for steps 1..4 */
+    for (int r = 0; r < 7; r++) {
+        uint8_t rule = rules[r];
+        for (uint8_t steps = 1; steps <= 4; steps++) {
+            memcpy(work, orig, 128);
+            /* Forward steps */
+            for (uint8_t s = 0; s < steps; s++) {
+                int phase = s & 1;
+                przm_margolus_step_inplace(work, 16, 8, phase, rule, 0);
+            }
+            /* Time-reversed backward steps */
+            int err = przm_margolus_reverse_inplace(work, 128, 8, steps, rule);
+            TEST_ASSERT(err == PRZM_OK, "Margolus reverse failed");
+            TEST_ASSERT(memcmp(work, orig, 128) == 0, "Margolus rule failed bit-exact reversibility");
+        }
+    }
+
+    /* Test przm_margolus_decompress in ModeTransform */
+    memcpy(work, orig, 64);
+    /* Forward 2 steps */
+    przm_margolus_step_inplace(work, 8, 8, 0, PRZM_MARGOLUS_RULE_BBM, 0);
+    przm_margolus_step_inplace(work, 8, 8, 1, PRZM_MARGOLUS_RULE_BBM, 0);
+
+    uint8_t frame[16 + 64];
+    write_u32_le(frame, PRZM_MAGIC_MARGOLUS);
+    write_u32_le(frame + 4, 64);
+    frame[8] = 8; frame[9] = 0; /* width = 8 */
+    frame[10] = 2;              /* steps = 2 */
+    frame[11] = PRZM_MARGOLUS_RULE_BBM;
+    frame[12] = 1;              /* MargolusModeTransform */
+    frame[13] = 1;              /* MargolusFlagToroidal */
+    frame[14] = 0; frame[15] = 0;
+    memcpy(frame + 16, work, 64);
+
+    uint8_t dst[128];
+    memset(dst, 0, sizeof(dst));
+    int64_t dec = przm_decompress(frame, sizeof(frame), dst, sizeof(dst));
+    TEST_ASSERT(dec == 64, "Margolus decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, orig, 64) == 0, "Margolus decompress failed to restore original bytes");
+
+    TEST_PASS("margolus_decompression");
+}
+
+/* Test External Schema Dictionary Decompression (0 Allocations) */
+static void test_dictionary_decompression(void) {
+    przm_dict_entry_t entries[2] = {
+        {"{\"custom\":\"", 10},
+        {"\"value\":100}", 11}
+    };
+    przm_dictionary_t custom_dict = {
+        .dict_id = 0x1001,
+        .num_tokens = 2,
+        .tokens = entries
+    };
+
+    /* Standard frame referencing DictID 0x1001 with 1-byte opcode 0xD8 (tok_id 0) */
+    uint8_t frame[8 + 4 + 4 + 1];
+    write_u32_le(frame, PRZM_MAGIC_STANDARD);
+    frame[4] = PRZM_FLAG_DICT_REF;
+    frame[5] = 10; frame[6] = 0; frame[7] = 0; /* Uncompressed size = 10 */
+    write_u32_le(frame + 8, 0x1001);           /* DictID */
+    write_u16_le(frame + 12, 1);               /* cmd_size = 1 */
+    write_u16_le(frame + 14, 0);               /* off_size = 0 */
+    frame[16] = 0xD8;                          /* Opcode 0xD8 -> token 0 */
+
+    uint8_t dst[128];
+    memset(dst, 0, sizeof(dst));
+    int64_t dec = przm_decompress_dict(frame, sizeof(frame), dst, sizeof(dst), &custom_dict);
+    TEST_ASSERT(dec == 10, "Custom dict decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, "{\"custom\":\"", 10) == 0, "Custom dict token expansion mismatch");
+
+    TEST_PASS("dictionary_decompression");
+}
+
 int main(int argc, char** argv) {
     if (argc == 3) {
         /* CLI decompression mode: test_przm_dec <in.przm> <out.bin> */
@@ -706,6 +888,9 @@ int main(int argc, char** argv) {
     test_gctr_decompression();
     test_heisenberg_unfoliation();
     test_cellular_sheaf_decompression();
+    test_mobius_decompression();
+    test_margolus_decompression();
+    test_dictionary_decompression();
 
     printf("\n>>> ALL TESTS PASSED SUCCESSFULLY! (0 Allocations, 100%% Lossless) <<<\n");
     return 0;

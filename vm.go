@@ -224,6 +224,24 @@ func ExecuteProgramScalar(prog *VMProgram, ctx *VMContext, streamData [][]byte, 
 					return nil
 				}
 
+			case OpMARGOLUS:
+				ruleID := uint8(imm & 0x0F)
+				if ruleID == 0 && s1 > 0 {
+					ruleID = uint8(s1 & 0x0F)
+				}
+				phase := (imm >> 4) & 1
+				if (s2 & 1) != 0 {
+					phase = s2 & 1
+				}
+				inverse := (imm & 0x100) == 0
+				MargolusStepInplace(ctx.Regs[dstReg][:], 8, 8, phase, ruleID, inverse)
+
+			case OpMOBIUS:
+				if (imm&1) != 0 || (imm&int(FMTFlagBitLevel)) != 0 {
+					FMTBitButterflySWARInplace(ctx.Regs[dstReg][:])
+				}
+				FastMobiusTransform64Inplace(&ctx.Regs[dstReg])
+
 			default:
 				return fmt.Errorf("%w: opcode 0x%02X", ErrVMBadInstruction, op)
 			}

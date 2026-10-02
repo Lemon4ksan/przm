@@ -210,3 +210,69 @@ func BenchmarkVM_Throughput(t *testing.B) {
 		}
 	}
 }
+
+func TestVM_OpMargolus_And_OpMobius_Execution(t *testing.T) {
+	uSize := 64
+	stream0 := make([]byte, uSize)
+	for i := range stream0 {
+		stream0[i] = byte(i*31 + 17)
+	}
+
+	// 1. Test OpMOBIUS involution in PRZM-VM:
+	// Applying OpMOBIUS twice must reconstruct original stream
+	progMobius := &VMProgram{
+		Stride: 64,
+		Instructions: []VMInstruction{
+			EncodeInstruction(OpLOADSTREAM, 0, 0, 0, 0), // Z0 = Load stream0
+			EncodeInstruction(OpMOBIUS, 0, 0, 0, 0),     // Z0 = MOBIUS(Z0)
+			EncodeInstruction(OpMOBIUS, 0, 0, 0, 0),     // Z0 = MOBIUS(Z0) (involution restores original)
+			EncodeInstruction(OpEMIT, 0, 0, 0, 0),       // Emit Z0
+		},
+	}
+
+	dst := make([]byte, uSize)
+	outPtr := 0
+	streamPtrs := []int{0}
+	ctx := &VMContext{}
+
+	if err := ExecuteProgramScalar(progMobius, ctx, [][]byte{stream0}, streamPtrs, dst, &outPtr, uSize); err != nil {
+		t.Fatalf("ExecuteProgramScalar OpMOBIUS failed: %v", err)
+	}
+	if !bytes.Equal(dst, stream0) {
+		t.Fatalf("OpMOBIUS involution failed: reconstructed bytes differ from original")
+	}
+
+	// 2. Test OpMARGOLUS in PRZM-VM:
+	// Apply forward step (inverse=false, imm=0x100) then reverse step (inverse=true, imm=0x000)
+	progMargolus := &VMProgram{
+		Stride: 64,
+		Instructions: []VMInstruction{
+			EncodeInstruction(OpLOADSTREAM, 0, 0, 0, 0),    // Z0 = Load stream0
+			EncodeInstruction(OpMARGOLUS, 0, 0, 0, 0x100),  // Forward step phase 0 (rule BBM)
+			EncodeInstruction(OpMARGOLUS, 0, 0, 0, 0x000),  // Inverse step phase 0 (rule BBM)
+			EncodeInstruction(OpEMIT, 0, 0, 0, 0),          // Emit Z0
+		},
+	}
+
+	dst2 := make([]byte, uSize)
+	outPtr2 := 0
+	streamPtrs2 := []int{0}
+	ctx2 := &VMContext{}
+
+	if err := ExecuteProgramScalar(progMargolus, ctx2, [][]byte{stream0}, streamPtrs2, dst2, &outPtr2, uSize); err != nil {
+		t.Fatalf("ExecuteProgramScalar OpMARGOLUS failed: %v", err)
+	}
+	if !bytes.Equal(dst2, stream0) {
+		t.Fatalf("OpMARGOLUS forward/inverse step failed: reconstructed bytes differ from original")
+	}
+
+	// 3. Confirm 0 allocations
+	allocs := testing.AllocsPerRun(100, func() {
+		outPtr := 0
+		streamPtrs[0] = 0
+		_ = ExecuteProgramScalar(progMobius, ctx, [][]byte{stream0}, streamPtrs, dst, &outPtr, uSize)
+	})
+	if allocs != 0.0 {
+		t.Fatalf("OpMOBIUS execution allocated: got %f allocs/op", allocs)
+	}
+}

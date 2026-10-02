@@ -109,6 +109,32 @@ func ExecuteProgramSIMD(prog *VMProgram, ctx *VMContext, streamData [][]byte, st
 				regsHi[dstReg].Store(dst[p+32 : p+64])
 				*outPtr += VMRegSize
 
+			case OpMARGOLUS:
+				regsLo[dstReg].Store(ctx.Regs[dstReg][0:32])
+				regsHi[dstReg].Store(ctx.Regs[dstReg][32:64])
+				ruleID := uint8(imm & 0x0F)
+				if ruleID == 0 && s1 > 0 {
+					ruleID = uint8(s1 & 0x0F)
+				}
+				phase := (imm >> 4) & 1
+				if (s2 & 1) != 0 {
+					phase = s2 & 1
+				}
+				inverse := (imm & 0x100) == 0
+				MargolusStepInplace(ctx.Regs[dstReg][:], 8, 8, phase, ruleID, inverse)
+				regsLo[dstReg] = archsimd.LoadUint8x32(ctx.Regs[dstReg][0:32])
+				regsHi[dstReg] = archsimd.LoadUint8x32(ctx.Regs[dstReg][32:64])
+
+			case OpMOBIUS:
+				regsLo[dstReg].Store(ctx.Regs[dstReg][0:32])
+				regsHi[dstReg].Store(ctx.Regs[dstReg][32:64])
+				if (imm&1) != 0 || (imm&int(FMTFlagBitLevel)) != 0 {
+					FMTBitButterflySWARInplace(ctx.Regs[dstReg][:])
+				}
+				FastMobiusTransform64Inplace(&ctx.Regs[dstReg])
+				regsLo[dstReg] = archsimd.LoadUint8x32(ctx.Regs[dstReg][0:32])
+				regsHi[dstReg] = archsimd.LoadUint8x32(ctx.Regs[dstReg][32:64])
+
 			default:
 				return false // unsupported SIMD opcode, fallback to scalar
 			}
@@ -197,6 +223,28 @@ func executeProgramSIMD512(prog *VMProgram, ctx *VMContext, streamData [][]byte,
 				p := *outPtr
 				regs[dstReg].Store(dst[p : p+64])
 				*outPtr += VMRegSize
+
+			case OpMARGOLUS:
+				regs[dstReg].Store(ctx.Regs[dstReg][:])
+				ruleID := uint8(imm & 0x0F)
+				if ruleID == 0 && s1 > 0 {
+					ruleID = uint8(s1 & 0x0F)
+				}
+				phase := (imm >> 4) & 1
+				if (s2 & 1) != 0 {
+					phase = s2 & 1
+				}
+				inverse := (imm & 0x100) == 0
+				MargolusStepInplace(ctx.Regs[dstReg][:], 8, 8, phase, ruleID, inverse)
+				regs[dstReg] = archsimd.LoadUint8x64(ctx.Regs[dstReg][:])
+
+			case OpMOBIUS:
+				regs[dstReg].Store(ctx.Regs[dstReg][:])
+				if (imm&1) != 0 || (imm&int(FMTFlagBitLevel)) != 0 {
+					FMTBitButterflySWARInplace(ctx.Regs[dstReg][:])
+				}
+				FastMobiusTransform64Inplace(&ctx.Regs[dstReg])
+				regs[dstReg] = archsimd.LoadUint8x64(ctx.Regs[dstReg][:])
 
 			default:
 				return false // unsupported SIMD opcode, fallback to scalar
