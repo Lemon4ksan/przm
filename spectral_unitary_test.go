@@ -62,7 +62,7 @@ func TestSpectral_Theorem24_OffDiagonalEntropyReduction(t *testing.T) {
 	// Construct correlated 4-channel data: ch1 = ch0 ^ 0xAA, ch2 = ch0 ^ ch1, ch3 = ch2
 	numVecs := 256
 	data := make([]byte, numVecs*4)
-	for i := 0; i < numVecs; i++ {
+	for i := range numVecs {
 		ch0 := uint8(i)
 		ch1 := ch0 ^ 0xAA
 		ch2 := ch0 ^ ch1

@@ -28,7 +28,7 @@ func TestAdversarial_CoboundaryNilpotency_50K(t *testing.T) {
 
 	t.Logf("Running 50,000 nilpotency tests (d1 ∘ d0 ≡ 0) across all twists alpha in F_{2^8} and random geometries...")
 
-	for iter := 0; iter < totalIterations; iter++ {
+	for iter := range totalIterations {
 		// Sample arbitrary matrix geometries (M >= 2, W >= 2)
 		M := 2 + rng.Intn(31) // Rows in [2, 32]
 		W := 2 + rng.Intn(31) // Cols in [2, 32]
@@ -74,11 +74,8 @@ func TestAdversarial_CoboundaryNilpotency_50K(t *testing.T) {
 // GF256Dot computes the bilinear pairing <x, y> = sum_i GF256Mul(x[i], y[i]) in F_{2^8}.
 func gf256Dot(x, y []uint8) uint8 {
 	var sum uint8
-	n := len(x)
-	if len(y) < n {
-		n = len(y)
-	}
-	for i := 0; i < n; i++ {
+	n := min(len(y), len(x))
+	for i := range n {
 		sum ^= przm.GF256Mul(x[i], y[i])
 	}
 	return sum
@@ -97,11 +94,11 @@ func ReferenceAdjoint0(complex przm.CellComplex2D, u przm.Cochain1) przm.Cochain
 
 	div := make([]uint8, M*W)
 
-	for i := 0; i < M; i++ {
+	for i := range M {
 		rowOff := i * W
 		hRow := i * (W - 1)
 
-		for j := 0; j < W; j++ {
+		for j := range W {
 			val := uint8(0)
 
 			// Horizontal outgoing: source vertex v has coefficient alpha in Coboundary0
@@ -157,7 +154,7 @@ func TestAdversarial_HodgeDecomposition_AdjointProperty(t *testing.T) {
 		for _, twist := range twists {
 			complex := przm.CellComplex2D{Rows: M, Cols: W, Twist: twist}
 
-			for trial := 0; trial < 20; trial++ {
+			for range 20 {
 				phi := make(przm.Cochain0, M*W)
 				for i := range phi {
 					phi[i] = uint8(rng.Intn(256))
@@ -311,12 +308,12 @@ func TestAdversarial_OddGeometries_And_RemainderHandling(t *testing.T) {
 				}
 				for i := 1; i < M; i++ {
 					v := uint8(i * 5)
-					for j := 0; j < W; j++ {
+					for j := range W {
 						data[i*W+j] = data[(i-1)*W+j] ^ v
 					}
 				}
 				// Fill remainder with arbitrary bytes
-				for r := 0; r < rem; r++ {
+				for r := range rem {
 					data[gridSize+r] = uint8(0xAA + r)
 				}
 
@@ -355,10 +352,10 @@ func TestAdversarial_NonZeroFaceCurls(t *testing.T) {
 			data[i] = uint8(i)
 		}
 		// Perturb corners
-		data[1*W+1] ^= 0x11             // Top-left face (0,0)
-		data[1*W+(W-1)] ^= 0x22         // Top-right face (0, W-2)
-		data[(M-1)*W+1] ^= 0x44         // Bottom-left face (M-2, 0)
-		data[(M-1)*W+(W-1)] ^= 0x88     // Bottom-right face (M-2, W-2)
+		data[1*W+1] ^= 0x11         // Top-left face (0,0)
+		data[1*W+(W-1)] ^= 0x22     // Top-right face (0, W-2)
+		data[(M-1)*W+1] ^= 0x44     // Bottom-left face (M-2, 0)
+		data[(M-1)*W+(W-1)] ^= 0x88 // Bottom-right face (M-2, W-2)
 
 		comp, err := przm.CompressCellularSheaf(data, 3)
 		if err != nil {
@@ -376,9 +373,9 @@ func TestAdversarial_NonZeroFaceCurls(t *testing.T) {
 	// 2. Dense curl stream: every alternating face has non-zero curl
 	t.Run("DenseCurlStream_Checkerboard", func(t *testing.T) {
 		data := make([]byte, gridSize)
-		for i := 0; i < M; i++ {
-			for j := 0; j < W; j++ {
-				data[i*W+j] = uint8((i*7) ^ (j*13))
+		for i := range M {
+			for j := range W {
+				data[i*W+j] = uint8((i * 7) ^ (j * 13))
 			}
 		}
 
@@ -478,7 +475,7 @@ func TestAdversarial_PureC_TwistCompatibility(t *testing.T) {
 				curV := v
 				rowCurr := i * W
 				rowPrev := (i - 1) * W
-				for j := 0; j < W; j++ {
+				for j := range W {
 					if tt.twist <= 1 {
 						orig[rowCurr+j] = orig[rowPrev+j] ^ curV
 					} else {
@@ -594,7 +591,7 @@ func TestAdversarial_NaturalTwistSelection_CInterop(t *testing.T) {
 	// 256 bytes geometric progression in F_{2^8} with ratio 2
 	data := make([]byte, 256)
 	data[0] = 1
-	for i := 0; i < 255; i++ {
+	for i := range 255 {
 		data[i+1] = przm.GF256Mul(2, data[i])
 	}
 
@@ -658,7 +655,7 @@ func TestAdversarial_MalformedFrames_MemorySafety(t *testing.T) {
 	dst := make([]byte, 2048)
 
 	// 1. Truncated headers (0..23 bytes)
-	for sz := 0; sz < 24; sz++ {
+	for sz := range 24 {
 		trunc := make([]byte, sz)
 		_, err := przm.DecompressCellularSheaf(trunc, dst)
 		if err == nil && sz > 0 {
@@ -686,8 +683,8 @@ func TestAdversarial_MalformedFrames_MemorySafety(t *testing.T) {
 	badDim := make([]byte, 32)
 	binary.LittleEndian.PutUint32(badDim[0:4], przm.PRZM_MAGIC_CELLULAR_SHEAF)
 	binary.LittleEndian.PutUint32(badDim[4:8], 16)
-	binary.LittleEndian.PutUint16(badDim[8:10], 8)  // W = 8
-	binary.LittleEndian.PutUint16(badDim[10:12], 8) // M = 8 -> W*M = 64 > 16
+	binary.LittleEndian.PutUint16(badDim[8:10], 8)       // W = 8
+	binary.LittleEndian.PutUint16(badDim[10:12], 8)      // M = 8 -> W*M = 64 > 16
 	binary.LittleEndian.PutUint16(badDim[16:18], 0x0001) // CurlFree
 	if _, err := przm.DecompressCellularSheaf(badDim, dst); err == nil {
 		t.Fatalf("DecompressCellularSheaf accepted inconsistent grid dimensions (W*M > origLen)")

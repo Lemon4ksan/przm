@@ -12,7 +12,7 @@ import (
 // TestFMT_Involution proves that Fast Möbius Transform over GF(2) is an involution:
 // FMT(FMT(T)) == T for any truth table.
 func TestFMT_Involution(t *testing.T) {
-	for trial := 0; trial < 20; trial++ {
+	for trial := range 20 {
 		var orig [32]byte
 		_, _ = rand.Read(orig[:])
 
@@ -38,7 +38,7 @@ func TestFMT_SBoxCoordinateDegrees(t *testing.T) {
 	expectedDeg7 := [8]int{3, 4, 5, 4, 3, 2, 2, 2}
 
 	totalDeg7 := 0
-	for k := 0; k < 8; k++ {
+	for k := range 8 {
 		p := profiles[k]
 
 		// 1. Degree must be exactly 7

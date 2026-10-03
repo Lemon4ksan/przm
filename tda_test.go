@@ -35,7 +35,7 @@ func TestTDA_Theorem23_BoundaryAnnihilation(t *testing.T) {
 
 		// Test with pseudo-random 2-chains
 		rndFaces := make([]uint8, totalFaces)
-		for iter := 0; iter < 10; iter++ {
+		for iter := range 10 {
 			rand.Read(rndFaces)
 			for i := range rndFaces {
 				rndFaces[i] &= 1

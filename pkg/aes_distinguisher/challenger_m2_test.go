@@ -112,8 +112,8 @@ func TestChallenger_ShannonEntropy_SingleBitBias(t *testing.T) {
 			randomWords[i] = binary.LittleEndian.Uint32(b[:])
 		}
 
-		for i := 0; i < n; i++ {
-			val := byte(randomWords[i] >> 8) & 0xFE
+		for i := range n {
+			val := byte(randomWords[i]>>8) & 0xFE
 			if randomWords[i] < threshold {
 				val |= 1
 			}
@@ -192,12 +192,12 @@ func TestChallenger_Statistical_BoundaryCases(t *testing.T) {
 // k in [0, 127] to verify that SWAR Transpose8x8 maps byte (k/8) and bit (k%8) to globalBit k.
 func TestChallenger_BitSlice_ExactCoordinateParity(t *testing.T) {
 	numBlocks := 128
-	for targetBit := 0; targetBit < 128; targetBit++ {
+	for targetBit := range 128 {
 		targetByte := targetBit / 8
 		targetBitInByte := targetBit % 8
 
 		blocks := make([][16]byte, numBlocks)
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			if i%2 == 0 {
 				blocks[i][targetByte] = 1 << targetBitInByte
 			}
@@ -206,14 +206,14 @@ func TestChallenger_BitSlice_ExactCoordinateParity(t *testing.T) {
 		corr := ComputeBitSliceCorrelations(blocks)
 
 		// 1. Diagonal must be strictly 1.0 for all bits
-		for b := 0; b < 128; b++ {
+		for b := range 128 {
 			if math.Abs(corr[b][b]-1.0) > 1e-9 {
 				t.Fatalf("targetBit=%d: corr[%d][%d] expected 1.0, got %f", targetBit, b, b, corr[b][b])
 			}
 		}
 
 		// 2. Off-diagonal for targetBit against all other bits must be 0.0
-		for b := 0; b < 128; b++ {
+		for b := range 128 {
 			if b != targetBit {
 				if math.Abs(corr[targetBit][b]) > 1e-9 {
 					t.Fatalf("bit coordinate mismatch! targetBit=%d (byte %d, bit %d) correlated with bit %d: corr=%f",
@@ -235,19 +235,19 @@ func TestChallenger_BitSlice_StressInvariants(t *testing.T) {
 
 	for _, m := range blockCounts {
 		blocks := make([][16]byte, m)
-		for i := 0; i < m; i++ {
+		for i := range m {
 			rand.Read(blocks[i][:])
 		}
 
 		corr := ComputeBitSliceCorrelations(blocks)
 
 		// Check symmetry, diagonal, and bounds [-1.0, 1.0]
-		for i := 0; i < 128; i++ {
+		for i := range 128 {
 			if math.Abs(corr[i][i]-1.0) > 1e-9 {
 				t.Fatalf("M=%d: diagonal corr[%d][%d] != 1.0: %f", m, i, i, corr[i][i])
 			}
 
-			for j := 0; j < 128; j++ {
+			for j := range 128 {
 				// Symmetry
 				if math.Abs(corr[i][j]-corr[j][i]) > 1e-9 {
 					t.Fatalf("M=%d: asymmetry corr[%d][%d]=%f != corr[%d][%d]=%f",
@@ -280,7 +280,7 @@ func TestChallenger_BitSlice_AdversarialAntiCorrelation(t *testing.T) {
 	blocks := make([][16]byte, numBlocks)
 
 	// Bit 15 (byte 1, bit 7) and Bit 92 (byte 11, bit 4) are strictly complementary
-	for i := 0; i < numBlocks; i++ {
+	for i := range numBlocks {
 		rand.Read(blocks[i][:])
 		bitVal := byte(i % 2)
 		if bitVal == 1 {
@@ -373,7 +373,7 @@ func TestChallenger_AES10_PRP_StructuredPlaintexts(t *testing.T) {
 			ciphertexts := make([]byte, numBlocks*16)
 			blocks := make([][16]byte, numBlocks)
 
-			for i := 0; i < numBlocks; i++ {
+			for i := range numBlocks {
 				pt := sc.gen(i)
 				ct := EncryptReducedRound(pt[:], key, 10, false)
 				blocks[i] = ct
@@ -421,7 +421,7 @@ func TestChallenger_Distinguisher_SharpCutoff(t *testing.T) {
 
 	// 1. Structure for Rounds 1, 2, 3: Lambda-set counter sequence
 	plaintextsR1to3 := make([][16]byte, numBlocks)
-	for i := 0; i < numBlocks; i++ {
+	for i := range numBlocks {
 		plaintextsR1to3[i][0] = byte(i)
 		plaintextsR1to3[i][1] = byte(i >> 8)
 		for j := 2; j < 16; j++ {
@@ -432,7 +432,7 @@ func TestChallenger_Distinguisher_SharpCutoff(t *testing.T) {
 	results := make(map[int]float64)
 	for _, r := range []int{1, 2, 3} {
 		blocks := make([][16]byte, numBlocks)
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			blocks[i] = EncryptReducedRound(plaintextsR1to3[i][:], key, r, true)
 		}
 		agg, _ := ComputeMultiVectorDeficit(blocks)
@@ -442,7 +442,7 @@ func TestChallenger_Distinguisher_SharpCutoff(t *testing.T) {
 
 	// 2. Structure for Round 4: Diagonal multi-stream sequence
 	plaintextsR4 := make([][16]byte, numBlocks)
-	for i := 0; i < numBlocks; i++ {
+	for i := range numBlocks {
 		plaintextsR4[i][0] = byte(i)
 		plaintextsR4[i][5] = byte(i * 13)
 		plaintextsR4[i][10] = byte(i * 37)
@@ -454,7 +454,7 @@ func TestChallenger_Distinguisher_SharpCutoff(t *testing.T) {
 		}
 	}
 	blocksR4 := make([][16]byte, numBlocks)
-	for i := 0; i < numBlocks; i++ {
+	for i := range numBlocks {
 		blocksR4[i] = EncryptReducedRound(plaintextsR4[i][:], key, 4, true)
 	}
 	aggR4, _ := ComputeMultiVectorDeficit(blocksR4)
@@ -463,7 +463,7 @@ func TestChallenger_Distinguisher_SharpCutoff(t *testing.T) {
 
 	// 3. Full AES: Round 10 Control
 	blocksR10 := make([][16]byte, numBlocks)
-	for i := 0; i < numBlocks; i++ {
+	for i := range numBlocks {
 		blocksR10[i] = EncryptReducedRound(plaintextsR1to3[i][:], key, 10, false)
 	}
 	aggR10, _ := ComputeMultiVectorDeficit(blocksR10)

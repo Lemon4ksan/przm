@@ -31,8 +31,8 @@ func TestLRGGF_Theorem10_ExactLosslessReconstruction(t *testing.T) {
 	}
 
 	matRank1 := make([]byte, blockSize)
-	for i := 0; i < M; i++ {
-		for j := 0; j < N; j++ {
+	for i := range M {
+		for j := range N {
 			matRank1[i*N+j] = przm.GF256Mul(u1[i], v1[j])
 		}
 	}
@@ -62,8 +62,8 @@ func TestLRGGF_Theorem10_ExactLosslessReconstruction(t *testing.T) {
 	}
 
 	matRank2 := make([]byte, blockSize)
-	for i := 0; i < M; i++ {
-		for j := 0; j < N; j++ {
+	for i := range M {
+		for j := range N {
 			term1 := przm.GF256Mul(u1[i], v1[j])
 			term2 := przm.GF256Mul(u2[i], v2[j])
 			matRank2[i*N+j] = term1 ^ term2
@@ -91,20 +91,20 @@ func TestLRGGF_SyntheticRank_Vs_LZ77(t *testing.T) {
 	v1 := make([]byte, N)
 	u2 := make([]byte, M)
 	v2 := make([]byte, N)
-	for i := 0; i < M; i++ {
+	for i := range M {
 		u1[i] = byte((i*31+7)%255 + 1)
 		u2[i] = byte((i*17+43)%255 + 1)
 	}
-	for j := 0; j < N; j++ {
+	for j := range N {
 		v1[j] = byte((j*53+19)%255 + 1)
 		v2[j] = byte((j*29+11)%255 + 1)
 	}
 
 	data := make([]byte, blockSize*4) // 16 KiB = 4 blocks
-	for b := 0; b < 4; b++ {
+	for b := range 4 {
 		off := b * blockSize
-		for i := 0; i < M; i++ {
-			for j := 0; j < N; j++ {
+		for i := range M {
+			for j := range N {
 				term1 := przm.GF256Mul(u1[i], v1[j])
 				term2 := przm.GF256Mul(u2[i], v2[j])
 				data[off+i*N+j] = term1 ^ term2
@@ -205,19 +205,19 @@ func BenchmarkLRGGF_Throughput(b *testing.B) {
 	v1 := make([]byte, N)
 	u2 := make([]byte, M)
 	v2 := make([]byte, N)
-	for i := 0; i < M; i++ {
+	for i := range M {
 		u1[i] = byte((i*31+7)%255 + 1)
 		u2[i] = byte((i*17+43)%255 + 1)
 	}
-	for j := 0; j < N; j++ {
+	for j := range N {
 		v1[j] = byte((j*53+19)%255 + 1)
 		v2[j] = byte((j*29+11)%255 + 1)
 	}
 
 	data := make([]byte, 64*1024) // 64 KiB
 	for off := 0; off < len(data); off += blockSize {
-		for i := 0; i < M; i++ {
-			for j := 0; j < N; j++ {
+		for i := range M {
+			for j := range N {
 				term1 := przm.GF256Mul(u1[i], v1[j])
 				term2 := przm.GF256Mul(u2[i], v2[j])
 				data[off+i*N+j] = term1 ^ term2

@@ -65,11 +65,11 @@ var (
 
 func init() {
 	// Dynamically generate the AES S-box using PRZM's GF(2^8) arithmetic from gfpi.go
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		inv := przm.GF256Inv(byte(i))
 		s := inv
 		var res byte
-		for bit := 0; bit < 8; bit++ {
+		for bit := range 8 {
 			b0 := (s >> bit) & 1
 			b4 := (s >> ((bit + 4) % 8)) & 1
 			b5 := (s >> ((bit + 5) % 8)) & 1
@@ -95,7 +95,7 @@ func GetInvSBox() [256]byte {
 
 // SubBytes applies the S-box substitution to each byte of state s.
 func SubBytes(s *[16]byte) {
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		s[i] = sbox[s[i]]
 	}
 }
@@ -118,7 +118,7 @@ func ShiftRows(s *[16]byte) {
 // MixColumns transforms each column of state s by multiplying by the MDS matrix over GF(2^8).
 // Uses PRZM's GF256Mul for field multiplications.
 func MixColumns(s *[16]byte) {
-	for c := 0; c < 4; c++ {
+	for c := range 4 {
 		idx := c * 4
 		s0, s1, s2, s3 := s[idx], s[idx+1], s[idx+2], s[idx+3]
 
@@ -131,7 +131,7 @@ func MixColumns(s *[16]byte) {
 
 // AddRoundKey XORs the round key rk into state s.
 func AddRoundKey(s *[16]byte, rk *[16]byte) {
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		s[i] ^= rk[i]
 	}
 }
@@ -160,7 +160,7 @@ func ExpandKey(key []byte, rounds int, mode KeyScheduleMode, linearDelta byte) [
 		return roundKeys
 
 	case KeyScheduleRepeated:
-		for r := 0; r < numRoundKeys; r++ {
+		for r := range numRoundKeys {
 			roundKeys[r] = master
 		}
 		return roundKeys
@@ -170,8 +170,8 @@ func ExpandKey(key []byte, rounds int, mode KeyScheduleMode, linearDelta byte) [
 		if delta == 0 {
 			delta = 0x01
 		}
-		for r := 0; r < numRoundKeys; r++ {
-			for i := 0; i < 16; i++ {
+		for r := range numRoundKeys {
+			for i := range 16 {
 				roundKeys[r][i] = master[i] ^ byte(r*int(delta))
 			}
 		}
@@ -185,7 +185,7 @@ func ExpandKey(key []byte, rounds int, mode KeyScheduleMode, linearDelta byte) [
 
 		totalWords := 4 * numRoundKeys
 		w := make([]uint32, totalWords)
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			w[i] = uint32(master[4*i]) |
 				(uint32(master[4*i+1]) << 8) |
 				(uint32(master[4*i+2]) << 16) |
@@ -218,8 +218,8 @@ func ExpandKey(key []byte, rounds int, mode KeyScheduleMode, linearDelta byte) [
 			w[i] = w[i-4] ^ temp
 		}
 
-		for r := 0; r < numRoundKeys; r++ {
-			for c := 0; c < 4; c++ {
+		for r := range numRoundKeys {
+			for c := range 4 {
 				val := w[4*r+c]
 				roundKeys[r][4*c] = byte(val)
 				roundKeys[r][4*c+1] = byte(val >> 8)
@@ -382,7 +382,7 @@ func (e *Engine) EncryptStream(dst, src []byte) error {
 		return errors.New("aes_distinguisher: buffer length must be multiple of 16")
 	}
 	blocks := len(src) / 16
-	for i := 0; i < blocks; i++ {
+	for i := range blocks {
 		offset := i * 16
 		e.EncryptBlock(dst[offset:offset+16], src[offset:offset+16], nil)
 	}

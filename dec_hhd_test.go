@@ -24,15 +24,15 @@ func TestDECHHD_Theorem11_ExactLosslessReconstruction(t *testing.T) {
 	// Construct a 2D separable field X[i, j] = A[i] ^ B[j]
 	rowBase := make([]byte, M)
 	colBase := make([]byte, W)
-	for i := 0; i < M; i++ {
+	for i := range M {
 		rowBase[i] = byte(i * 17)
 	}
-	for j := 0; j < W; j++ {
+	for j := range W {
 		colBase[j] = byte(j * 31)
 	}
 
-	for i := 0; i < M; i++ {
-		for j := 0; j < W; j++ {
+	for i := range M {
+		for j := range W {
 			grid[i*W+j] = rowBase[i] ^ colBase[j]
 		}
 	}
@@ -92,9 +92,9 @@ func TestDECHHD_SyntheticCurlFree_Vs_LZ77(t *testing.T) {
 
 	// Generate 2D separable gradient field with non-linear row variations
 	// that prevent trivial 1D run-length or exact long matches in LZ77
-	for i := 0; i < M; i++ {
+	for i := range M {
 		rowVal := byte((i*7 + 13) ^ (i >> 3))
-		for j := 0; j < W; j++ {
+		for j := range W {
 			colVal := byte((j * 23) ^ 0x9A)
 			data[i*W+j] = rowVal ^ colVal
 		}
@@ -198,9 +198,9 @@ func BenchmarkDECHHD_Throughput(t *testing.B) {
 	totalSize := M * W // 64 KiB
 	data := make([]byte, totalSize)
 
-	for i := 0; i < M; i++ {
+	for i := range M {
 		rowVal := byte(i * 11)
-		for j := 0; j < W; j++ {
+		for j := range W {
 			colVal := byte(j * 19)
 			data[i*W+j] = rowVal ^ colVal
 		}

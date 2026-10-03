@@ -16,7 +16,7 @@ import (
 // Forward and inverse Fast Pascal transforms are strict integer bijections.
 func TestMahler_Theorem32_UnimodularInvertibility(t *testing.T) {
 	// 1. Single 16-byte block random fuzz test
-	for iter := 0; iter < 1000; iter++ {
+	for range 1000 {
 		var orig, buf [16]byte
 		rand.Read(orig[:])
 		copy(buf[:], orig[:])
@@ -30,7 +30,7 @@ func TestMahler_Theorem32_UnimodularInvertibility(t *testing.T) {
 	}
 
 	// 2. Single 32-byte block random fuzz test
-	for iter := 0; iter < 1000; iter++ {
+	for range 1000 {
 		var orig, buf [32]byte
 		rand.Read(orig[:])
 		copy(buf[:], orig[:])
@@ -67,7 +67,7 @@ func TestMahler_Theorem32_UnimodularInvertibility(t *testing.T) {
 func TestMahler_Theorem33_PolynomialEntropyAnnihilation(t *testing.T) {
 	// 1. Degree 1 polynomial: f(x) = 7*x + 13 (mod 256)
 	var deg1 [16]byte
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		deg1[i] = byte((7*i + 13) & 0xFF)
 	}
 
@@ -88,7 +88,7 @@ func TestMahler_Theorem33_PolynomialEntropyAnnihilation(t *testing.T) {
 
 	// 2. Degree 2 polynomial: f(x) = 3*x^2 + 5*x + 42 (mod 256)
 	var deg2 [16]byte
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		deg2[i] = byte((3*i*i + 5*i + 42) & 0xFF)
 	}
 
@@ -111,7 +111,7 @@ func TestMahler_Theorem33_PolynomialEntropyAnnihilation(t *testing.T) {
 // TestMahler_Roundtrip verifies CompressMahler -> DecompressMahler roundtrip.
 func TestMahler_Roundtrip(t *testing.T) {
 	t.Run("ShortBuffers", func(t *testing.T) {
-		for sz := 0; sz < 32; sz++ {
+		for sz := range 32 {
 			data := make([]byte, sz)
 			for i := range data {
 				data[i] = byte(i * 3)
@@ -130,7 +130,7 @@ func TestMahler_Roundtrip(t *testing.T) {
 	t.Run("CorrelatedPolynomialStream", func(t *testing.T) {
 		n := 8192
 		data := make([]byte, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			// Piecewise polynomial trends (e.g. sensor / memory address steps)
 			blkIdx := i / 16
 			rem := i % 16
@@ -177,7 +177,7 @@ func TestMahler_Roundtrip(t *testing.T) {
 func TestMahler_EndToEndPipeline(t *testing.T) {
 	n := 4096
 	data := make([]byte, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		rem := i % 16
 		data[i] = byte((rem*rem*3 + rem*7 + 11) & 0xFF)
 	}

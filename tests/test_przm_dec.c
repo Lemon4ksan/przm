@@ -827,6 +827,229 @@ static void test_dictionary_decompression(void) {
     TEST_PASS("dictionary_decompression");
 }
 
+/* Test Étale Sheaf Trellis Decompression across Raw & Trellis Modes (0 Allocations) */
+static void test_sheaf_trellis_decompression(void) {
+    uint8_t dst[128];
+    memset(dst, 0, sizeof(dst));
+
+    /* 1. Sheaf Trellis Mode 0 (Raw) */
+    uint8_t raw_frame[12 + 8];
+    write_u32_le(raw_frame, PRZM_MAGIC_SHEAF);
+    write_u32_le(raw_frame + 4, 0); /* mode 0 = raw */
+    write_u32_le(raw_frame + 8, 8); /* orig_len = 8 */
+    for (int i = 0; i < 8; i++) raw_frame[12 + i] = (uint8_t)(i + 1);
+
+    int64_t dec_raw = przm_decompress(raw_frame, sizeof(raw_frame), dst, sizeof(dst));
+    TEST_ASSERT(dec_raw == 8, "Sheaf Trellis raw decompress returned wrong length");
+    for (int i = 0; i < 8; i++) {
+        TEST_ASSERT(dst[i] == (uint8_t)(i + 1), "Sheaf Trellis raw data mismatch");
+    }
+
+    /* 2. Sheaf Trellis Mode 1 (Trellis Rep-Queue) */
+    uint8_t trellis_frame[12 + 4];
+    write_u32_le(trellis_frame, PRZM_MAGIC_SHEAF);
+    write_u32_le(trellis_frame + 4, 1);  /* mode 1 = trellis */
+    write_u32_le(trellis_frame + 8, 12); /* orig_len = 12 */
+    trellis_frame[12] = 0x00;            /* literal run length 1 */
+    trellis_frame[13] = 0x77;            /* literal byte */
+    trellis_frame[14] = 0x83;            /* rep slot 0 (d=1), len = 3 + 2 = 5 */
+    trellis_frame[15] = 0x84;            /* rep slot 0 (d=1), len = 4 + 2 = 6 */
+
+    memset(dst, 0, sizeof(dst));
+    int64_t dec_trellis = przm_decompress(trellis_frame, sizeof(trellis_frame), dst, sizeof(dst));
+    TEST_ASSERT(dec_trellis == 12, "Sheaf Trellis mode 1 returned wrong length");
+    for (int i = 0; i < 12; i++) {
+        TEST_ASSERT(dst[i] == 0x77, "Sheaf Trellis mode 1 data mismatch");
+    }
+
+    TEST_PASS("sheaf_trellis_decompression");
+}
+
+/* Test Robustness against Corrupted, Truncated, and Adversarial Frames (0 Allocations) */
+static void test_corrupted_and_truncated_frames(void) {
+    uint8_t dst[256];
+    memset(dst, 0, sizeof(dst));
+
+    /* 1. NULL and sub-4 byte inputs to przm_get_uncompressed_size */
+    TEST_ASSERT(przm_get_uncompressed_size(NULL, 0) == PRZM_ERR_CORRUPTED_FRAME, "NULL buffer should error");
+    TEST_ASSERT(przm_get_uncompressed_size(NULL, 10) == PRZM_ERR_CORRUPTED_FRAME, "NULL buffer should error");
+    uint8_t tiny[3] = {'P', 'R', 'Z'};
+    TEST_ASSERT(przm_get_uncompressed_size(tiny, sizeof(tiny)) == PRZM_ERR_CORRUPTED_FRAME, "sub-4B should error");
+
+    /* 2. Invalid magic signatures */
+    uint8_t bad_magic[8] = {0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x10, 0x00, 0x00};
+    TEST_ASSERT(przm_get_uncompressed_size(bad_magic, sizeof(bad_magic)) == PRZM_ERR_INVALID_MAGIC, "bad magic should error");
+
+    /* 3. Magic 24 (0x18) regression test: must NOT be recognized as Cellular Sheaf */
+    uint8_t false_sheaf[8] = {0x18, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00};
+    TEST_ASSERT(przm_get_uncompressed_size(false_sheaf, sizeof(false_sheaf)) == PRZM_ERR_INVALID_MAGIC, "magic 24 must not be sheaf");
+
+    /* 4. Truncated headers across transform families */
+    uint8_t trunc_mobi[8];
+    write_u32_le(trunc_mobi, PRZM_MAGIC_MOBIUS);
+    TEST_ASSERT(przm_get_uncompressed_size(trunc_mobi, sizeof(trunc_mobi)) == PRZM_ERR_CORRUPTED_FRAME, "trunc mobius should error");
+
+    uint8_t trunc_marg[12];
+    write_u32_le(trunc_marg, PRZM_MAGIC_MARGOLUS);
+    TEST_ASSERT(przm_get_uncompressed_size(trunc_marg, sizeof(trunc_marg)) == PRZM_ERR_CORRUPTED_FRAME, "trunc margolus should error");
+
+    uint8_t trunc_isoq[16];
+    write_u32_le(trunc_isoq, PRZM_MAGIC_ISOQUANT);
+    TEST_ASSERT(przm_get_uncompressed_size(trunc_isoq, sizeof(trunc_isoq)) == PRZM_ERR_CORRUPTED_FRAME, "trunc isoquant should error");
+
+    uint8_t trunc_heis[8];
+    write_u32_le(trunc_heis, PRZM_MAGIC_HEISENBERG);
+    TEST_ASSERT(przm_get_uncompressed_size(trunc_heis, sizeof(trunc_heis)) == PRZM_ERR_CORRUPTED_FRAME, "trunc heisenberg should error");
+
+    uint8_t trunc_cshd[20];
+    write_u32_le(trunc_cshd, PRZM_MAGIC_CELLULAR_SHEAF);
+    TEST_ASSERT(przm_get_uncompressed_size(trunc_cshd, sizeof(trunc_cshd)) == PRZM_ERR_CORRUPTED_FRAME, "trunc cshd should error");
+
+    uint8_t trunc_std[6];
+    write_u32_le(trunc_std, PRZM_MAGIC_STANDARD);
+    TEST_ASSERT(przm_get_uncompressed_size(trunc_std, sizeof(trunc_std)) == PRZM_ERR_CORRUPTED_FRAME, "trunc std should error");
+
+    uint8_t trunc_shef[10];
+    write_u32_le(trunc_shef, PRZM_MAGIC_SHEAF);
+    TEST_ASSERT(przm_get_uncompressed_size(trunc_shef, sizeof(trunc_shef)) == PRZM_ERR_CORRUPTED_FRAME, "trunc sheaf trellis should error");
+
+    /* 5. przm_decompress NULL and 0-length inputs */
+    TEST_ASSERT(przm_decompress(NULL, 10, dst, sizeof(dst)) == PRZM_ERR_CORRUPTED_FRAME, "decompress NULL src should error");
+    TEST_ASSERT(przm_decompress(trunc_std, sizeof(trunc_std), NULL, sizeof(dst)) == PRZM_ERR_CORRUPTED_FRAME, "decompress NULL dst should error");
+    TEST_ASSERT(przm_decompress(trunc_std, 0, dst, sizeof(dst)) == 0, "decompress 0 len should return 0");
+
+    /* 6. Buffer too small: dst_cap < uncompressed_size + PRZM_SAFETY_PADDING */
+    uint8_t frame_std[8] = {'P', 'R', 'Z', 'M', 0x04, 0x64, 0x00, 0x00}; /* raw 100 bytes */
+    TEST_ASSERT(przm_decompress(frame_std, sizeof(frame_std), dst, 100) == PRZM_ERR_BUFFER_TOO_SMALL, "dst_cap 100 without 64 padding should error");
+
+    uint8_t frame_heis[12];
+    write_u32_le(frame_heis, PRZM_MAGIC_HEISENBERG);
+    write_u32_le(frame_heis + 4, 100);
+    frame_heis[8] = 3; frame_heis[9] = 0; frame_heis[10] = 0; frame_heis[11] = 0;
+    TEST_ASSERT(przm_decompress(frame_heis, sizeof(frame_heis), dst, 100) == PRZM_ERR_BUFFER_TOO_SMALL, "heis buffer too small should error");
+
+    uint8_t frame_isoq[20];
+    memset(frame_isoq, 0, sizeof(frame_isoq));
+    write_u32_le(frame_isoq, PRZM_MAGIC_ISOQUANT);
+    write_u32_le(frame_isoq + 8, 100);
+    TEST_ASSERT(przm_decompress(frame_isoq, sizeof(frame_isoq), dst, 100) == PRZM_ERR_BUFFER_TOO_SMALL, "isoq buffer too small should error");
+
+    /* 7. Exceeds max block size (> 16 MiB) */
+    uint8_t huge_frame[12];
+    write_u32_le(huge_frame, PRZM_MAGIC_HEISENBERG);
+    write_u32_le(huge_frame + 4, 32 * 1024 * 1024); /* 32 MiB > 16 MiB */
+    huge_frame[8] = 3; huge_frame[9] = 0; huge_frame[10] = 0; huge_frame[11] = 0;
+    TEST_ASSERT(przm_decompress(huge_frame, sizeof(huge_frame), dst, sizeof(dst)) == PRZM_ERR_EXCEEDS_MAX_BLOCK, "huge frame should error");
+
+    /* 8. Offset out of bounds in match replication */
+    uint8_t oob_frame[16] = {
+        'P', 'R', 'Z', 'M',
+        0x00,               /* flags */
+        0x20, 0x00, 0x00,   /* 32 bytes */
+        0x01, 0x00,         /* cmd_size = 1 */
+        0x00, 0x00,         /* off_size = 0 */
+        0x00,               /* cmd 0x00: repeat match d=1 from pos=0 -> OOB */
+        0x00, 0x00, 0x00
+    };
+    TEST_ASSERT(przm_decompress(oob_frame, sizeof(oob_frame), dst, sizeof(dst)) == PRZM_ERR_OFFSET_OOB, "match d=1 at pos=0 should error OFFSET_OOB");
+
+    /* 9. Truncated literal stream */
+    uint8_t trunc_lit_frame[16] = {
+        'P', 'R', 'Z', 'M',
+        0x00,               /* flags */
+        0x20, 0x00, 0x00,   /* 32 bytes */
+        0x01, 0x00,         /* cmd_size = 1 */
+        0x00, 0x00,         /* off_size = 0 */
+        0xF0, 0x10          /* cmd 0xF0: literal run of 16 bytes, but 0 literals in section 4 */
+    };
+    TEST_ASSERT(przm_decompress(trunc_lit_frame, sizeof(trunc_lit_frame), dst, sizeof(dst)) == PRZM_ERR_CORRUPTED_FRAME, "truncated literals should error");
+
+    /* 10. BCJ split excessive call count regression test */
+    uint8_t split_frame[16] = {
+        'P', 'R', 'Z', 'M',
+        PRZM_FLAG_BCJ_SPLIT,
+        0x10, 0x00, 0x00,   /* 16 bytes */
+        0x00, 0x00, 0x20, 0x00 /* call_count = 2,097,152 (> 4MiB / 4) */
+    };
+    TEST_ASSERT(przm_decompress(split_frame, sizeof(split_frame), dst, sizeof(dst)) == PRZM_ERR_EXCEEDS_MAX_BLOCK, "excessive call count should error");
+
+    /* 11. Zero-Schema VM and GGTC Go-native frames return PRZM_ERR_UNSUPPORTED_MODE in C */
+    uint8_t vm_frame[8] = {'P', 'V', 0x01, 0x00, 0x40, 0x00, 0x00, 0x00}; /* 64 bytes */
+    TEST_ASSERT(przm_get_uncompressed_size(vm_frame, sizeof(vm_frame)) == 64, "VM size should be 64");
+    TEST_ASSERT(przm_decompress(vm_frame, sizeof(vm_frame), dst, sizeof(dst)) == PRZM_ERR_UNSUPPORTED_MODE, "VM should return UNSUPPORTED_MODE");
+
+    uint8_t ggtc_frame[8] = {'G', 'G', 0x01, 0x00, 0x80, 0x00, 0x00, 0x00}; /* 128 bytes */
+    TEST_ASSERT(przm_get_uncompressed_size(ggtc_frame, sizeof(ggtc_frame)) == 128, "GGTC size should be 128");
+    TEST_ASSERT(przm_decompress(ggtc_frame, sizeof(ggtc_frame), dst, sizeof(dst)) == PRZM_ERR_UNSUPPORTED_MODE, "GGTC should return UNSUPPORTED_MODE");
+
+    /* 12. Sheaf Trellis Mode 0 Truncation Regression */
+    uint8_t trunc_sheaf_raw[16];
+    write_u32_le(trunc_sheaf_raw, PRZM_MAGIC_SHEAF);
+    write_u32_le(trunc_sheaf_raw + 4, 0); /* mode 0 */
+    write_u32_le(trunc_sheaf_raw + 8, 100); /* orig_len = 100, but only 4 bytes payload */
+    TEST_ASSERT(przm_decompress(trunc_sheaf_raw, sizeof(trunc_sheaf_raw), dst, sizeof(dst)) == PRZM_ERR_CORRUPTED_FRAME, "trunc sheaf raw should error");
+
+    /* 13. Sheaf Trellis Mode 2 Fiber Sum Overflow Regression */
+    uint8_t bad_fiber_sheaf[32];
+    write_u32_le(bad_fiber_sheaf, PRZM_MAGIC_SHEAF);
+    write_u32_le(bad_fiber_sheaf + 4, 2); /* mode 2 */
+    write_u32_le(bad_fiber_sheaf + 8, 100); /* orig_len = 100 */
+    write_u32_le(bad_fiber_sheaf + 12, 50); /* l0 = 50 */
+    write_u32_le(bad_fiber_sheaf + 16, 60); /* l1 = 60 (50+60 > 100) */
+    write_u32_le(bad_fiber_sheaf + 20, 0);
+    write_u32_le(bad_fiber_sheaf + 24, 0);
+    TEST_ASSERT(przm_decompress(bad_fiber_sheaf, sizeof(bad_fiber_sheaf), dst, sizeof(dst)) == PRZM_ERR_CORRUPTED_FRAME, "bad fiber sum should error");
+
+    /* 14. Cellular Sheaf Corrupted Dimensions & Sparse NNZ Overflow */
+    uint8_t bad_cshd[32];
+    memset(bad_cshd, 0, sizeof(bad_cshd));
+    write_u32_le(bad_cshd, PRZM_MAGIC_CELLULAR_SHEAF);
+    write_u32_le(bad_cshd + 4, 100); /* orig_len = 100 */
+    write_u16_le(bad_cshd + 8, 50);  /* W = 50 */
+    write_u16_le(bad_cshd + 10, 50); /* M = 50 -> W * M = 2500 > 100 */
+    write_u16_le(bad_cshd + 16, PRZM_CSHD_FLAG_CURL_FREE);
+    TEST_ASSERT(przm_decompress(bad_cshd, sizeof(bad_cshd), dst, sizeof(dst)) == PRZM_ERR_CORRUPTED_FRAME, "W*M > orig_len should error");
+
+    /* 15. Systematic Boundary Truncation across all Magic Signatures (0..64 bytes) */
+    static const uint32_t kAllMagics[] = {
+        PRZM_MAGIC_STANDARD, PRZM_MAGIC_SYMPLECTIC, PRZM_MAGIC_MAHLER,
+        PRZM_MAGIC_SHEAF, PRZM_MAGIC_ARM64, PRZM_MAGIC_ISOQUANT,
+        PRZM_MAGIC_GCTR, PRZM_MAGIC_HEISENBERG, PRZM_MAGIC_CELLULAR_SHEAF,
+        PRZM_MAGIC_MOBIUS, PRZM_MAGIC_MARGOLUS
+    };
+    for (size_t m = 0; m < sizeof(kAllMagics)/sizeof(kAllMagics[0]); m++) {
+        uint8_t mock_frame[64];
+        memset(mock_frame, 0, sizeof(mock_frame));
+        write_u32_le(mock_frame, kAllMagics[m]);
+        write_u32_le(mock_frame + 4, 64);
+        write_u32_le(mock_frame + 8, 64);
+        for (size_t t_len = 0; t_len <= sizeof(mock_frame); t_len++) {
+            int64_t sz_res = przm_get_uncompressed_size(mock_frame, t_len);
+            int64_t dec_res = przm_decompress(mock_frame, t_len, dst, sizeof(dst));
+            (void)sz_res;
+            (void)dec_res;
+        }
+    }
+
+    /* 16. Adversarial Randomized Bitstream Fuzzing (10,000 runs) */
+    uint32_t fuzz_state = 0xDEADBEEF;
+    for (int iter = 0; iter < 10000; iter++) {
+        uint8_t fuzz_buf[128];
+        fuzz_state = fuzz_state * 1664525u + 1013904223u;
+        size_t f_len = (size_t)(fuzz_state % (sizeof(fuzz_buf) + 1));
+        for (size_t b = 0; b < f_len; b++) {
+            fuzz_state = fuzz_state * 1664525u + 1013904223u;
+            fuzz_buf[b] = (uint8_t)(fuzz_state >> 24);
+        }
+        int64_t sz_err = przm_get_uncompressed_size(fuzz_buf, f_len);
+        int64_t dec_err = przm_decompress(fuzz_buf, f_len, dst, sizeof(dst));
+        (void)sz_err;
+        (void)dec_err;
+    }
+
+    TEST_PASS("corrupted_and_truncated_frames");
+}
+
 int main(int argc, char** argv) {
     if (argc == 3) {
         /* CLI decompression mode: test_przm_dec <in.przm> <out.bin> */
@@ -891,6 +1114,8 @@ int main(int argc, char** argv) {
     test_mobius_decompression();
     test_margolus_decompression();
     test_dictionary_decompression();
+    test_sheaf_trellis_decompression();
+    test_corrupted_and_truncated_frames();
 
     printf("\n>>> ALL TESTS PASSED SUCCESSFULLY! (0 Allocations, 100%% Lossless) <<<\n");
     return 0;

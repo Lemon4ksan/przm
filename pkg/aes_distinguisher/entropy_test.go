@@ -132,7 +132,7 @@ func TestMillerMadowCorrection_Debiasing(t *testing.T) {
 	// Evaluate 1024 blocks of Round 10 AES
 	key := []byte{0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c}
 	blocks1024 := make([][16]byte, 1024)
-	for i := 0; i < 1024; i++ {
+	for i := range 1024 {
 		var pt [16]byte
 		pt[0] = byte(i)
 		pt[1] = byte(i >> 8)
@@ -162,7 +162,7 @@ func TestComputeBitSliceCorrelations_SymmetryAndRange(t *testing.T) {
 
 	// Create blocks where bit 0 and bit 1 are perfectly correlated,
 	// and bit 2 is the exact complement of bit 0
-	for i := 0; i < numBlocks; i++ {
+	for i := range numBlocks {
 		b := byte(i % 2)
 		blocks[i][0] = b | (b << 1) | ((1 - b) << 2)
 	}
@@ -170,15 +170,15 @@ func TestComputeBitSliceCorrelations_SymmetryAndRange(t *testing.T) {
 	corr := ComputeBitSliceCorrelations(blocks)
 
 	// 1. Diagonal must be 1.0
-	for i := 0; i < 128; i++ {
+	for i := range 128 {
 		if math.Abs(corr[i][i]-1.0) > 1e-9 {
 			t.Fatalf("diagonal corr[%d][%d] expected 1.0, got %f", i, i, corr[i][i])
 		}
 	}
 
 	// 2. Symmetry: corr[i][j] == corr[j][i]
-	for i := 0; i < 128; i++ {
-		for j := 0; j < 128; j++ {
+	for i := range 128 {
+		for j := range 128 {
 			if math.Abs(corr[i][j]-corr[j][i]) > 1e-9 {
 				t.Fatalf("asymmetric correlation at (%d, %d): %f vs %f", i, j, corr[i][j], corr[j][i])
 			}
@@ -260,7 +260,7 @@ func TestReducedRoundDistinguisher_EmpiricalProof(t *testing.T) {
 	plaintexts := make([][16]byte, numBlocks)
 
 	// Fill plaintexts with deterministic structured / low-entropy counter sequences
-	for i := 0; i < numBlocks; i++ {
+	for i := range numBlocks {
 		plaintexts[i][0] = byte(i)
 		plaintexts[i][1] = byte(i >> 8)
 		for j := 2; j < 16; j++ {
@@ -273,7 +273,7 @@ func TestReducedRoundDistinguisher_EmpiricalProof(t *testing.T) {
 	// Requirement: Delta H >> 6.0%
 	// -------------------------------------------------------------
 	ctR1NoMC := make([]byte, numBlocks*16)
-	for i := 0; i < numBlocks; i++ {
+	for i := range numBlocks {
 		ct := EncryptReducedRound(plaintexts[i][:], key, 1, false)
 		copy(ctR1NoMC[i*16:(i+1)*16], ct[:])
 	}
@@ -293,7 +293,7 @@ func TestReducedRoundDistinguisher_EmpiricalProof(t *testing.T) {
 	// Requirement: Delta H > 0.05%
 	// -------------------------------------------------------------
 	ctR1MC := make([]byte, numBlocks*16)
-	for i := 0; i < numBlocks; i++ {
+	for i := range numBlocks {
 		ct := EncryptReducedRound(plaintexts[i][:], key, 1, true)
 		copy(ctR1MC[i*16:(i+1)*16], ct[:])
 	}
@@ -308,7 +308,7 @@ func TestReducedRoundDistinguisher_EmpiricalProof(t *testing.T) {
 	// Requirement: Delta H approx 0.46% - 1.85%, Delta H > 0.05%
 	// -------------------------------------------------------------
 	blocksR2 := make([][16]byte, numBlocks)
-	for i := 0; i < numBlocks; i++ {
+	for i := range numBlocks {
 		blocksR2[i] = EncryptReducedRound(plaintexts[i][:], key, 2, true)
 	}
 	aggR2, vecR2 := ComputeMultiVectorDeficit(blocksR2)
@@ -324,7 +324,7 @@ func TestReducedRoundDistinguisher_EmpiricalProof(t *testing.T) {
 	// Requirement: Delta H approx 0.065% - 0.18%, Delta H > 0.05%
 	// -------------------------------------------------------------
 	blocksR3 := make([][16]byte, numBlocks)
-	for i := 0; i < numBlocks; i++ {
+	for i := range numBlocks {
 		blocksR3[i] = EncryptReducedRound(plaintexts[i][:], key, 3, true)
 	}
 	aggR3, vecR3 := ComputeMultiVectorDeficit(blocksR3)
@@ -355,7 +355,7 @@ func TestReducedRoundDistinguisher_EmpiricalProof(t *testing.T) {
 
 	for kIdx, kVal := range testKeysR4 {
 		blocksR4 := make([][16]byte, numBlocks)
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			var pt [16]byte
 			// Diagonal 0 alignment: bytes {0, 5, 10, 15}
 			pt[0] = byte(i)
@@ -384,7 +384,7 @@ func TestReducedRoundDistinguisher_EmpiricalProof(t *testing.T) {
 	// -------------------------------------------------------------
 	numControlBlocks := 16384
 	ctR10 := make([]byte, numControlBlocks*16)
-	for i := 0; i < numControlBlocks; i++ {
+	for i := range numControlBlocks {
 		var pt [16]byte
 		rand.Read(pt[:])
 		ct := EncryptReducedRound(pt[:], key, 10, false)

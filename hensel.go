@@ -42,6 +42,16 @@ func (sp *HenselScratchpad) Reset() {
 	clear(sp.head[:])
 }
 
+// HeadSlice returns a slice view of the bucket heads for oracle inspection.
+func (sp *HenselScratchpad) HeadSlice() []int32 {
+	return sp.head[:]
+}
+
+// PrevSlice returns a slice view of the collision chains for oracle inspection.
+func (sp *HenselScratchpad) PrevSlice() []int32 {
+	return sp.prev[:]
+}
+
 // HenselMatchFinder provides an ultrametric match searcher using Hensel's lifting.
 type HenselMatchFinder struct {
 	windowSize int

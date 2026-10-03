@@ -30,7 +30,7 @@ var (
 func init() {
 	// Initialize exponential and logarithm lookup tables
 	val := 1
-	for i := 0; i < 255; i++ {
+	for i := range 255 {
 		b := byte(val)
 		gfExp[i] = b
 		gfExp[i+255] = b
@@ -153,7 +153,7 @@ func evalAffineCandidate(delta []byte, c0, c1 byte, errCutoff int) (uint64, []by
 	var errs []byte
 	errCount := 0
 
-	for t := 0; t < len(delta); t++ {
+	for t := range delta {
 		expected := c0 ^ GF256Mul(c1, byte(t))
 		actual := delta[t]
 		if actual != expected {
@@ -207,7 +207,7 @@ func GFPIFitQuadratic(delta []byte, maxErrors int) (c0, c1, c2 byte, errMask uin
 	var errs []byte
 	errCount := 0
 
-	for t := 0; t < K; t++ {
+	for t := range K {
 		bt := byte(t)
 		expected := c0Cand ^ GF256Mul(c1Cand, bt) ^ GF256Mul(c2Cand, GF256Mul(bt, bt))
 		actual := delta[t]
@@ -236,13 +236,10 @@ func GFPIFitQuadratic(delta []byte, maxErrors int) (c0, c1, c2 byte, errMask uin
 //
 // Guarantees zero-branch hot loop for the polynomial and decoupled O(E) sparse error patching.
 func GFPIDecodeBlock(ref []byte, c0, c1 byte, errMask uint64, errBytes []byte, dst []byte) {
-	K := len(dst)
-	if K > len(ref) {
-		K = len(ref)
-	}
+	K := min(len(dst), len(ref))
 
 	// 1. Pure polynomial drift loop (zero branching)
-	for t := 0; t < K; t++ {
+	for t := range K {
 		dst[t] = ref[t] ^ c0 ^ GF256Mul(c1, byte(t))
 	}
 
@@ -263,12 +260,9 @@ func GFPIDecodeBlock(ref []byte, c0, c1 byte, errMask uint64, errBytes []byte, d
 
 // GFPIDecodeQuadraticBlock reconstructs dst[0:K] from ref[0:K] using a degree-2 polynomial.
 func GFPIDecodeQuadraticBlock(ref []byte, c0, c1, c2 byte, errMask uint64, errBytes []byte, dst []byte) {
-	K := len(dst)
-	if K > len(ref) {
-		K = len(ref)
-	}
+	K := min(len(dst), len(ref))
 
-	for t := 0; t < K; t++ {
+	for t := range K {
 		bt := byte(t)
 		dst[t] = ref[t] ^ c0 ^ GF256Mul(c1, bt) ^ GF256Mul(c2, GF256Mul(bt, bt))
 	}
@@ -313,7 +307,7 @@ func PackGFPIMatch(m *GFPIMatch) []byte {
 	}
 
 	// Pack mask (up to 8 bytes)
-	for b := 0; b < maskBytes; b++ {
+	for b := range maskBytes {
 		buf[idx+b] = byte(m.ErrMask >> (b * 8))
 	}
 	idx += maskBytes
@@ -351,7 +345,7 @@ func UnpackGFPIMatch(src []byte) (*GFPIMatch, int, error) {
 	}
 
 	var mask uint64
-	for b := 0; b < maskBytes; b++ {
+	for b := range maskBytes {
 		mask |= uint64(src[idx+b]) << (b * 8)
 	}
 	m.ErrMask = mask

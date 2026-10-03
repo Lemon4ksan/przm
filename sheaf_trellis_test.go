@@ -36,10 +36,10 @@ func TestSheafTrellis_SheafDecomposeCollate(t *testing.T) {
 func TestSheafTrellis_RepQueue(t *testing.T) {
 	rq := przm.NewRepQueue4()
 	// Initial state: [1, 4, 8, 16]
-	rq.Update(0, 1) // Slot 0: unchanged
+	rq.Update(0, 1)   // Slot 0: unchanged
 	rq.Update(-1, 32) // New distance 32 -> [32, 1, 4, 8]
-	rq.Update(2, 4) // Slot 2 promoted -> [4, 32, 1, 8]
-	rq.Update(1, 32) // Slot 1 swapped -> [32, 4, 1, 8]
+	rq.Update(2, 4)   // Slot 2 promoted -> [4, 32, 1, 8]
+	rq.Update(1, 32)  // Slot 1 swapped -> [32, 4, 1, 8]
 
 	var zero [4]int
 	if rq == przm.NewRepQueue4() || rq == (przm.RepQueue4{Q: zero}) {
@@ -194,8 +194,8 @@ func TestTropicalSemiring_Associativity(t *testing.T) {
 	// Generate arbitrary transition matrices
 	makeMat := func(seed int32) przm.TropicalMatrix4 {
 		var mat przm.TropicalMatrix4
-		for i := 0; i < 4; i++ {
-			for j := 0; j < 4; j++ {
+		for i := range 4 {
+			for j := range 4 {
 				mat.M[i][j] = (seed*17 + int32(i*7) + int32(j*13)) % 100
 			}
 		}
@@ -232,10 +232,10 @@ func TestTropicalSemiring_Associativity(t *testing.T) {
 func TestBlellochPrefixScan(t *testing.T) {
 	n := 16
 	mats := make([]przm.TropicalMatrix4, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		var m przm.TropicalMatrix4
-		for r := 0; r < 4; r++ {
-			for c := 0; c < 4; c++ {
+		for r := range 4 {
+			for c := range 4 {
 				m.M[r][c] = int32((i+1)*11 + r*5 + c*3)
 			}
 		}
@@ -266,4 +266,3 @@ func TestBlellochPrefixScan(t *testing.T) {
 		t.Fatalf("Blelloch prefix scan last element mismatch:\nexpected=%+v\ngot=%+v", serial, prefixes[n-1])
 	}
 }
-

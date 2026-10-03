@@ -72,7 +72,7 @@ func FactorizeBlock(src []byte, M, N, maxRank int) LRGGFBlock {
 	var U_basis []byte // Rank * M
 	var V_basis []byte // Rank * N
 
-	for r := 0; r < maxRank; r++ {
+	for range maxRank {
 		if curNNZ == 0 {
 			break
 		}
@@ -80,9 +80,9 @@ func FactorizeBlock(src []byte, M, N, maxRank int) LRGGFBlock {
 		// Find optimal pivot (bestR, bestC) maximizing rowNNZ * colNNZ
 		var rowNNZ [256]int
 		var colNNZ [256]int
-		for i := 0; i < M; i++ {
+		for i := range M {
 			rowOff := i * N
-			for j := 0; j < N; j++ {
+			for j := range N {
 				if R[rowOff+j] != 0 {
 					rowNNZ[i]++
 					colNNZ[j]++
@@ -92,9 +92,9 @@ func FactorizeBlock(src []byte, M, N, maxRank int) LRGGFBlock {
 
 		bestR, bestC := -1, -1
 		bestScore := 0
-		for i := 0; i < M; i++ {
+		for i := range M {
 			rowOff := i * N
-			for j := 0; j < N; j++ {
+			for j := range N {
 				if R[rowOff+j] != 0 {
 					score := rowNNZ[i] * colNNZ[j]
 					if score > bestScore {
@@ -115,23 +115,23 @@ func FactorizeBlock(src []byte, M, N, maxRank int) LRGGFBlock {
 
 		u_vec := make([]byte, M)
 		v_vec := make([]byte, N)
-		for i := 0; i < M; i++ {
+		for i := range M {
 			u_vec[i] = R[i*N+bestC]
 		}
 		rowOff := bestR * N
-		for j := 0; j < N; j++ {
+		for j := range N {
 			v_vec[j] = GF256Mul(R[rowOff+j], invAlpha)
 		}
 
 		// Calculate net elimination gain of this rank-1 outer product
 		netGain := 0
-		for i := 0; i < M; i++ {
+		for i := range M {
 			u_val := u_vec[i]
 			if u_val == 0 {
 				continue
 			}
 			rOff := i * N
-			for j := 0; j < N; j++ {
+			for j := range N {
 				pred := GF256Mul(u_val, v_vec[j])
 				orig := R[rOff+j]
 				if orig == pred {
@@ -152,18 +152,18 @@ func FactorizeBlock(src []byte, M, N, maxRank int) LRGGFBlock {
 
 		// Subtract rank-1 matrix from residual R: R = R ^ (u * v^T)
 		newNNZ := 0
-		for i := 0; i < M; i++ {
+		for i := range M {
 			u_val := u_vec[i]
 			rOff := i * N
 			if u_val == 0 {
-				for j := 0; j < N; j++ {
+				for j := range N {
 					if R[rOff+j] != 0 {
 						newNNZ++
 					}
 				}
 				continue
 			}
-			for j := 0; j < N; j++ {
+			for j := range N {
 				pred := GF256Mul(u_val, v_vec[j])
 				newVal := R[rOff+j] ^ pred
 				R[rOff+j] = newVal
@@ -195,9 +195,9 @@ func FactorizeBlock(src []byte, M, N, maxRank int) LRGGFBlock {
 
 	if curNNZ > 0 {
 		block.Errors = make([]SparseError, 0, curNNZ)
-		for i := 0; i < M; i++ {
+		for i := range M {
 			rOff := i * N
-			for j := 0; j < N; j++ {
+			for j := range N {
 				val := R[rOff+j]
 				if val != 0 {
 					block.Errors = append(block.Errors, SparseError{
@@ -238,18 +238,18 @@ func ReconstructBlock(b *LRGGFBlock, dst []byte) {
 	M, N, R := b.M, b.N, b.Rank
 
 	// SIMD-parallel tensor matrix product: dst = U * V^T over F_2^8
-	for r := 0; r < R; r++ {
+	for r := range R {
 		uOffset := r * M
 		vOffset := r * N
 
-		for i := 0; i < M; i++ {
+		for i := range M {
 			u_val := b.U[uOffset+i]
 			if u_val == 0 {
 				continue
 			}
 
 			rowOff := i * N
-			for j := 0; j < N; j++ {
+			for j := range N {
 				dst[rowOff+j] ^= GF256Mul(u_val, b.V[vOffset+j])
 			}
 		}
@@ -286,12 +286,9 @@ func LRGGFEncode(src []byte) ([]byte, error) {
 	binary.LittleEndian.PutUint32(szBuf[4:8], uint32(numBlocks))
 	out = append(out, szBuf[:]...)
 
-	for bIdx := 0; bIdx < numBlocks; bIdx++ {
+	for bIdx := range numBlocks {
 		start := bIdx * blockSize
-		end := start + blockSize
-		if end > n {
-			end = n
-		}
+		end := min(start+blockSize, n)
 
 		b := FactorizeBlock(src[start:end], M, N, MaxRankLimit)
 
@@ -338,7 +335,7 @@ func LRGGFDecode(src []byte) ([]byte, error) {
 
 	const blockSize = DefaultBlockDim * DefaultBlockDim
 
-	for bIdx := 0; bIdx < numBlocks; bIdx++ {
+	for bIdx := range numBlocks {
 		if ptr+4 > len(src) {
 			return nil, ErrLRGGFCorrupted
 		}
@@ -381,7 +378,7 @@ func LRGGFDecode(src []byte) ([]byte, error) {
 			}
 
 			b.Errors = make([]SparseError, errCount)
-			for e := 0; e < errCount; e++ {
+			for e := range errCount {
 				b.Errors[e] = SparseError{
 					Row: src[ptr],
 					Col: src[ptr+1],
@@ -410,7 +407,7 @@ const (
 )
 
 var (
-	ErrGlobalLRGGFDictSize  = errors.New("przm/global_lrggf: dictionary must be 32KiB")
+	ErrGlobalLRGGFDictSize = errors.New("przm/global_lrggf: dictionary must be 32KiB")
 )
 
 // GlobalLRGGFEncode compresses src using a 32 KiB dictionary (16 KiB U, 16 KiB V).
@@ -436,35 +433,32 @@ func GlobalLRGGFEncode(src, dict []byte) ([]byte, error) {
 	const blockSize = 64
 	numBlocks := (n + blockSize - 1) / blockSize
 
-	for bIdx := 0; bIdx < numBlocks; bIdx++ {
+	for bIdx := range numBlocks {
 		start := bIdx * blockSize
-		end := start + blockSize
-		if end > n {
-			end = n
-		}
-		
+		end := min(start+blockSize, n)
+
 		block := src[start:end]
 		blockLen := len(block)
-		
+
 		bestI, bestJ := 0, 0
 		bestErrors := blockLen + 1
-		
+
 		var bestErrIndices []uint8
 		var bestErrVals []byte
 
 		// Combinatorial Greedy Search based on Hamming weight
-		for i := 0; i < 256; i++ {
+		for i := range 256 {
 			uVec := U[i*blockSize : i*blockSize+blockSize]
-			for j := 0; j < 256; j++ {
+			for j := range 256 {
 				vVec := V[j*blockSize : j*blockSize+blockSize]
-				
+
 				errCount := 0
-				for k := 0; k < blockLen; k++ {
+				for k := range blockLen {
 					if block[k] != (uVec[k] ^ vVec[k]) {
 						errCount++
 					}
 				}
-				
+
 				if errCount < bestErrors {
 					bestErrors = errCount
 					bestI = i
@@ -477,11 +471,11 @@ func GlobalLRGGFEncode(src, dict []byte) ([]byte, error) {
 		if bestErrors <= blockLen {
 			uVec := U[bestI*blockSize : bestI*blockSize+blockSize]
 			vVec := V[bestJ*blockSize : bestJ*blockSize+blockSize]
-			for k := 0; k < blockLen; k++ {
+			for k := range blockLen {
 				pred := uVec[k] ^ vVec[k]
 				if block[k] != pred {
 					bestErrIndices = append(bestErrIndices, uint8(k))
-					bestErrVals = append(bestErrVals, block[k] ^ pred)
+					bestErrVals = append(bestErrVals, block[k]^pred)
 				}
 			}
 		}
@@ -519,7 +513,7 @@ func GlobalLRGGFDecode(src, dict []byte) ([]byte, error) {
 	origSize := int(binary.LittleEndian.Uint32(src[4:8]))
 	dst := make([]byte, origSize)
 	ptr := 8
-	
+
 	U := dict[:16384]
 	V := dict[16384:]
 
@@ -570,7 +564,7 @@ func GlobalLRGGFDecode(src, dict []byte) ([]byte, error) {
 				dst[dstOff+k] = uVec[k] ^ vVec[k]
 			}
 
-			for e := 0; e < errCount; e++ {
+			for range errCount {
 				idx := int(src[ptr])
 				val := src[ptr+1]
 				ptr += 2
@@ -586,4 +580,3 @@ func GlobalLRGGFDecode(src, dict []byte) ([]byte, error) {
 
 	return dst, nil
 }
-

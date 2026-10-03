@@ -12,7 +12,7 @@ import (
 
 func TestTranspose8x8_Involution(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		x := rng.Uint64()
 		trans := Transpose8x8(x)
 		inv := Transpose8x8(trans)

@@ -80,7 +80,7 @@ func generateFrontierCorpus() map[string][]byte {
 
 	// 3. tabular_numeric: Sensor/telemetry/timestamps/offsets
 	tab := make([]byte, sz)
-	for i := 0; i < sz/8; i++ {
+	for i := range sz / 8 {
 		ts := uint32(1700000000 + i*5)
 		val := uint32(2000 + (i%100)*3)
 		binary.LittleEndian.PutUint32(tab[i*8:], ts)
@@ -174,13 +174,7 @@ func TestFrontiers_EmpiricalComparison(t *testing.T) {
 }
 
 func minLen(a, b, c int) int {
-	m := a
-	if b < m {
-		m = b
-	}
-	if c < m {
-		m = c
-	}
+	m := min(c, min(b, a))
 	return m
 }
 
@@ -258,4 +252,3 @@ func TestBitPlane_PerPlaneEntropy(t *testing.T) {
 		fmt.Printf("Average Bit-Plane Entropy: %.3f b/B (Sum: %.2f bits / 8 = %.3f b/B)\n", sumBits/8.0, sumBits, sumBits/8.0)
 	}
 }
-

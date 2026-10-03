@@ -88,10 +88,10 @@ func MargolusStepInplace(data []byte, H, W, phase int, ruleID uint8, inverse boo
 
 	if phase == 0 {
 		// Even step: disjoint blocks at (2i, 2j)
-		for i := 0; i < halfH; i++ {
+		for i := range halfH {
 			r0 := 2 * i * W
 			r1 := r0 + W
-			for j := 0; j < halfW; j++ {
+			for j := range halfW {
 				c0 := 2 * j
 				c1 := c0 + 1
 
@@ -109,7 +109,7 @@ func MargolusStepInplace(data []byte, H, W, phase int, ruleID uint8, inverse boo
 		}
 	} else {
 		// Odd step: disjoint blocks at (2i+1, 2j+1) with toroidal wrapping
-		for i := 0; i < halfH; i++ {
+		for i := range halfH {
 			r0Idx := 2*i + 1
 			r1Idx := r0Idx + 1
 			if r1Idx >= H {
@@ -118,7 +118,7 @@ func MargolusStepInplace(data []byte, H, W, phase int, ruleID uint8, inverse boo
 			r0 := r0Idx * W
 			r1 := r1Idx * W
 
-			for j := 0; j < halfW; j++ {
+			for j := range halfW {
 				c0 := 2*j + 1
 				c1 := c0 + 1
 				if isPow2 {
@@ -150,7 +150,7 @@ func MargolusEvolveInplace(data []byte, width, steps int, ruleID uint8) {
 		return
 	}
 	H := 2 * (n / (2 * width))
-	for t := 0; t < steps; t++ {
+	for t := range steps {
 		phase := t & 1
 		MargolusStepInplace(data, H, width, phase, ruleID, false)
 	}

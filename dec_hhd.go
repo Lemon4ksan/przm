@@ -116,7 +116,7 @@ func ReconstructDECHHD(block *DECHHDBlock, dst []byte) error {
 		if block.NNZ == 0 {
 			// Harmonic / curl-free fast path: V is constant Ex[i] everywhere!
 			exVal := block.Ex[i]
-			for j := 0; j < W; j++ {
+			for j := range W {
 				dst[rowCurr+j] = dst[rowPrev+j] ^ exVal
 			}
 		} else {
@@ -126,7 +126,7 @@ func ReconstructDECHHD(block *DECHHDBlock, dst []byte) error {
 				curlIdx++
 			}
 			// Vector XOR with previous row
-			for j := 0; j < W; j++ {
+			for j := range W {
 				dst[rowCurr+j] = dst[rowPrev+j] ^ v[j]
 			}
 		}
@@ -160,10 +160,7 @@ func DECHHDEncode(src []byte) ([]byte, error) {
 	offset := 0
 	for offset < n {
 		remaining := n - offset
-		curBlockSize := DECHHDDefaultBlockSize
-		if curBlockSize > remaining {
-			curBlockSize = remaining
-		}
+		curBlockSize := min(DECHHDDefaultBlockSize, remaining)
 
 		// Find best stride W in candidate strides
 		bestStride := -1
@@ -370,7 +367,7 @@ func DECHHDDecode(src []byte) ([]byte, error) {
 			totalCurl := (M - 1) * (W - 1)
 			curlBuf := make([]byte, totalCurl)
 
-			for k := 0; k < nnz; k++ {
+			for range nnz {
 				idx := int(binary.BigEndian.Uint16(src[srcPos : srcPos+2]))
 				val := src[srcPos+2]
 				srcPos += 3

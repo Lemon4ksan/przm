@@ -50,7 +50,7 @@ func benchmarkShader(name string, data []byte) {
 		// Benchmark Compression Speed
 		const iters = 100
 		startComp := time.Now()
-		for i := 0; i < iters; i++ {
+		for range iters {
 			_, _ = przm.Compress(data, lvl)
 		}
 		compDuration := time.Since(startComp)
@@ -59,7 +59,7 @@ func benchmarkShader(name string, data []byte) {
 		// Benchmark Decompression Speed
 		dst := make([]byte, rawSize+64)
 		startDecomp := time.Now()
-		for i := 0; i < iters; i++ {
+		for range iters {
 			_, _ = przm.DecompressTo(comp, dst)
 		}
 		decompDuration := time.Since(startDecomp)

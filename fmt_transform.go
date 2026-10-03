@@ -37,7 +37,7 @@ var (
 // Algebraic Involution Property: M_N^2 == I_N over F_2.
 func FMTByteButterflyInplace(block []byte, k int) {
 	n := 1 << k
-	for s := 0; s < k; s++ {
+	for s := range k {
 		step := 1 << s
 		stride := step << 1
 		if step >= 8 {
@@ -52,7 +52,7 @@ func FMTByteButterflyInplace(block []byte, k int) {
 			for i := 0; i < n; i += stride {
 				dstSlice := block[i+step : i+stride]
 				srcSlice := block[i : i+step]
-				for j := 0; j < step; j++ {
+				for j := range step {
 					dstSlice[j] ^= srcSlice[j]
 				}
 			}
@@ -99,7 +99,7 @@ func FMTTransformInplace(data []byte, blockLog2 uint8, bitLevel bool) {
 		FMTBitButterflySWARInplace(data[:numBlocks*blockSize])
 	}
 
-	for b := 0; b < numBlocks; b++ {
+	for b := range numBlocks {
 		block := data[b*blockSize : (b+1)*blockSize]
 		FMTByteButterflyInplace(block, k)
 	}

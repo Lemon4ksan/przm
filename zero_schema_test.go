@@ -16,13 +16,10 @@ func TestZeroSchema_GGAT_PeriodDetection(t *testing.T) {
 
 	for _, s := range testStrides {
 		data := make([]byte, s*numRows)
-		for r := 0; r < numRows; r++ {
+		for r := range numRows {
 			row := data[r*s : (r+1)*s]
-			numConst := s / 4
-			if numConst < 1 {
-				numConst = 1
-			}
-			for j := 0; j < numConst; j++ {
+			numConst := max(s/4, 1)
+			for j := range numConst {
 				row[j] = byte(0xA0 + j)
 			}
 			for j := numConst; j < s; j++ {
@@ -55,7 +52,7 @@ func TestZeroSchema_Theorem13_SpectralSegregation(t *testing.T) {
 	rand.Read(uRank)
 	vRank := []byte{0x03, 0x07, 0x0F, 0x1F}
 
-	for r := 0; r < numRows; r++ {
+	for r := range numRows {
 		row := data[r*stride : (r+1)*stride]
 
 		// 1. Const cols
@@ -71,12 +68,12 @@ func TestZeroSchema_Theorem13_SpectralSegregation(t *testing.T) {
 		row[7] = byte(r*11 + 9)
 
 		// 3. Tensor rank-1 cols
-		for k := 0; k < 4; k++ {
+		for k := range 4 {
 			row[8+k] = GF256Mul(uRank[r], vRank[k])
 		}
 
 		// 4. Entropy cols
-		for k := 0; k < 4; k++ {
+		for k := range 4 {
 			row[12+k] = byte((r*1103515245 + 12345 + k*73) >> 16)
 		}
 	}

@@ -70,10 +70,7 @@ func ComputeGGAT(src []byte, maxTau int) (int, float64) {
 
 	// Scan all tau in [2, maxTau] (fits entirely in L1 cache)
 	for tau := 2; tau <= maxTau; tau++ {
-		checkLimit := n - tau
-		if checkLimit > 4096 {
-			checkLimit = 4096
-		}
+		checkLimit := min(n-tau, 4096)
 
 		identicalCount := 0
 		hammingSum := 0
@@ -195,13 +192,10 @@ func ComputeMutualInfoMatrix(cols [][]byte) [][]float64 {
 	}
 
 	numRows := len(cols[0])
-	sampleRows := numRows
-	if sampleRows > 512 {
-		sampleRows = 512
-	}
+	sampleRows := min(numRows, 512)
 
 	entropies := make([]float64, s)
-	for j := 0; j < s; j++ {
+	for j := range s {
 		entropies[j] = computeEntropy8(cols[j][:sampleRows])
 		W[j][j] = entropies[j]
 	}
@@ -209,10 +203,10 @@ func ComputeMutualInfoMatrix(cols [][]byte) [][]float64 {
 	var jointHist [65536]uint16
 	var touched [512]uint16
 
-	for j := 0; j < s; j++ {
+	for j := range s {
 		for k := j + 1; k < s; k++ {
 			numTouched := 0
-			for r := 0; r < sampleRows; r++ {
+			for r := range sampleRows {
 				pair := (uint16(cols[j][r]) << 8) | uint16(cols[k][r])
 				if jointHist[pair] == 0 {
 					touched[numTouched] = pair
@@ -254,9 +248,9 @@ func ComputeFiedlerVector(W [][]float64) []float64 {
 
 	// 1. Degree vector and Laplacian L = D - W
 	D := make([]float64, s)
-	for i := 0; i < s; i++ {
+	for i := range s {
 		rowSum := 0.0
-		for j := 0; j < s; j++ {
+		for j := range s {
 			if i != j {
 				rowSum += W[i][j]
 			}
@@ -266,7 +260,7 @@ func ComputeFiedlerVector(W [][]float64) []float64 {
 
 	// Shifted operator M = alpha * I - (D - W) to turn smallest non-zero eigenvalue into largest
 	alpha := 0.0
-	for i := 0; i < s; i++ {
+	for i := range s {
 		if D[i] > alpha {
 			alpha = D[i]
 		}
@@ -274,7 +268,7 @@ func ComputeFiedlerVector(W [][]float64) []float64 {
 	alpha = alpha*2.0 + 1.0
 
 	// Initial random vector orthogonal to 1
-	for i := 0; i < s; i++ {
+	for i := range s {
 		v[i] = math.Sin(float64(i+1) * 1.6180339887)
 	}
 
@@ -292,13 +286,13 @@ func ComputeFiedlerVector(W [][]float64) []float64 {
 	deflate(v)
 
 	// Power iteration (25 iterations are sufficient for small s <= 64)
-	for iter := 0; iter < 25; iter++ {
+	for range 25 {
 		// next = M * v
 		next := make([]float64, s)
-		for i := 0; i < s; i++ {
+		for i := range s {
 			// Lv_i = D[i]*v[i] - sum(W[i][j]*v[j])
 			Lv_i := D[i] * v[i]
-			for j := 0; j < s; j++ {
+			for j := range s {
 				if i != j {
 					Lv_i -= W[i][j] * v[j]
 				}
@@ -361,9 +355,9 @@ func SynthesizeStructure(src []byte) (*SynthesizedSchema, error) {
 
 	// 2. Extract column vectors
 	cols := make([][]byte, stride)
-	for j := 0; j < stride; j++ {
+	for j := range stride {
 		cols[j] = make([]byte, numRows)
-		for r := 0; r < numRows; r++ {
+		for r := range numRows {
 			cols[j][r] = src[r*stride+j]
 		}
 	}
@@ -371,7 +365,7 @@ func SynthesizeStructure(src []byte) (*SynthesizedSchema, error) {
 	// 3. Compute column-wise statistics
 	colEntropy := make([]float64, stride)
 	colDiffEntropy := make([]float64, stride)
-	for j := 0; j < stride; j++ {
+	for j := range stride {
 		colEntropy[j] = computeEntropy8(cols[j])
 		colDiffEntropy[j] = computeDiffEntropy(cols[j])
 	}
@@ -389,7 +383,7 @@ func SynthesizeStructure(src []byte) (*SynthesizedSchema, error) {
 	var tensorGroupA []int
 	var tensorGroupB []int
 
-	for j := 0; j < stride; j++ {
+	for j := range stride {
 		ent := colEntropy[j]
 		diffEnt := colDiffEntropy[j]
 

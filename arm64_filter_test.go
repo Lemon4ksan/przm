@@ -21,13 +21,13 @@ func generateARM64Binary(numFuncs int, callsPerFunc int) []byte {
 	var buf bytes.Buffer
 	targetFuncs := []uint32{0x1000, 0x1400, 0x2000, 0x2800}
 
-	for f := 0; f < numFuncs; f++ {
+	for range numFuncs {
 		// Prologue: STP x29, x30, [sp, #-16]! (0xA9BF7BFD)
 		//           MOV x29, sp               (0x910003FD)
 		_ = binary.Write(&buf, binary.LittleEndian, uint32(0xA9BF7BFD))
 		_ = binary.Write(&buf, binary.LittleEndian, uint32(0x910003FD))
 
-		for c := 0; c < callsPerFunc; c++ {
+		for c := range callsPerFunc {
 			// Some ALU work: ADD x0, x0, #1 (0x91000400)
 			_ = binary.Write(&buf, binary.LittleEndian, uint32(0x91000400))
 
@@ -86,7 +86,7 @@ func TestARM64Filter_TargetCollimation(t *testing.T) {
 	targetFunc := uint32(0x5000)
 
 	callPCs := []int{}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		// Insert variable padding instructions
 		for p := 0; p < i*3+2; p++ {
 			_ = binary.Write(&buf, binary.LittleEndian, uint32(0x91000400))
@@ -233,4 +233,3 @@ func TestPRZM_Compress_ARM64(t *testing.T) {
 		t.Fatal("Decompressed binary does not match original!")
 	}
 }
-

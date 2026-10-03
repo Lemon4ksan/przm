@@ -55,7 +55,7 @@ func main() {
 		// Full AES (10 rounds) encrypting random noise
 		numBlocks := sz / 16
 		ct := make([]byte, numBlocks*16)
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			c := aes_distinguisher.EncryptReducedRound(noise[i*16:(i+1)*16], key, 10, true)
 			copy(ct[i*16:(i+1)*16], c[:])
 		}
@@ -75,13 +75,13 @@ func main() {
 	var sumDeltaPct float64
 	minPct, maxPct := 100.0, -100.0
 
-	for k := 0; k < numKeys; k++ {
+	for range numKeys {
 		rndKey := make([]byte, 16)
 		rand.Read(rndKey)
 
 		numBlocks := sampleSize / 16
 		ct := make([]byte, sampleSize)
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			c := aes_distinguisher.EncryptReducedRound(pt[i*16:(i+1)*16], rndKey, 10, true)
 			copy(ct[i*16:(i+1)*16], c[:])
 		}

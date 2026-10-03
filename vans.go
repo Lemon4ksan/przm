@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 )
 
@@ -50,9 +51,9 @@ func BuildFrequencyMatrix(src []byte) Matrix16x16 {
 // MarginalHigh returns the marginal counts of high nibbles: f_H(h) = sum_l Counts[h][l].
 func (m *Matrix16x16) MarginalHigh() [16]uint32 {
 	var fH [16]uint32
-	for h := 0; h < 16; h++ {
+	for h := range 16 {
 		sum := uint32(0)
-		for l := 0; l < 16; l++ {
+		for l := range 16 {
 			sum += m.Counts[(h<<4)|l]
 		}
 		fH[h] = sum
@@ -63,9 +64,9 @@ func (m *Matrix16x16) MarginalHigh() [16]uint32 {
 // MarginalLow returns the marginal counts of low nibbles: f_L(l) = sum_h Counts[h][l].
 func (m *Matrix16x16) MarginalLow() [16]uint32 {
 	var fL [16]uint32
-	for l := 0; l < 16; l++ {
+	for l := range 16 {
 		sum := uint32(0)
-		for h := 0; h < 16; h++ {
+		for h := range 16 {
 			sum += m.Counts[(h<<4)|l]
 		}
 		fL[l] = sum
@@ -85,12 +86,12 @@ func (m *Matrix16x16) MutualInformation() float64 {
 	total := float64(m.Total)
 
 	mi := 0.0
-	for h := 0; h < 16; h++ {
+	for h := range 16 {
 		pH := float64(fH[h]) / total
 		if pH == 0 {
 			continue
 		}
-		for l := 0; l < 16; l++ {
+		for l := range 16 {
 			c := m.Counts[(h<<4)|l]
 			if c == 0 {
 				continue
@@ -110,8 +111,8 @@ func (m *Matrix16x16) JointEntropy() float64 {
 	}
 	total := float64(m.Total)
 	ent := 0.0
-	for h := 0; h < 16; h++ {
-		for l := 0; l < 16; l++ {
+	for h := range 16 {
+		for l := range 16 {
 			c := m.Counts[(h<<4)|l]
 			if c > 0 {
 				p := float64(c) / total
@@ -132,7 +133,7 @@ func (m *Matrix16x16) Normalize(targetM uint32) [256]uint16 {
 	}
 
 	active := 0
-	for s := 0; s < 256; s++ {
+	for s := range 256 {
 		if m.Counts[s] > 0 {
 			active++
 		}
@@ -144,7 +145,7 @@ func (m *Matrix16x16) Normalize(targetM uint32) [256]uint16 {
 
 	if uint32(active) >= targetM {
 		// Degenerate case: more active symbols than states (not possible with 256 symbols and M=4096)
-		for s := 0; s < 256; s++ {
+		for s := range 256 {
 			norm[s] = uint16(targetM / 256)
 		}
 		return norm
@@ -161,7 +162,7 @@ func (m *Matrix16x16) Normalize(targetM uint32) [256]uint16 {
 	rems := make([]remainder, 0, active)
 
 	allocated := uint32(0)
-	for s := 0; s < 256; s++ {
+	for s := range 256 {
 		c := m.Counts[s]
 		if c > 0 {
 			prod := uint64(c) * uint64(remTarget)
@@ -202,10 +203,10 @@ func NewVANSModel(m *Matrix16x16) *VANSModel {
 		Freq: m.Normalize(vansM),
 	}
 	cdf := uint32(0)
-	for s := 0; s < 256; s++ {
+	for s := range 256 {
 		model.CDF[s] = uint16(cdf)
 		f := uint32(model.Freq[s])
-		for j := uint32(0); j < f; j++ {
+		for j := range f {
 			slot := cdf + j
 			slot_minus_c := j
 			entry := uint32(s) | (slot_minus_c << 8) | ((f - 1) << 20)
@@ -223,10 +224,10 @@ func NewVANSModelFromFreq(freq [256]uint16) *VANSModel {
 		Freq: freq,
 	}
 	cdf := uint32(0)
-	for s := 0; s < 256; s++ {
+	for s := range 256 {
 		model.CDF[s] = uint16(cdf)
 		f := uint32(model.Freq[s])
-		for j := uint32(0); j < f; j++ {
+		for j := range f {
 			slot := cdf + j
 			slot_minus_c := j
 			entry := uint32(s) | (slot_minus_c << 8) | ((f - 1) << 20)
@@ -243,9 +244,9 @@ func (model *VANSModel) SerializeMatrix() []byte {
 	var buf []byte
 	// 1. Active rows mask (16 bits: 2 bytes)
 	var rowMask uint16
-	for h := 0; h < 16; h++ {
+	for h := range 16 {
 		rowActive := false
-		for l := 0; l < 16; l++ {
+		for l := range 16 {
 			if model.Freq[(h<<4)|l] > 0 {
 				rowActive = true
 				break
@@ -258,12 +259,12 @@ func (model *VANSModel) SerializeMatrix() []byte {
 	buf = binary.LittleEndian.AppendUint16(buf, rowMask)
 
 	// 2. For each active row, 16-bit column mask + frequencies
-	for h := 0; h < 16; h++ {
+	for h := range 16 {
 		if (rowMask & (1 << h)) == 0 {
 			continue
 		}
 		var colMask uint16
-		for l := 0; l < 16; l++ {
+		for l := range 16 {
 			if model.Freq[(h<<4)|l] > 0 {
 				colMask |= 1 << l
 			}
@@ -271,7 +272,7 @@ func (model *VANSModel) SerializeMatrix() []byte {
 		buf = binary.LittleEndian.AppendUint16(buf, colMask)
 
 		// Encode weights: values 1..vansM
-		for l := 0; l < 16; l++ {
+		for l := range 16 {
 			if (colMask & (1 << l)) == 0 {
 				continue
 			}
@@ -297,7 +298,7 @@ func DeserializeMatrix(src []byte) (*VANSModel, int, error) {
 	var freq [256]uint16
 	sum := uint32(0)
 
-	for h := 0; h < 16; h++ {
+	for h := range 16 {
 		if (rowMask & (1 << h)) == 0 {
 			continue
 		}
@@ -307,7 +308,7 @@ func DeserializeMatrix(src []byte) (*VANSModel, int, error) {
 		colMask := binary.LittleEndian.Uint16(src[ptr : ptr+2])
 		ptr += 2
 
-		for l := 0; l < 16; l++ {
+		for l := range 16 {
 			if (colMask & (1 << l)) == 0 {
 				continue
 			}
@@ -353,7 +354,7 @@ func VANSEncode4x(src []byte) ([]byte, error) {
 
 	// 2. Initialize 4 independent vector states
 	var x [4]uint32
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		x[i] = vansL
 	}
 
@@ -392,15 +393,15 @@ func VANSEncode4x(src []byte) ([]byte, error) {
 	out = append(out, matBytes...)
 
 	// Put 4 final states
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		var stBuf [4]byte
 		binary.LittleEndian.PutUint32(stBuf[:], x[i])
 		out = append(out, stBuf[:]...)
 	}
 
 	// Append reversed bitstream so decompressor reads forward
-	for i := len(bitstream) - 1; i >= 0; i-- {
-		out = append(out, bitstream[i])
+	for _, b := range slices.Backward(bitstream) {
+		out = append(out, b)
 	}
 
 	return out, nil
@@ -442,7 +443,7 @@ func VANSDecode4x(src []byte) ([]byte, error) {
 
 	// Read 4 initial states
 	var x [4]uint32
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		x[i] = binary.LittleEndian.Uint32(src[ptr : ptr+4])
 		ptr += 4
 	}
@@ -451,7 +452,7 @@ func VANSDecode4x(src []byte) ([]byte, error) {
 	dst := make([]byte, origLen)
 
 	// Decode in forward order across 4 interleaved lanes
-	for i := 0; i < origLen; i++ {
+	for i := range origLen {
 		lane := i & 3
 
 		slot := x[lane] & (vansM - 1)

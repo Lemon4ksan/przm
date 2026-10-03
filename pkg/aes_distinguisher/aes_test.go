@@ -49,7 +49,6 @@ func TestFIPS197_AppendixB(t *testing.T) {
 
 	expectedR2RoundKey := fromHex16(t, "f2c295f27a96b9435935807a7359f67f")
 
-
 	expectedFullCiphertext := fromHex16(t, "3925841d02dc09fbdc118597196a0b32")
 
 	// 1. Verify Round 0 tap
@@ -173,7 +172,7 @@ func TestKeySchedule_LinearInvariants(t *testing.T) {
 		[]byte("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f"),
 	}
 
-	for trial := 0; trial < 10; trial++ {
+	for range 10 {
 		rndKey := make([]byte, 16)
 		_, _ = rand.Read(rndKey)
 		testKeys = append(testKeys, rndKey)
@@ -188,7 +187,7 @@ func TestKeySchedule_LinearInvariants(t *testing.T) {
 		// Convert round keys back into words W_0 .. W_43
 		w := make([]uint32, 44)
 		for r := 0; r <= 10; r++ {
-			for col := 0; col < 4; col++ {
+			for col := range 4 {
 				w[4*r+col] = uint32(rks[r][4*col]) |
 					(uint32(rks[r][4*col+1]) << 8) |
 					(uint32(rks[r][4*col+2]) << 16) |
@@ -243,7 +242,7 @@ func TestKeyScheduleModes(t *testing.T) {
 	delta := byte(0x05)
 	linearKeys := ExpandKey(key[:], 5, KeyScheduleLinear, delta)
 	for r := 0; r <= 5; r++ {
-		for i := 0; i < 16; i++ {
+		for i := range 16 {
 			expected := key[i] ^ byte(r*int(delta))
 			if linearKeys[r][i] != expected {
 				t.Errorf("KeyScheduleLinear round %d byte %d mismatch: got %x, want %x", r, i, linearKeys[r][i], expected)
@@ -296,7 +295,7 @@ func TestReducedRoundLadder(t *testing.T) {
 			if err != nil {
 				t.Fatalf("EncryptStream failed: %v", err)
 			}
-			for b := 0; b < 4; b++ {
+			for b := range 4 {
 				if !bytes.Equal(multiCT[b*16:(b+1)*16], ct[:]) {
 					t.Errorf("Stream block %d mismatch for rounds %d", b, rounds)
 				}
@@ -309,9 +308,9 @@ func TestReducedRoundLadder(t *testing.T) {
 // For any c in GF(2^8), MixColumns([c, c, c, c]^T) == [c, c, c, c]^T (eigenvalue lambda = 1).
 func TestMixColumns_InvariantSubspace(t *testing.T) {
 	// 1. Test all 256 uniform states where every byte is c in GF(2^8)
-	for c := 0; c < 256; c++ {
+	for c := range 256 {
 		var s [16]byte
-		for i := 0; i < 16; i++ {
+		for i := range 16 {
 			s[i] = byte(c)
 		}
 		expected := s
@@ -327,7 +326,7 @@ func TestMixColumns_InvariantSubspace(t *testing.T) {
 			for col2 := 0; col2 < 256; col2 += 64 {
 				for col3 := 0; col3 < 256; col3 += 64 {
 					var s [16]byte
-					for r := 0; r < 4; r++ {
+					for r := range 4 {
 						s[0*4+r] = byte(col0)
 						s[1*4+r] = byte(col1)
 						s[2*4+r] = byte(col2)

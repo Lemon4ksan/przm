@@ -104,7 +104,7 @@ func TestVM_Theorem16_StateCarry(t *testing.T) {
 	}
 
 	totalHdrBytes := 0
-	for c := 0; c < numChunks; c++ {
+	for c := range numChunks {
 		chunk := make([]byte, chunkSize)
 		for i := range chunk {
 			chunk[i] = byte(c*100 + i*7)
@@ -247,10 +247,10 @@ func TestVM_OpMargolus_And_OpMobius_Execution(t *testing.T) {
 	progMargolus := &VMProgram{
 		Stride: 64,
 		Instructions: []VMInstruction{
-			EncodeInstruction(OpLOADSTREAM, 0, 0, 0, 0),    // Z0 = Load stream0
-			EncodeInstruction(OpMARGOLUS, 0, 0, 0, 0x100),  // Forward step phase 0 (rule BBM)
-			EncodeInstruction(OpMARGOLUS, 0, 0, 0, 0x000),  // Inverse step phase 0 (rule BBM)
-			EncodeInstruction(OpEMIT, 0, 0, 0, 0),          // Emit Z0
+			EncodeInstruction(OpLOADSTREAM, 0, 0, 0, 0),   // Z0 = Load stream0
+			EncodeInstruction(OpMARGOLUS, 0, 0, 0, 0x100), // Forward step phase 0 (rule BBM)
+			EncodeInstruction(OpMARGOLUS, 0, 0, 0, 0x000), // Inverse step phase 0 (rule BBM)
+			EncodeInstruction(OpEMIT, 0, 0, 0, 0),         // Emit Z0
 		},
 	}
 

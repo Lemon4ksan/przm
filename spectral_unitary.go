@@ -36,10 +36,10 @@ func IdentityUnitary4() UnitaryMatrix4 {
 // Mul multiplies two 4x4 matrices over F_{2^8}.
 func (u UnitaryMatrix4) Mul(v UnitaryMatrix4) UnitaryMatrix4 {
 	var res UnitaryMatrix4
-	for i := 0; i < 4; i++ {
-		for j := 0; j < 4; j++ {
+	for i := range 4 {
+		for j := range 4 {
 			var sum uint8
-			for k := 0; k < 4; k++ {
+			for k := range 4 {
 				sum ^= GF256Mul(u[i][k], v[k][j])
 			}
 			res[i][j] = sum
@@ -51,8 +51,8 @@ func (u UnitaryMatrix4) Mul(v UnitaryMatrix4) UnitaryMatrix4 {
 // Transpose returns the transpose U^T. Over F_{2^8}, U^T = U^{-1} for orthogonal matrices.
 func (u UnitaryMatrix4) Transpose() UnitaryMatrix4 {
 	var res UnitaryMatrix4
-	for i := 0; i < 4; i++ {
-		for j := 0; j < 4; j++ {
+	for i := range 4 {
+		for j := range 4 {
 			res[i][j] = u[j][i]
 		}
 	}
@@ -85,10 +85,10 @@ func GivensRotation4(chA, chB int, c uint8) UnitaryMatrix4 {
 func ComputeGramMatrix4(data []byte) [4][4]uint8 {
 	var rho [4][4]uint8
 	n := len(data) / 4
-	for t := 0; t < n; t++ {
+	for t := range n {
 		v := data[t*4 : (t+1)*4]
-		for i := 0; i < 4; i++ {
-			for j := 0; j < 4; j++ {
+		for i := range 4 {
+			for j := range 4 {
 				rho[i][j] ^= GF256Mul(v[i], v[j])
 			}
 		}
@@ -99,8 +99,8 @@ func ComputeGramMatrix4(data []byte) [4][4]uint8 {
 // OffDiagonalSum returns the sum of off-diagonal magnitudes in rho.
 func OffDiagonalSum(rho [4][4]uint8) int {
 	sum := 0
-	for i := 0; i < 4; i++ {
-		for j := 0; j < 4; j++ {
+	for i := range 4 {
+		for j := range 4 {
 			if i != j {
 				sum += int(rho[i][j])
 			}
@@ -157,14 +157,14 @@ func FindOptimalUnitary4(rho [4][4]uint8) UnitaryMatrix4 {
 // ApplyUnitary4 transforms rows of src: Y = X * U^T over F_{2^8}.
 func ApplyUnitary4(src []byte, U UnitaryMatrix4, dst []byte) {
 	n := len(src) / 4
-	for t := 0; t < n; t++ {
+	for t := range n {
 		s := src[t*4 : (t+1)*4]
 		d := dst[t*4 : (t+1)*4]
 
 		// Y[j] = sum_k (X[k] * U^T[k][j]) = sum_k (X[k] * U[j][k])
-		for j := 0; j < 4; j++ {
+		for j := range 4 {
 			var sum uint8
-			for k := 0; k < 4; k++ {
+			for k := range 4 {
 				sum ^= GF256Mul(s[k], U[j][k])
 			}
 			d[j] = sum
@@ -176,14 +176,14 @@ func ApplyUnitary4(src []byte, U UnitaryMatrix4, dst []byte) {
 // Zero allocations: operates directly on slice buffers.
 func InvertUnitary4(src []byte, U UnitaryMatrix4, dst []byte) {
 	n := len(src) / 4
-	for t := 0; t < n; t++ {
+	for t := range n {
 		s0 := src[t*4]
 		s1 := src[t*4+1]
 		s2 := src[t*4+2]
 		s3 := src[t*4+3]
 		d := dst[t*4 : (t+1)*4]
 
-		for j := 0; j < 4; j++ {
+		for j := range 4 {
 			d[j] = GF256Mul(s0, U[0][j]) ^ GF256Mul(s1, U[1][j]) ^ GF256Mul(s2, U[2][j]) ^ GF256Mul(s3, U[3][j])
 		}
 	}
@@ -230,8 +230,8 @@ func CompressSpectralUnitary(src []byte) []byte {
 		dst[4] = SpectralModeCompressed
 		binary.LittleEndian.PutUint32(dst[5:9], uint32(n))
 		pos := 9
-		for i := 0; i < 4; i++ {
-			for j := 0; j < 4; j++ {
+		for i := range 4 {
+			for j := range 4 {
 				dst[pos] = U[i][j]
 				pos++
 			}
@@ -252,8 +252,8 @@ func CompressSpectralUnitary(src []byte) []byte {
 
 	// Write 4x4 matrix U (16 bytes)
 	pos := 9
-	for i := 0; i < 4; i++ {
-		for j := 0; j < 4; j++ {
+	for i := range 4 {
+		for j := range 4 {
 			dst[pos] = U[i][j]
 			pos++
 		}
@@ -326,8 +326,8 @@ func DecompressSpectralUnitary(src []byte, dst []byte) ([]byte, error) {
 	// Read 4x4 matrix U
 	var U UnitaryMatrix4
 	pos := 9
-	for i := 0; i < 4; i++ {
-		for j := 0; j < 4; j++ {
+	for i := range 4 {
+		for j := range 4 {
 			U[i][j] = src[pos]
 			pos++
 		}

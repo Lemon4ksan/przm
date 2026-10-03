@@ -20,12 +20,12 @@ import (
 )
 
 var (
-	cDLL                  *syscall.LazyDLL
-	procDecompress        *syscall.LazyProc
-	procSheafDecompress   *syscall.LazyProc
-	procHeisUnfoliate     *syscall.LazyProc
-	initDLLOnce           sync.Once
-	dllAvailable          bool
+	cDLL                *syscall.LazyDLL
+	procDecompress      *syscall.LazyProc
+	procSheafDecompress *syscall.LazyProc
+	procHeisUnfoliate   *syscall.LazyProc
+	initDLLOnce         sync.Once
+	dllAvailable        bool
 )
 
 func initCDLL(t *testing.T) {
@@ -147,7 +147,7 @@ func TestDifferential_Sheaf_AllTwistsAndModes_10k(t *testing.T) {
 					curlData := make([]byte, 4+nnz*5)
 					binary.LittleEndian.PutUint32(curlData[0:4], uint32(nnz))
 					maxFaces := (M - 1) * (W - 1)
-					for c := 0; c < nnz; c++ {
+					for c := range nnz {
 						k := uint32(c * (maxFaces / nnz))
 						binary.LittleEndian.PutUint32(curlData[4+c*5:4+c*5+4], k)
 						curlData[4+c*5+4] = uint8(rng.Intn(256))
@@ -190,7 +190,7 @@ func TestDifferential_Sheaf_AllTwistsAndModes_10k(t *testing.T) {
 
 	// 2. Cascaded PWS Sheaf Frames across Twists (3,000 cases)
 	t.Run("Cascaded_PWS_Sheaf_Frames", func(t *testing.T) {
-		for i := 0; i < 3000; i++ {
+		for i := range 3000 {
 			twist := uint8((i % 255) + 1)
 			M := (rng.Intn(16) + 2)
 			W := (rng.Intn(16) + 2)
@@ -242,7 +242,7 @@ func TestDifferential_Sheaf_AllTwistsAndModes_10k(t *testing.T) {
 
 	// 3. Raw Passthrough and Remainder Bytes (3,000 cases)
 	t.Run("Sheaf_Raw_And_Remainder", func(t *testing.T) {
-		for i := 0; i < 3000; i++ {
+		for i := range 3000 {
 			M := (rng.Intn(8) + 2)
 			W := (rng.Intn(8) + 2)
 			rem := rng.Intn(16)
@@ -436,7 +436,7 @@ func TestDifferential_Heisenberg_StridesAndOddLengths_10k(t *testing.T) {
 
 	// 4. Massive Randomized Fuzzing: 10,000 randomized iterations
 	t.Run("Massive_Randomized_Fuzzing", func(t *testing.T) {
-		for iter := 0; iter < 10000; iter++ {
+		for iter := range 10000 {
 			length := rng.Intn(512) + 1
 			stride := byte(3)
 			if rng.Intn(2) == 0 {
@@ -667,14 +667,14 @@ func TestGo_ConcurrencyStress_100Goroutines(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, numGoroutines)
 
-	for g := 0; g < numGoroutines; g++ {
+	for g := range numGoroutines {
 		wg.Add(1)
 		go func(gid int) {
 			defer wg.Done()
 			rng := rand.New(rand.NewSource(int64(gid*31337 + 17)))
 			dst := bufkit.AlignedBytes(8192, bufkit.CacheLineSize)
 
-			for iter := 0; iter < itersPerGoroutine; iter++ {
+			for iter := range itersPerGoroutine {
 				// Alternate between Sheaf and Heisenberg
 				if (iter & 1) == 0 {
 					twist := uint8((iter % 255) + 1)

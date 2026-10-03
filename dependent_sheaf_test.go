@@ -29,7 +29,7 @@ func generateProtobufPayload(numRecords int) []byte {
 	usernames := []string{"admin", "service_worker_01", "node_cluster_alpha", "db_syncer", "metrics_exporter"}
 	domains := []string{"example.internal", "cloud.corp.net", "k8s.local", "prod.infra.io"}
 
-	for i := 0; i < numRecords; i++ {
+	for i := range numRecords {
 		// Field 1: user_id (tag = (1 << 3) | 0 = 0x08)
 		buf = appendVarint(buf, (1<<3)|0)
 		buf = appendVarint(buf, uint64(100000+i))

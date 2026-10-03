@@ -243,7 +243,7 @@ func isHighEntropy(src []byte) bool {
 	}
 	var hist [256]uint8
 	unique := 0
-	for i := 0; i < sampleLen; i++ {
+	for i := range sampleLen {
 		b := src[i]
 		if hist[b] == 0 {
 			unique++
@@ -265,14 +265,14 @@ func isCandidateAST(src []byte) bool {
 	}
 	// Quick binary check: reject if null bytes or non-printable ASCII control bytes appear
 	checkLen := min(sampleLen, 256)
-	for i := 0; i < checkLen; i++ {
+	for i := range checkLen {
 		b := src[i]
 		if b == 0 || (b < 0x09 && b > 0x00) || (b > 0x0D && b < 0x20) {
 			return false
 		}
 	}
 	openCount, closeCount := 0, 0
-	for i := 0; i < sampleLen; i++ {
+	for i := range sampleLen {
 		switch src[i] {
 		case '{', '[', '(':
 			openCount++
@@ -363,7 +363,7 @@ func isCandidateTDA(src []byte) bool {
 	zeroCount := 0
 	words := sampleLen / 8
 	repWords := 0
-	for i := 0; i < words; i++ {
+	for i := range words {
 		w := binary.LittleEndian.Uint64(src[i*8 : (i+1)*8])
 		if w == 0 {
 			zeroCount += 8
@@ -437,7 +437,6 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 	var cellularSheafCandidate []byte
 	var mobiusCandidate []byte
 	var margolusCandidate []byte
-
 
 	// PRZM v0.5 Phase 17: Evaluate Monoidal Dependent-Type Sheaf Stratification for Protobuf/TLV (Theorem 38)
 	isProtobuf := DetectProtobufTLV(origSrc)

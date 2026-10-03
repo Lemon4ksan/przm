@@ -340,10 +340,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 	litPtr := 0
 
 	// Initialize Ring-16 locality queue
-	stride := int(hdr.Stride)
-	if stride < 1 {
-		stride = 1
-	}
+	stride := max(int(hdr.Stride), 1)
 	q := [16]int{1, stride, 2 * stride, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384}
 
 	dstPos := 0
@@ -427,7 +424,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 				pattern := b0 | (b1 << 8) | (b2 << 16) | (b0 << 24) | (b1 << 32) | (b2 << 40) | (b0 << 48) | (b1 << 56)
 				*(*uint64)(unsafe.Add(baseDst, dstPos)) = pattern
 			} else {
-				for i := 0; i < mLen; i++ {
+				for i := range mLen {
 					*(*byte)(unsafe.Add(baseDst, dstPos+i)) = *(*byte)(unsafe.Add(baseDst, srcIdx+i))
 				}
 			}
@@ -625,7 +622,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 					*(*byte)(unsafe.Add(baseDst, dstPos+r1)) ^= x1
 				}
 			} else {
-				for mMod := 0; mMod < cMods; mMod++ {
+				for range cMods {
 					var relOffset int
 					if mLen <= 256 {
 						if litPtr >= len(lits) {
@@ -705,7 +702,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 					*(*byte)(unsafe.Add(baseDst, dstPos+r1)) ^= x1
 				}
 			} else {
-				for mMod := 0; mMod < cMods; mMod++ {
+				for range cMods {
 					var relOffset int
 					if mLen <= 256 {
 						if litPtr >= len(lits) {

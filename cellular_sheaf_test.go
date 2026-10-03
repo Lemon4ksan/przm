@@ -36,7 +36,7 @@ func TestCellularSheaf_CoboundaryNilpotency(t *testing.T) {
 
 			// Test with multiple pseudo-random 0-cochains
 			rng := rand.New(rand.NewSource(int64(M*1000 + W*10 + int(twist))))
-			for iter := 0; iter < 20; iter++ {
+			for range 20 {
 				phi := make(przm.Cochain0, M*W)
 				for i := range phi {
 					phi[i] = uint8(rng.Intn(256))
@@ -157,12 +157,12 @@ func TestCellularSheaf_LosslessRoundtrip_AllModes(t *testing.T) {
 				b[0] = 0x42
 				eh := []byte{1, 2, 3, 4, 5, 6, 7}
 				ev := []byte{10, 20, 30, 40, 50, 60, 70}
-				for j := 0; j < 7; j++ {
+				for j := range 7 {
 					b[j+1] = b[j] ^ eh[j]
 				}
 				for i := 1; i < 8; i++ {
 					v := ev[i-1]
-					for j := 0; j < 8; j++ {
+					for j := range 8 {
 						b[i*8+j] = b[(i-1)*8+j] ^ v
 					}
 				}
@@ -177,11 +177,11 @@ func TestCellularSheaf_LosslessRoundtrip_AllModes(t *testing.T) {
 				b[0] = 0x11
 				gammaH := byte(0x03)
 				gammaV := byte(0x05)
-				for j := 0; j < 15; j++ {
+				for j := range 15 {
 					b[j+1] = b[j] ^ gammaH
 				}
 				for i := 1; i < 16; i++ {
-					for j := 0; j < 16; j++ {
+					for j := range 16 {
 						b[i*16+j] = b[(i-1)*16+j] ^ gammaV
 					}
 				}
@@ -193,7 +193,7 @@ func TestCellularSheaf_LosslessRoundtrip_AllModes(t *testing.T) {
 			data: func() []byte {
 				// 64 bytes grid + 5 trailing bytes
 				b := make([]byte, 69)
-				for i := 0; i < 64; i++ {
+				for i := range 64 {
 					b[i] = byte(i * 3)
 				}
 				for i := 64; i < 69; i++ {
@@ -206,7 +206,7 @@ func TestCellularSheaf_LosslessRoundtrip_AllModes(t *testing.T) {
 			name: "SparseCurl_Stride8",
 			data: func() []byte {
 				b := make([]byte, 64)
-				for i := 0; i < 64; i++ {
+				for i := range 64 {
 					b[i] = byte(i)
 				}
 				// Perturb 2 interior vertices to create localized curl
@@ -221,12 +221,12 @@ func TestCellularSheaf_LosslessRoundtrip_AllModes(t *testing.T) {
 				// 64 x 64 = 4096 bytes
 				b := make([]byte, 4096)
 				b[0] = 0x7F
-				for j := 0; j < 63; j++ {
+				for j := range 63 {
 					b[j+1] = b[j] ^ byte((j%7)+1)
 				}
 				for i := 1; i < 64; i++ {
 					v := byte((i % 5) + 2)
-					for j := 0; j < 64; j++ {
+					for j := range 64 {
 						b[i*64+j] = b[(i-1)*64+j] ^ v
 					}
 				}
@@ -271,12 +271,12 @@ func TestCellularSheaf_ZeroAllocDecompression(t *testing.T) {
 	// 4096 bytes harmonic curl-free grid
 	orig := make([]byte, 4096)
 	orig[0] = 0x22
-	for j := 0; j < 63; j++ {
+	for j := range 63 {
 		orig[j+1] = orig[j] ^ byte(j+1)
 	}
 	for i := 1; i < 64; i++ {
 		v := byte(i + 1)
-		for j := 0; j < 64; j++ {
+		for j := range 64 {
 			orig[i*64+j] = orig[(i-1)*64+j] ^ v
 		}
 	}
@@ -310,11 +310,11 @@ func TestCellularSheaf_CompressionRatioAdvantage(t *testing.T) {
 	orig[0] = 0x99
 	gammaH := byte(0x01)
 	gammaV := byte(0x02)
-	for j := 0; j < 63; j++ {
+	for j := range 63 {
 		orig[j+1] = orig[j] ^ gammaH
 	}
 	for i := 1; i < 64; i++ {
-		for j := 0; j < 64; j++ {
+		for j := range 64 {
 			orig[i*64+j] = orig[(i-1)*64+j] ^ gammaV
 		}
 	}
@@ -381,12 +381,12 @@ func TestCellularSheaf_PureCDecompressorInterop(t *testing.T) {
 			data: func() []byte {
 				b := make([]byte, 64)
 				b[0] = 0x55
-				for j := 0; j < 7; j++ {
+				for j := range 7 {
 					b[j+1] = b[j] ^ byte(j+2)
 				}
 				for i := 1; i < 8; i++ {
 					v := byte(i * 3)
-					for j := 0; j < 8; j++ {
+					for j := range 8 {
 						b[i*8+j] = b[(i-1)*8+j] ^ v
 					}
 				}
@@ -410,11 +410,11 @@ func TestCellularSheaf_PureCDecompressorInterop(t *testing.T) {
 			data: func() []byte {
 				b := make([]byte, 256)
 				b[0] = 0xAA
-				for j := 0; j < 15; j++ {
+				for j := range 15 {
 					b[j+1] = b[j] ^ 0x03
 				}
 				for i := 1; i < 16; i++ {
-					for j := 0; j < 16; j++ {
+					for j := range 16 {
 						b[i*16+j] = b[(i-1)*16+j] ^ 0x07
 					}
 				}

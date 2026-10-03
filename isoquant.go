@@ -14,8 +14,8 @@ import (
 // Frame constants for 4D IsoQuant Quaternionic Collimation (PRZM-SPEC-0.5).
 const (
 	PRZM_MAGIC_ISOQUANT uint32 = 0x514F5349 // "ISOQ" in Little-Endian
-	IsoQuantMagic      uint32 = 0x514F5349
-	IsoQuantHeaderSize int    = 20
+	IsoQuantMagic       uint32 = 0x514F5349
+	IsoQuantHeaderSize  int    = 20
 
 	IsoQuantModeRaw        uint8 = 0 // Raw passthrough bypass
 	IsoQuantModeCollimated uint8 = 1 // Collimated 4D stream
@@ -91,7 +91,7 @@ func IsoQuantCollimation4D(dst, src []byte, qL, qR Quaternion4) {
 	limit := (len(src) / 4) * 4
 	for i := 0; i < limit; i += 4 {
 		v0, v1, v2, v3 := src[i], src[i+1], src[i+2], src[i+3]
-		dst[i]   = GF256Mul(qEff[0], v0) ^ GF256Mul(qEff[1], v1) ^ GF256Mul(qEff[2], v2) ^ GF256Mul(qEff[3], v3)
+		dst[i] = GF256Mul(qEff[0], v0) ^ GF256Mul(qEff[1], v1) ^ GF256Mul(qEff[2], v2) ^ GF256Mul(qEff[3], v3)
 		dst[i+1] = GF256Mul(qEff[0], v1) ^ GF256Mul(qEff[1], v0) ^ GF256Mul(qEff[2], v3) ^ GF256Mul(qEff[3], v2)
 		dst[i+2] = GF256Mul(qEff[0], v2) ^ GF256Mul(qEff[2], v0) ^ GF256Mul(qEff[1], v3) ^ GF256Mul(qEff[3], v1)
 		dst[i+3] = GF256Mul(qEff[0], v3) ^ GF256Mul(qEff[3], v0) ^ GF256Mul(qEff[1], v2) ^ GF256Mul(qEff[2], v1)
@@ -119,7 +119,7 @@ func IsoQuantUncollimation4DInplace(dst []byte, qLInv, qRInv Quaternion4) {
 	limit := (len(dst) / 4) * 4
 	for i := 0; i < limit; i += 4 {
 		v0, v1, v2, v3 := dst[i], dst[i+1], dst[i+2], dst[i+3]
-		dst[i]   = GF256Mul(qEff[0], v0) ^ GF256Mul(qEff[1], v1) ^ GF256Mul(qEff[2], v2) ^ GF256Mul(qEff[3], v3)
+		dst[i] = GF256Mul(qEff[0], v0) ^ GF256Mul(qEff[1], v1) ^ GF256Mul(qEff[2], v2) ^ GF256Mul(qEff[3], v3)
 		dst[i+1] = GF256Mul(qEff[0], v1) ^ GF256Mul(qEff[1], v0) ^ GF256Mul(qEff[2], v3) ^ GF256Mul(qEff[3], v2)
 		dst[i+2] = GF256Mul(qEff[0], v2) ^ GF256Mul(qEff[2], v0) ^ GF256Mul(qEff[1], v3) ^ GF256Mul(qEff[3], v1)
 		dst[i+3] = GF256Mul(qEff[0], v3) ^ GF256Mul(qEff[3], v0) ^ GF256Mul(qEff[1], v2) ^ GF256Mul(qEff[2], v1)
@@ -142,7 +142,7 @@ func EstimateOptimalIsoQuant(src []byte) (qL, qR Quaternion4, benefited bool) {
 
 	// Calculate base sparsity (number of zero bytes across channels)
 	baseZeros := 0
-	for i := 0; i < sampleLen; i++ {
+	for i := range sampleLen {
 		if src[i] == 0 {
 			baseZeros++
 		}

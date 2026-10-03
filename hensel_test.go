@@ -22,7 +22,7 @@ func TestHensel_TheoremHL1_LCP_Exactness(t *testing.T) {
 	for expectedLen := 0; expectedLen <= 200; expectedLen++ {
 		a := make([]byte, 256)
 		b := make([]byte, 256)
-		for i := 0; i < 256; i++ {
+		for i := range 256 {
 			a[i] = byte((i * 37) + 11)
 			b[i] = a[i]
 		}
@@ -66,7 +66,7 @@ func TestHensel_TheoremHL1_LCP_Exactness(t *testing.T) {
 func TestHensel_TheoremHL2_PruningCorrectness(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 
-	for trial := 0; trial < 10000; trial++ {
+	for range 10000 {
 		target := make([]byte, 32)
 		cand := make([]byte, 32)
 		rng.Read(target)
@@ -144,7 +144,7 @@ func TestHensel_ZeroAllocations(t *testing.T) {
 		data[i] = byte(i % 31)
 	}
 
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		mf.Insert(i, data, len(data))
 	}
 
@@ -173,7 +173,7 @@ func TestHensel_BruteForceOracle(t *testing.T) {
 		[]byte("discrete valuation ring residue field GF(2^8)"),
 		[]byte("0123456789abcdef0123456789abcdef"),
 	}
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		phrase := phrases[i%len(phrases)]
 		offset := 100 + i*350
 		if offset+len(phrase) < len(data) {
@@ -218,7 +218,7 @@ func TestHensel_Roundtrip_Levels3And4(t *testing.T) {
 			name: "StructuredJSON",
 			gen: func() []byte {
 				var buf bytes.Buffer
-				for i := 0; i < 300; i++ {
+				for i := range 300 {
 					fmt.Fprintf(&buf, `{"id":%d,"metric":"cpu_usage","val":%.2f,"tags":["us-west","prod","worker"]}`+"\n",
 						1000+i, float64(i%100)/3.0)
 				}
@@ -229,7 +229,7 @@ func TestHensel_Roundtrip_Levels3And4(t *testing.T) {
 			name: "GoSourceCode",
 			gen: func() []byte {
 				var buf bytes.Buffer
-				for i := 0; i < 150; i++ {
+				for i := range 150 {
 					fmt.Fprintf(&buf, `
 func handleRequest%d(ctx context.Context, req *Request) (*Response, error) {
 	if req == nil {
@@ -250,7 +250,7 @@ func handleRequest%d(ctx context.Context, req *Request) (*Response, error) {
 			name: "TabularTelemetry",
 			gen: func() []byte {
 				var buf bytes.Buffer
-				for i := 0; i < 500; i++ {
+				for i := range 500 {
 					fmt.Fprintf(&buf, "%08x\t%10d\t%04x\t%16s\t%d\n", i, 100000+i, i%256, "STANDARD_RECORD", i*7)
 				}
 				return buf.Bytes()
@@ -312,7 +312,7 @@ func BenchmarkHenselLCP(b *testing.B) {
 		b.Run(fmt.Sprintf("Len_%d", l), func(b *testing.B) {
 			bufA := make([]byte, l+8)
 			bufB := make([]byte, l+8)
-			for i := 0; i < l; i++ {
+			for i := range l {
 				bufA[i] = byte(i)
 				bufB[i] = byte(i)
 			}
@@ -337,7 +337,7 @@ func BenchmarkHenselFindMatch_vs_NaiveChaining(b *testing.B) {
 	rng := rand.New(rand.NewSource(12345))
 	rng.Read(data)
 	// Seed periodic patterns
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		copy(data[i*1000:(i*1000)+64], []byte("The quick brown fox jumps over the lazy dog. PRZM Ultrametric!"))
 	}
 
@@ -492,4 +492,3 @@ func workerLoop%d(in <-chan Task, out chan<- Result) error {
 		}
 	}
 }
-

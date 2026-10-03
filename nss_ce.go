@@ -30,7 +30,7 @@ const (
 // H is encoded as 8 rows of 8 bits each (row 0 in lowest byte, row 7 in highest byte).
 func ApplyMatrix(H uint64, b byte) byte {
 	var res byte
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		row := byte((H >> (i * 8)) & 0xFF)
 		parity := byte(bits.OnesCount8(row&b) & 1)
 		res |= parity << i
@@ -41,7 +41,7 @@ func ApplyMatrix(H uint64, b byte) byte {
 // BuildMatrixTable creates a 256-byte lookup table for ApplyMatrix(H, x).
 func BuildMatrixTable(H uint64) [256]byte {
 	var table [256]byte
-	for x := 0; x < 256; x++ {
+	for x := range 256 {
 		table[x] = ApplyMatrix(H, byte(x))
 	}
 	return table
@@ -59,12 +59,12 @@ func FindOptimalMatrix(data []byte) uint64 {
 
 	// For each output bit b (0..7), find the optimal 8-bit mask m in [0..255]
 	// that predicts data[t][b] from data[t-1].
-	for b := 0; b < 8; b++ {
+	for b := range 8 {
 		targetBit := byte(1 << b)
 		bestMask := byte(0)
 		bestErrors := n
 
-		for m := 0; m < 256; m++ {
+		for m := range 256 {
 			maskByte := byte(m)
 			errors := 0
 			for t := 1; t < n; t++ {
@@ -114,10 +114,7 @@ func NSSCEEncode(src []byte) ([]byte, error) {
 	offset := 0
 	for offset < n {
 		remaining := n - offset
-		curBlockSize := NSSCEDefaultBlockSize
-		if curBlockSize > remaining {
-			curBlockSize = remaining
-		}
+		curBlockSize := min(NSSCEDefaultBlockSize, remaining)
 
 		block := src[offset : offset+curBlockSize]
 
@@ -278,7 +275,7 @@ func NSSCEDecode(src []byte) ([]byte, error) {
 			// Reconstruct innovation buffer
 			u := make([]byte, bLen)
 			u[0] = u0
-			for k := 0; k < nnz; k++ {
+			for range nnz {
 				pos := int(binary.BigEndian.Uint16(src[srcPos : srcPos+2]))
 				val := src[srcPos+2]
 				srcPos += 3

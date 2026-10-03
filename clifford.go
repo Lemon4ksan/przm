@@ -41,12 +41,12 @@ type Multivector16 struct {
 // C_k = sum_{i ^ j = k} (A_i (x) B_j) over F_{2^8}.
 func GeometricProduct(a, b Multivector16) Multivector16 {
 	var res Multivector16
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		ai := a.C[i]
 		if ai == 0 {
 			continue
 		}
-		for j := 0; j < 16; j++ {
+		for j := range 16 {
 			bj := b.C[j]
 			if bj == 0 {
 				continue
@@ -110,7 +110,7 @@ func EncodeClifford(src []byte, r, rInv Multivector16) []byte {
 
 	// Transform each 16-byte block by rotor R * M * R_inv
 	var block Multivector16
-	for b := 0; b < numMVs; b++ {
+	for b := range numMVs {
 		start := b * 16
 		end := start + 16
 		if end > n {
@@ -159,7 +159,7 @@ func DecodeClifford(src []byte) ([]byte, error) {
 
 	out := make([]byte, origLen)
 	var block Multivector16
-	for b := 0; b < numMVs; b++ {
+	for b := range numMVs {
 		copy(block.C[:], payload[b*16:(b+1)*16])
 		// Invert rotation: M = R_inv * M' * R
 		orig := ApplyRotor(block, rInv, r)

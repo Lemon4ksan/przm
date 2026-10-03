@@ -265,7 +265,7 @@ func NewDictionaryFromBytes(data []byte) (*Dictionary, error) {
 
 	rawTokens := make([]string, numTokens)
 	payloadOffset := expectedMin
-	for i := 0; i < numTokens; i++ {
+	for i := range numTokens {
 		tLen := int(binary.LittleEndian.Uint16(data[16+i*2 : 16+i*2+2]))
 		if payloadOffset+tLen > len(data) {
 			return nil, fmt.Errorf("%w: truncated token payload at index %d", ErrInvalidDict, i)

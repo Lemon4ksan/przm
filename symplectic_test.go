@@ -85,7 +85,7 @@ func TestSymplectic_InplaceInvolution(t *testing.T) {
 // TestSymplectic_Roundtrip verifies CompressSymplectic -> DecompressSymplectic roundtrip.
 func TestSymplectic_Roundtrip(t *testing.T) {
 	t.Run("ShortBuffers", func(t *testing.T) {
-		for sz := 0; sz < 16; sz++ {
+		for sz := range 16 {
 			data := make([]byte, sz)
 			for i := range data {
 				data[i] = byte(i + 1)
@@ -160,7 +160,7 @@ func TestSymplectic_Roundtrip(t *testing.T) {
 // on null-cone Minkowski 4-vectors.
 func TestTwistor_Theorem31_DyadFactorization(t *testing.T) {
 	// 1. First test gfSqrt correctness for all 256 field elements
-	for x := 0; x < 256; x++ {
+	for x := range 256 {
 		xb := uint8(x)
 		root := gfSqrt(xb)
 		sq := GF256Mul(root, root)

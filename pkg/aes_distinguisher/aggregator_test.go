@@ -236,7 +236,7 @@ func TestPoCCompression_1MiBSavingsBound(t *testing.T) {
 func TestDecompressCryptoCoreBlock64_Microcode(t *testing.T) {
 	// Construct 4 AES blocks: B0, B1, B2, B3 such that B0 ^ B1 ^ B2 ^ B3 == 0
 	var b0, b1, b2, b3 [16]byte
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		b0[i] = byte(i * 3)
 		b1[i] = byte(i*7 + 1)
 		b2[i] = byte(i*11 + 2)

@@ -14,20 +14,20 @@ import (
 
 // EntropyReport aggregates multi-dimensional statistical and cryptanalytic metrics for a stream.
 type EntropyReport struct {
-	SampleBytes         int                // Total bytes evaluated
-	ShannonEntropy      float64            // Byte Shannon entropy H_0 in bits/byte [0.0 .. 8.0]
-	DeltaH              float64            // Shannon entropy deficit (8.0 - H_0)
-	DeltaHPct           float64            // Percentage entropy deficit ((DeltaH / 8.0) * 100%)
-	ChiSquare           float64            // Pearson Chi-Square statistic against uniform distribution
-	ChiSquarePValue     float64            // Asymptotic p-value for Chi-Square test (df = 255)
-	ChiSquareZScore     float64            // Standardized normal score: (ChiSquare - 255) / sqrt(510)
-	BigramEntropy       float64            // Joint bigram entropy H_2 in bits/bigram [0.0 .. 16.0]
-	BigramDeltaHPct     float64            // Bigram entropy deficit ((16.0 - BigramEntropy) / 16.0 * 100%)
-	Stride4Entropy      float64            // Stride-4 joint byte entropy in bits/pair [0.0 .. 16.0]
-	Stride4DeltaHPct    float64            // Stride-4 entropy deficit ((16.0 - Stride4Entropy) / 16.0 * 100%)
-	ConditionalEntropy  float64            // Conditional entropy H(X_k | X_{k-1}) = H_2 - H_0
-	TotalBitCorrelation float64            // Sum of squared off-diagonal bit cross-correlations
-	DistinguisherFired  bool               // True if DeltaHPct > 0.05% or ChiSquareZScore > 3.29 (p < 0.001)
+	SampleBytes         int     // Total bytes evaluated
+	ShannonEntropy      float64 // Byte Shannon entropy H_0 in bits/byte [0.0 .. 8.0]
+	DeltaH              float64 // Shannon entropy deficit (8.0 - H_0)
+	DeltaHPct           float64 // Percentage entropy deficit ((DeltaH / 8.0) * 100%)
+	ChiSquare           float64 // Pearson Chi-Square statistic against uniform distribution
+	ChiSquarePValue     float64 // Asymptotic p-value for Chi-Square test (df = 255)
+	ChiSquareZScore     float64 // Standardized normal score: (ChiSquare - 255) / sqrt(510)
+	BigramEntropy       float64 // Joint bigram entropy H_2 in bits/bigram [0.0 .. 16.0]
+	BigramDeltaHPct     float64 // Bigram entropy deficit ((16.0 - BigramEntropy) / 16.0 * 100%)
+	Stride4Entropy      float64 // Stride-4 joint byte entropy in bits/pair [0.0 .. 16.0]
+	Stride4DeltaHPct    float64 // Stride-4 entropy deficit ((16.0 - Stride4Entropy) / 16.0 * 100%)
+	ConditionalEntropy  float64 // Conditional entropy H(X_k | X_{k-1}) = H_2 - H_0
+	TotalBitCorrelation float64 // Sum of squared off-diagonal bit cross-correlations
+	DistinguisherFired  bool    // True if DeltaHPct > 0.05% or ChiSquareZScore > 3.29 (p < 0.001)
 }
 
 // ComputeShannonEntropy calculates the Shannon entropy H, the absolute deficit Delta H,
@@ -162,7 +162,7 @@ func ComputeChiSquared(data []byte) (chi2 float64, pValue float64, zScore float6
 		sumSq += float64(c) * float64(c)
 	}
 
-	chi2 = (256.0 / fn) * sumSq - fn
+	chi2 = (256.0/fn)*sumSq - fn
 	if chi2 < 0.0 {
 		chi2 = 0.0
 	}
@@ -200,7 +200,7 @@ func ComputeBigramEntropy(data []byte) (h2 float64, deltaH2 float64, deltaH2Perc
 	var counts [256][256]uint32
 	totalBigrams := n - 1
 
-	for i := 0; i < totalBigrams; i++ {
+	for i := range totalBigrams {
 		u := data[i]
 		v := data[i+1]
 		counts[u][v]++
@@ -208,8 +208,8 @@ func ComputeBigramEntropy(data []byte) (h2 float64, deltaH2 float64, deltaH2Perc
 
 	fn := float64(totalBigrams)
 	sum := 0.0
-	for u := 0; u < 256; u++ {
-		for v := 0; v < 256; v++ {
+	for u := range 256 {
+		for v := range 256 {
 			c := counts[u][v]
 			if c > 0 {
 				p := float64(c) / fn
@@ -243,7 +243,7 @@ func ComputeStrideEntropy(data []byte, stride int) (h float64, deltaH float64, d
 	var counts [256][256]uint32
 	totalPairs := len(data) - stride
 
-	for i := 0; i < totalPairs; i++ {
+	for i := range totalPairs {
 		u := data[i]
 		v := data[i+stride]
 		counts[u][v]++
@@ -251,8 +251,8 @@ func ComputeStrideEntropy(data []byte, stride int) (h float64, deltaH float64, d
 
 	fn := float64(totalPairs)
 	sum := 0.0
-	for u := 0; u < 256; u++ {
-		for v := 0; v < 256; v++ {
+	for u := range 256 {
+		for v := range 256 {
 			c := counts[u][v]
 			if c > 0 {
 				p := float64(c) / fn
@@ -304,7 +304,7 @@ func ComputeBitSliceCorrelations(blocks [][16]byte) [128][128]float64 {
 	var corr [128][128]float64
 	m := len(blocks)
 	if m < 2 {
-		for i := 0; i < 128; i++ {
+		for i := range 128 {
 			corr[i][i] = 1.0
 		}
 		return corr
@@ -314,7 +314,7 @@ func ComputeBitSliceCorrelations(blocks [][16]byte) [128][128]float64 {
 	numWords := (m + 63) / 64
 	// bitVectors[b] stores bit b across all m blocks
 	bitVectors := make([][]uint64, 128)
-	for b := 0; b < 128; b++ {
+	for b := range 128 {
 		bitVectors[b] = make([]uint64, numWords)
 	}
 
@@ -326,9 +326,9 @@ func ComputeBitSliceCorrelations(blocks [][16]byte) [128][128]float64 {
 		// Unpack low 64 bits (bytes 0..7)
 		lowWord := binary.LittleEndian.Uint64(block[0:8])
 		transLow := przm.Transpose8x8(lowWord)
-		for p := 0; p < 8; p++ {
+		for p := range 8 {
 			planeByte := byte(transLow >> (p * 8))
-			for bIdx := 0; bIdx < 8; bIdx++ {
+			for bIdx := range 8 {
 				bitVal := uint64((planeByte >> bIdx) & 1)
 				globalBit := bIdx*8 + p // byte bIdx, bit p
 				bitVectors[globalBit][wordIdx] |= (bitVal << bitShift)
@@ -338,9 +338,9 @@ func ComputeBitSliceCorrelations(blocks [][16]byte) [128][128]float64 {
 		// Unpack high 64 bits (bytes 8..15)
 		highWord := binary.LittleEndian.Uint64(block[8:16])
 		transHigh := przm.Transpose8x8(highWord)
-		for p := 0; p < 8; p++ {
+		for p := range 8 {
 			planeByte := byte(transHigh >> (p * 8))
-			for bIdx := 0; bIdx < 8; bIdx++ {
+			for bIdx := range 8 {
 				bitVal := uint64((planeByte >> bIdx) & 1)
 				globalBit := 64 + bIdx*8 + p // byte (8 + bIdx), bit p
 				bitVectors[globalBit][wordIdx] |= (bitVal << bitShift)
@@ -350,7 +350,7 @@ func ComputeBitSliceCorrelations(blocks [][16]byte) [128][128]float64 {
 
 	// Compute marginal popcounts
 	counts := make([]int, 128)
-	for b := 0; b < 128; b++ {
+	for b := range 128 {
 		c := 0
 		for _, w := range bitVectors[b] {
 			c += bits.OnesCount64(w)
@@ -361,7 +361,7 @@ func ComputeBitSliceCorrelations(blocks [][16]byte) [128][128]float64 {
 	fm := float64(m)
 
 	// Compute pairwise correlations
-	for i := 0; i < 128; i++ {
+	for i := range 128 {
 		corr[i][i] = 1.0
 		pi := float64(counts[i]) / fm
 		varI := pi * (1.0 - pi)
@@ -381,7 +381,7 @@ func ComputeBitSliceCorrelations(blocks [][16]byte) [128][128]float64 {
 			pairCount := 0
 			vecI := bitVectors[i]
 			vecJ := bitVectors[j]
-			for w := 0; w < numWords; w++ {
+			for w := range numWords {
 				pairCount += bits.OnesCount64(vecI[w] & vecJ[w])
 			}
 
@@ -406,7 +406,7 @@ func ComputeBitSliceCorrelations(blocks [][16]byte) [128][128]float64 {
 // across the 128x128 bit matrix: \mathcal{C}_{\text{total}} = \sum_{0 \le i < j < 128} \rho_{ij}^2.
 func ComputeTotalBitCorrelation(corr *[128][128]float64) float64 {
 	total := 0.0
-	for i := 0; i < 128; i++ {
+	for i := range 128 {
 		for j := i + 1; j < 128; j++ {
 			r := corr[i][j]
 			total += r * r
@@ -427,7 +427,7 @@ func AnalyzeStreamEntropy(data []byte) EntropyReport {
 	numBlocks := len(data) / 16
 	if numBlocks >= 64 {
 		blocks := make([][16]byte, numBlocks)
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			copy(blocks[i][:], data[i*16:(i+1)*16])
 		}
 		corr := ComputeBitSliceCorrelations(blocks)

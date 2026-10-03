@@ -89,9 +89,12 @@ type SheafBoundaryRep struct {
 
 // Coboundary0 computes the 0-coboundary operator d0: C^0(X; F) -> C^1(X; F) over F_{2^8}.
 // For horizontal edge e^h_{i, j} = [(i, j), (i, j+1)]:
-//   u^h_{i, j} = phi(i, j+1) ^ (alpha * phi(i, j)).
+//
+//	u^h_{i, j} = phi(i, j+1) ^ (alpha * phi(i, j)).
+//
 // For vertical edge e^v_{i, j} = [(i, j), (i+1, j)]:
-//   u^v_{i, j} = phi(i+1, j) ^ (alpha * phi(i, j)).
+//
+//	u^v_{i, j} = phi(i+1, j) ^ (alpha * phi(i, j)).
 func Coboundary0(complex CellComplex2D, phi Cochain0) Cochain1 {
 	M := complex.Rows
 	W := complex.Cols
@@ -102,7 +105,7 @@ func Coboundary0(complex CellComplex2D, phi Cochain0) Cochain1 {
 
 	// Horizontal edges
 	idxH := 0
-	for i := 0; i < M; i++ {
+	for i := range M {
 		rowOff := i * W
 		for j := 0; j < W-1; j++ {
 			v0 := phi[rowOff+j]
@@ -121,7 +124,7 @@ func Coboundary0(complex CellComplex2D, phi Cochain0) Cochain1 {
 	for i := 0; i < M-1; i++ {
 		row0 := i * W
 		row1 := (i + 1) * W
-		for j := 0; j < W; j++ {
+		for j := range W {
 			v0 := phi[row0+j]
 			v1 := phi[row1+j]
 			if alpha <= 1 {
@@ -138,7 +141,9 @@ func Coboundary0(complex CellComplex2D, phi Cochain0) Cochain1 {
 
 // Coboundary1 computes the 1-coboundary operator d1: C^1(X; F) -> C^2(X; F) over F_{2^8}.
 // Under the sheaf restriction condition over F_{2^8}:
-//   C_{i, j} = u^h_{i+1, j} ^ (alpha * u^h_{i, j}) ^ u^v_{i, j+1} ^ (alpha * u^v_{i, j}).
+//
+//	C_{i, j} = u^h_{i+1, j} ^ (alpha * u^h_{i, j}) ^ u^v_{i, j+1} ^ (alpha * u^v_{i, j}).
+//
 // Nilpotency Theorem 39: For any 0-cochain phi, (d1 ∘ d0)(phi) ≡ 0 identically.
 func Coboundary1(complex CellComplex2D, u Cochain1) Cochain2 {
 	M := complex.Rows
@@ -180,11 +185,11 @@ func Adjoint0(complex CellComplex2D, u Cochain1) Cochain0 {
 
 	div := make([]uint8, M*W)
 
-	for i := 0; i < M; i++ {
+	for i := range M {
 		rowOff := i * W
 		hRow := i * (W - 1)
 
-		for j := 0; j < W; j++ {
+		for j := range W {
 			val := uint8(0)
 
 			// Horizontal outgoing: source vertex has coefficient alpha in Coboundary0
@@ -232,7 +237,7 @@ func Adjoint1(complex CellComplex2D, c Cochain2) Cochain1 {
 
 	// Horizontal edges: incident to face (i, j) and face (i-1, j)
 	idxH := 0
-	for i := 0; i < M; i++ {
+	for i := range M {
 		for j := 0; j < W-1; j++ {
 			val := uint8(0)
 			if alpha <= 1 {
@@ -258,7 +263,7 @@ func Adjoint1(complex CellComplex2D, c Cochain2) Cochain1 {
 	// Vertical edges: incident to face (i, j) and face (i, j-1)
 	idxV := 0
 	for i := 0; i < M-1; i++ {
-		for j := 0; j < W; j++ {
+		for j := range W {
 			val := uint8(0)
 			if alpha <= 1 {
 				if j < W-1 {
@@ -503,7 +508,7 @@ func ReconstructCellularSheaf(complex CellComplex2D, rep *SheafBoundaryRep, dst 
 				}
 			} else {
 				curV := v
-				for j := 0; j < W; j++ {
+				for j := range W {
 					dst[rowCurr+j] = GF256Mul(twist, dst[rowPrev+j]) ^ curV
 					curV = GF256Mul(twist, curV)
 				}
@@ -566,7 +571,7 @@ func ReconstructCellularSheaf(complex CellComplex2D, rep *SheafBoundaryRep, dst 
 
 // CompressCellularSheaf compresses an arbitrary byte stream using Cellular Sheaves with Discrete Hodge Laplacians.
 // Frame layout:
-// - Header (24 bytes):
+//   - Header (24 bytes):
 //     [0:4]   Magic (0x44485343, Little-Endian)
 //     [4:8]   UncompressedSize (uint32 Little-Endian)
 //     [8:10]  Width W (uint16 Little-Endian)
@@ -576,7 +581,7 @@ func ReconstructCellularSheaf(complex CellComplex2D, rep *SheafBoundaryRep, dst 
 //     [14:16] Betti1 (uint16 Little-Endian)
 //     [16:18] Flags (uint16 Little-Endian)
 //     [18:24] Reserved (6B = 0)
-// - Payload:
+//   - Payload:
 //     [Homology coefficients if ConstEh / ConstEv]
 //     [Boundary horizontal 1-forms Eh if not ConstEh]
 //     [Boundary vertical 1-forms Ev if not ConstEv]
@@ -947,7 +952,7 @@ func DecompressCellularSheaf(src, dst []byte) ([]byte, error) {
 				}
 			} else {
 				curV := v
-				for j := 0; j < W; j++ {
+				for j := range W {
 					dst[rowCurr+j] = GF256Mul(twist, dst[rowPrev+j]) ^ curV
 					curV = GF256Mul(twist, curV)
 				}

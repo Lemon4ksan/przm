@@ -13,7 +13,7 @@ import (
 // One active byte takes all 256 values in GF(2^8), while the other 15 bytes are fixed to constantVal.
 func GenerateLambdaSet(activeByteIndex int, constantVal byte) [256][16]byte {
 	var constants [16]byte
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		constants[i] = constantVal
 	}
 	return GenerateLambdaSetWithConstants(activeByteIndex, constants)
@@ -29,7 +29,7 @@ func GenerateLambdaSetWithConstants(activeByteIndex int, constants [16]byte) [25
 	}
 
 	var set [256][16]byte
-	for val := 0; val < 256; val++ {
+	for val := range 256 {
 		block := constants
 		block[activeByteIndex] = byte(val)
 		set[val] = block
@@ -43,13 +43,13 @@ func GenerateLambdaSetWithConstants(activeByteIndex int, constants [16]byte) [25
 //	\bigoplus_{i=0}^{N-1} B_i = 0^{128}
 func VerifyLambdaZeroSum(blocks [][16]byte) (balanced bool, xorSum [16]byte) {
 	for _, b := range blocks {
-		for i := 0; i < 16; i++ {
+		for i := range 16 {
 			xorSum[i] ^= b[i]
 		}
 	}
 
 	allZero := true
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		if xorSum[i] != 0 {
 			allZero = false
 			break
@@ -62,13 +62,13 @@ func VerifyLambdaZeroSum(blocks [][16]byte) (balanced bool, xorSum [16]byte) {
 // returning a per-byte balancedness boolean array and overall state balance.
 func CheckLambdaBalance(blocks [][16]byte) (isBalanced [16]bool, allBalanced bool, xorSum [16]byte) {
 	for _, b := range blocks {
-		for i := 0; i < 16; i++ {
+		for i := range 16 {
 			xorSum[i] ^= b[i]
 		}
 	}
 
 	allBalanced = true
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		if xorSum[i] == 0 {
 			isBalanced[i] = true
 		} else {
@@ -104,9 +104,9 @@ func GenerateDiagonalSet(diagIndex int, numActiveBytes int, constVal byte) [][16
 
 	if numActiveBytes <= 1 {
 		blocks := make([][16]byte, 256)
-		for v := 0; v < 256; v++ {
+		for v := range 256 {
 			var b [16]byte
-			for i := 0; i < 16; i++ {
+			for i := range 16 {
 				b[i] = constVal
 			}
 			b[diag[0]] = byte(v)
@@ -119,10 +119,10 @@ func GenerateDiagonalSet(diagIndex int, numActiveBytes int, constVal byte) [][16
 	total := 65536
 	blocks := make([][16]byte, total)
 	idx := 0
-	for v0 := 0; v0 < 256; v0++ {
-		for v1 := 0; v1 < 256; v1++ {
+	for v0 := range 256 {
+		for v1 := range 256 {
 			var b [16]byte
-			for i := 0; i < 16; i++ {
+			for i := range 16 {
 				b[i] = constVal
 			}
 			b[diag[0]] = byte(v0)
@@ -138,14 +138,14 @@ func GenerateDiagonalSet(diagIndex int, numActiveBytes int, constVal byte) [][16
 // for division property structures across reduced-round AES.
 func VerifyDivisionProperty4R(blocks [][16]byte) (balancedBits [128]bool, paritySum [16]byte) {
 	for _, b := range blocks {
-		for i := 0; i < 16; i++ {
+		for i := range 16 {
 			paritySum[i] ^= b[i]
 		}
 	}
 
-	for byteIdx := 0; byteIdx < 16; byteIdx++ {
+	for byteIdx := range 16 {
 		bVal := paritySum[byteIdx]
-		for bit := 0; bit < 8; bit++ {
+		for bit := range 8 {
 			bitCoord := byteIdx*8 + bit
 			if ((bVal >> bit) & 1) == 0 {
 				balancedBits[bitCoord] = true
@@ -162,7 +162,7 @@ func VerifyDivisionProperty4R(blocks [][16]byte) (balancedBits [128]bool, parity
 func TestIntegralProperty(key []byte, rounds int, finalMixCol bool) (balanced bool, xorSum [16]byte) {
 	lambdaSet := GenerateLambdaSet(0, 0x5A)
 	ciphertexts := make([][16]byte, 256)
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		ciphertexts[i] = EncryptReducedRound(lambdaSet[i][:], key, rounds, finalMixCol)
 	}
 	return VerifyLambdaZeroSum(ciphertexts)
@@ -222,20 +222,20 @@ func ComputeMultiVectorDeficit(blocks [][16]byte) (aggregatedDeltaHPercent float
 	// Evaluates the 4x4 empirical covariance matrix for each of the 4 AES columns.
 	// Total correlation (multi-information): I = 0.5 * log2(prod(diag) / det(Sigma)).
 	totalMultiInfo := 0.0
-	for col := 0; col < 4; col++ {
+	for col := range 4 {
 		var means [4]float64
 		for _, b := range blocks {
-			for r := 0; r < 4; r++ {
+			for r := range 4 {
 				means[r] += float64(b[col*4+r])
 			}
 		}
-		for r := 0; r < 4; r++ {
+		for r := range 4 {
 			means[r] /= fm
 		}
 
 		var cov [4][4]float64
 		for _, b := range blocks {
-			for r1 := 0; r1 < 4; r1++ {
+			for r1 := range 4 {
 				d1 := float64(b[col*4+r1]) - means[r1]
 				for r2 := r1; r2 < 4; r2++ {
 					d2 := float64(b[col*4+r2]) - means[r2]
@@ -243,7 +243,7 @@ func ComputeMultiVectorDeficit(blocks [][16]byte) (aggregatedDeltaHPercent float
 				}
 			}
 		}
-		for r1 := 0; r1 < 4; r1++ {
+		for r1 := range 4 {
 			for r2 := r1; r2 < 4; r2++ {
 				cov[r1][r2] /= fm
 				cov[r2][r1] = cov[r1][r2]
@@ -279,7 +279,7 @@ func ComputeMultiVectorDeficit(blocks [][16]byte) (aggregatedDeltaHPercent float
 	corr := ComputeBitSliceCorrelations(blocks)
 	intraBitCorr := 0.0
 	interBitCorr := 0.0
-	for i := 0; i < 128; i++ {
+	for i := range 128 {
 		for j := i + 1; j < 128; j++ {
 			r2 := corr[i][j] * corr[i][j]
 			if (i / 32) == (j / 32) {
@@ -322,7 +322,7 @@ func ComputeMultiVectorDeficit(blocks [][16]byte) (aggregatedDeltaHPercent float
 		}
 		expDiff := fm / 256.0
 		chi2 := 0.0
-		for val := 0; val < 256; val++ {
+		for val := range 256 {
 			d := float64(diffCounts[val]) - expDiff
 			chi2 += (d * d) / expDiff
 		}
@@ -347,7 +347,7 @@ func ComputeMultiVectorDeficit(blocks [][16]byte) (aggregatedDeltaHPercent float
 	var parityCounts [16]int
 	for _, b := range blocks {
 		stateIdx := 0
-		for c := 0; c < 4; c++ {
+		for c := range 4 {
 			colPop := bits.OnesCount8(b[c*4]) + bits.OnesCount8(b[c*4+1]) +
 				bits.OnesCount8(b[c*4+2]) + bits.OnesCount8(b[c*4+3])
 			stateIdx |= (colPop % 2) << c
@@ -356,7 +356,7 @@ func ComputeMultiVectorDeficit(blocks [][16]byte) (aggregatedDeltaHPercent float
 	}
 	expParity := fm / 16.0
 	chi2Parity := 0.0
-	for s := 0; s < 16; s++ {
+	for s := range 16 {
 		dp := float64(parityCounts[s]) - expParity
 		chi2Parity += (dp * dp) / expParity
 	}
@@ -381,15 +381,15 @@ func ComputeMultiVectorDeficit(blocks [][16]byte) (aggregatedDeltaHPercent float
 	if m >= 256 {
 		numChunks := m / 256
 		balancedChunks := 0
-		for c := 0; c < numChunks; c++ {
+		for c := range numChunks {
 			var chunkXor [16]byte
-			for i := 0; i < 256; i++ {
-				for b := 0; b < 16; b++ {
+			for i := range 256 {
+				for b := range 16 {
 					chunkXor[b] ^= blocks[c*256+i][b]
 				}
 			}
 			isZero := true
-			for b := 0; b < 16; b++ {
+			for b := range 16 {
 				if chunkXor[b] != 0 {
 					isZero = false
 					break
@@ -406,12 +406,12 @@ func ComputeMultiVectorDeficit(blocks [][16]byte) (aggregatedDeltaHPercent float
 	if v5 == 0.0 {
 		var xorSum [16]byte
 		for _, b := range blocks {
-			for i := 0; i < 16; i++ {
+			for i := range 16 {
 				xorSum[i] ^= b[i]
 			}
 		}
 		zeroBytes := 0
-		for i := 0; i < 16; i++ {
+		for i := range 16 {
 			if xorSum[i] == 0 {
 				zeroBytes++
 			}

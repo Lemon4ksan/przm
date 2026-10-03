@@ -54,12 +54,12 @@ var (
 type DeficitVectorID int
 
 const (
-	VectorIsoQuantMDS DeficitVectorID = iota // Vector 1: 4D IsoQuant MDS anisotropic collimation (0.035% - 0.075%)
-	VectorMobiusANF                         // Vector 2: Fast Möbius ANF degree defect & coordinate bit-slice correlation (0.040% - 0.082%)
-	VectorSheafHarmonic                     // Vector 3: Sheaf key schedule harmonic trace (0.025% - 0.055%)
-	VectorMargolusRCA                       // Vector 4: Margolus RCA fluctuation & parity clustering (0.030% - 0.050%)
-	VectorIntegralDivision                  // Vector 5: Integral / division property balance deficit (0.025% - 0.040%)
-	NumDeficitVectors = 5
+	VectorIsoQuantMDS      DeficitVectorID = iota // Vector 1: 4D IsoQuant MDS anisotropic collimation (0.035% - 0.075%)
+	VectorMobiusANF                               // Vector 2: Fast Möbius ANF degree defect & coordinate bit-slice correlation (0.040% - 0.082%)
+	VectorSheafHarmonic                           // Vector 3: Sheaf key schedule harmonic trace (0.025% - 0.055%)
+	VectorMargolusRCA                             // Vector 4: Margolus RCA fluctuation & parity clustering (0.030% - 0.050%)
+	VectorIntegralDivision                        // Vector 5: Integral / division property balance deficit (0.025% - 0.040%)
+	NumDeficitVectors      = 5
 )
 
 // DeficitVectorSpec describes theoretical boundaries and physical semantics of a defect vector.
@@ -127,7 +127,7 @@ type CascadedDeficitReport struct {
 // combining the 5 orthogonal geometric defect vectors into an aggregated compression capacity report.
 func AggregateCascadedDeficit(vectorDeficits [NumDeficitVectors]float64) CascadedDeficitReport {
 	agg := 0.0
-	for j := 0; j < NumDeficitVectors; j++ {
+	for j := range NumDeficitVectors {
 		agg += vectorDeficits[j]
 	}
 
@@ -205,7 +205,7 @@ func GenerateRepresentativePayload(numBlocks int, seed int64) [][16]byte {
 		if chunkType == 0 {
 			// Lambda-set chunk under Round 3:
 			// Active byte 0 varies 0..255, bytes 1..15 constant
-			for i := 0; i < CryptoCoreChunkBlocks; i++ {
+			for i := range CryptoCoreChunkBlocks {
 				var pt [16]byte
 				pt[0] = byte(i)
 				for j := 1; j < 16; j++ {
@@ -215,7 +215,7 @@ func GenerateRepresentativePayload(numBlocks int, seed int64) [][16]byte {
 			}
 		} else if chunkType >= 1 && chunkType <= 3 {
 			// Diagonal subspace collimation chunk under Round 4:
-			for i := 0; i < CryptoCoreChunkBlocks; i++ {
+			for i := range CryptoCoreChunkBlocks {
 				idx := chunkStart + i
 				var pt [16]byte
 				pt[0] = byte(idx)
@@ -231,7 +231,7 @@ func GenerateRepresentativePayload(numBlocks int, seed int64) [][16]byte {
 			}
 		} else {
 			// Standard Counter chunk under Round 4:
-			for i := 0; i < CryptoCoreChunkBlocks; i++ {
+			for i := range CryptoCoreChunkBlocks {
 				idx := chunkStart + i
 				var pt [16]byte
 				pt[0] = byte(idx)
@@ -287,7 +287,7 @@ func GenerateCryptoCorePoCPayload(numBlocks int, seed int64) [][16]byte {
 
 		if isBalancedChunk {
 			// Round 3 Lambda-set chunk (100% zero-sum balanced via integral property)
-			for i := 0; i < CryptoCoreChunkBlocks; i++ {
+			for i := range CryptoCoreChunkBlocks {
 				var pt [16]byte
 				pt[0] = byte(i)
 				for j := 1; j < 16; j++ {
@@ -297,7 +297,7 @@ func GenerateCryptoCorePoCPayload(numBlocks int, seed int64) [][16]byte {
 			}
 		} else {
 			// Round 4 Counter chunk (non-zero sum)
-			for i := 0; i < CryptoCoreChunkBlocks; i++ {
+			for i := range CryptoCoreChunkBlocks {
 				idx := chunkStart + i
 				var pt [16]byte
 				pt[0] = byte(idx)
@@ -349,10 +349,7 @@ func CompressCryptoCore(src []byte, dst []byte) (int, error) {
 		return CryptoCoreHeaderSize, nil
 	}
 
-	numChunks := n / CryptoCoreChunkBytes
-	if numChunks > 65535 {
-		numChunks = 65535
-	}
+	numChunks := min(n/CryptoCoreChunkBytes, 65535)
 	bitmapLen := (numChunks + 7) / 8
 	headerTotal := CryptoCoreHeaderSize + bitmapLen
 
@@ -368,19 +365,19 @@ func CompressCryptoCore(src []byte, dst []byte) (int, error) {
 	} else {
 		bitmapSlice = make([]byte, bitmapLen)
 	}
-	for i := 0; i < bitmapLen; i++ {
+	for i := range bitmapLen {
 		bitmapSlice[i] = 0
 	}
 
 	outPos := headerTotal
 	balancedCount := 0
 
-	for c := 0; c < numChunks; c++ {
+	for c := range numChunks {
 		chunkStart := c * CryptoCoreChunkBytes
 
 		// Evaluate zero-sum division invariant across the 256 blocks of this chunk
 		var xor0, xor1 uint64
-		for b := 0; b < CryptoCoreChunkBlocks; b++ {
+		for b := range CryptoCoreChunkBlocks {
 			bOff := chunkStart + b*16
 			xor0 ^= binary.LittleEndian.Uint64(src[bOff : bOff+8])
 			xor1 ^= binary.LittleEndian.Uint64(src[bOff+8 : bOff+16])
@@ -515,7 +512,7 @@ func DecompressCryptoCore(src []byte, dst []byte) (int, error) {
 	inPos := headerTotal
 	outPos := 0
 
-	for c := 0; c < chunks; c++ {
+	for c := range chunks {
 		isBalanced := (src[CryptoCoreHeaderSize+(c/8)] & byte(1<<(c%8))) != 0
 
 		if isBalanced {
@@ -526,7 +523,7 @@ func DecompressCryptoCore(src []byte, dst []byte) (int, error) {
 			}
 
 			var acc0, acc1 uint64
-			for b := 0; b < CryptoCoreChunkBlocks-1; b++ {
+			for range CryptoCoreChunkBlocks - 1 {
 				w0 := binary.LittleEndian.Uint64(src[inPos : inPos+8])
 				w1 := binary.LittleEndian.Uint64(src[inPos+8 : inPos+16])
 				acc0 ^= w0

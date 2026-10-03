@@ -14,8 +14,8 @@ import (
 // Frame constants for Discrete Heisenberg Group H_3(F_{2^8}) Foliation (PRZM-SPEC-0.5 Milestone 2).
 const (
 	PRZM_MAGIC_HEISENBERG uint32 = 0x53494548 // "HEIS" in Little-Endian
-	HeisenbergMagic      uint32 = 0x53494548
-	HeisenbergHeaderSize int    = 12
+	HeisenbergMagic       uint32 = 0x53494548
+	HeisenbergHeaderSize  int    = 12
 
 	HeisenbergModeRaw        uint8 = 0 // Raw passthrough bypass
 	HeisenbergModeFoliated   uint8 = 1 // Foliated stream uncompressed
@@ -33,9 +33,9 @@ var (
 
 // HeisenbergElement3 represents a 3x3 unipotent upper-triangular matrix H(x, y, z) in H_3(F_{2^8}):
 //
-//     [ 1  x  z ]
-//     [ 0  1  y ]
-//     [ 0  0  1 ]
+//	[ 1  x  z ]
+//	[ 0  1  y ]
+//	[ 0  0  1 ]
 //
 // over Galois field F_{2^8} defined modulo the standard AES polynomial 0x11B.
 type HeisenbergElement3 struct {
@@ -111,7 +111,7 @@ func HeisenbergFoliateInplace(data []byte, stride int) {
 // Because the coordinate map (x, y, z ⊕ (x ⊙ y)) is an exact algebraic involution over F_{2^8},
 // unfoliation performs the identical algebraic step as foliation:
 //
-//     (z ⊕ (x ⊙ y)) ⊕ (x ⊙ y) = z.
+//	(z ⊕ (x ⊙ y)) ⊕ (x ⊙ y) = z.
 //
 // Guarantees strictly zero dynamic memory allocations and O(1) execution per block.
 func HeisenbergUnfoliateInplace(data []byte, stride int) {
@@ -211,12 +211,12 @@ func EstimateOptimalHeisenberg(src []byte) (stride int, shouldApply bool) {
 // CompressHeisenberg encodes src using Discrete Heisenberg Group H_3(F_{2^8}) Foliation.
 // Returns an encoded byte slice prefixed with the 12-byte PRZM_MAGIC_HEISENBERG header:
 //
-//     [0:4]   Magic (0x53494548, "HEIS", Little-Endian)
-//     [4:8]   UncompressedSize (uint32 Little-Endian)
-//     [8]     Stride (uint8: 3 or 4)
-//     [9]     Flags / Mode (uint8: 0=Raw, 1=Foliated, 3=Compressed)
-//     [10:12] Reserved (uint16 = 0)
-//     [12:]   Payload
+//	[0:4]   Magic (0x53494548, "HEIS", Little-Endian)
+//	[4:8]   UncompressedSize (uint32 Little-Endian)
+//	[8]     Stride (uint8: 3 or 4)
+//	[9]     Flags / Mode (uint8: 0=Raw, 1=Foliated, 3=Compressed)
+//	[10:12] Reserved (uint16 = 0)
+//	[12:]   Payload
 func CompressHeisenberg(src []byte, level int) ([]byte, error) {
 	n := len(src)
 	if n == 0 {
@@ -348,7 +348,6 @@ func DecompressHeisenberg(src, dst []byte) ([]byte, error) {
 		}
 		HeisenbergUnfoliateInplace(dst, stride)
 		return dst, nil
-
 
 	default:
 		return nil, ErrHeisenbergUnsupportedMode

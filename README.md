@@ -1,134 +1,221 @@
 # PRZM: Autonomous Geometric Archival Compression
 
-[![Language](https://img.shields.io/badge/Language-C11%20%7C%20Go-00ADD8.svg)](https://github.com/lemon4ksan/przm)
+[English](README.md) | [Русский](README_RU.md)
+
+[![Language](https://img.shields.io/badge/Language-C11%20%7C%20Go%201.27-00ADD8.svg)](https://github.com/lemon4ksan/przm)
 [![License](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
-[![Zero-Alloc](https://img.shields.io/badge/Zero--Heap--Alloc-0%20B%2Fop-brightgreen.svg)]()
-[![Throughput](https://img.shields.io/badge/Decompress%20Throughput-35--56%20GB%2Fs-orange.svg)]()
+[![Zero-Alloc](https://img.shields.io/badge/Zero--Heap--Alloc-0%20B%2Fop%20%7C%200%20allocs%2Fop-brightgreen.svg)]()
+[![Throughput](https://img.shields.io/badge/Decompress%20Throughput-Up%20to%2058.7%20GB%2Fs-orange.svg)]()
+[![Formal Verification](https://img.shields.io/badge/Lean%204-0%20sorry%20(Verified)-success.svg)](PRZM/)
 
 > **"True balance is neither the cold silence of maximum entropy, nor the frozen immobility of a crystal. It is the dynamic, vibrating tension held on the razor-thin boundary between order and chaos.**
 > 
 > **Information in the cosmos is never destroyed; it merely disperses across coordinate charts we fail to perceive. When the observer chooses the intrinsic geometry of the data manifold, the illusion of randomness collapses into deterministic harmony. Compression is not the erasure of substance, but the mathematical revelation of universal symmetry."**
 > — *The PRZM Philosophy on Universal Balance*
 
-PRZM is an ultra-high-speed, mathematically unified archival compression system that transcends the classical 1D sliding-window limit (zstd, LZMA, Brotli) by mapping non-linear digital data distributions onto curved discrete manifolds.
+PRZM is an ultra-high-speed, mathematically unified archival compression system that transcends classical 1D sliding-window limits (zstd, LZMA, Brotli) by mapping non-linear digital data distributions onto curved discrete manifolds. 
 
-This repository provides the reference **Pure C99/C11 Zero-Allocation Decompressor (`libprzm_dec`)**, designed for instantaneous integration into high-performance systems: game engines (Unreal Engine, Unity, Godot), GPU streaming pipelines, asset loaders, emulators, and foreign function interfaces (Rust, C++, Zig, Python).
+PRZM features both a pure **Go 1.27** implementation with SIMD acceleration (`simd/archsimd`) and a standalone, dependency-free **Pure C99/C11 Zero-Allocation Decompressor (`libprzm_dec`)**, designed for line-rate integration into high-performance systems: game engines (Unreal Engine, Unity, Godot), GPU streaming pipelines, asset loaders, database storage engines, and language foreign function interfaces (Rust, C++, Zig, Python).
 
----
+## Architectural Highlights & Invariant Guarantees
 
-## Key Features
+1. **Strict Zero-Allocation Contract**: Strictly **0 dynamic heap allocations** (`0 B/op, 0 allocs/op`, zero `malloc`/`free` calls during streaming decompression) across both Go (`DecompressTo`, `DecompressIsoQuant`, `DecompressHeisenberg`, `DecompressMobiusTo`, `DecompressMargolusTo`, `PWSDecodeTo`) and Pure C (`przm_decompress`).
+2. **Microarchitectural Line-Rate Throughput**: Decompression achieves **up to 58.7 GB/s** ($O(1)$ cycles/block bound), consuming between **2.63 and 3.5 CPU clock cycles per 64-byte vector block**, saturating hardware memory bus and L1 cache limits.
+3. **Formal Verification in Lean 4**: Key algebraic symmetries, involutions, and topological properties are mathematically formalized and computer-checked in **Lean 4** with strictly **0 `sorry` statements** across all 33 proof modules (`PRZM/*.lean`).
+4. **Non-Archimedean $p$-Adic Match Finding**: Level 3/4 match finding replaces linear hash chains with ultrametric Hensel lifting, achieving a **2.03x search speedup** (26.3 ns vs 54.6 ns at depth 64) with guaranteed zero false candidate dismissals (Theorems HL1/HL2).
+5. **Lossless Bit-Exact Parity**: 100% bidirectional cross-language compatibility between Go compressors and Pure C decompressors across all supported payload profiles.
 
-- **Strict Zero-Allocation Contract**: `0 B/op, 0 malloc/free calls`. Decompression operates strictly with zero dynamic heap allocations.
-- **Microarchitecture Grounded**: Formulated over discrete finite Galois fields $\mathbb{F}_{2^8}$ and residue rings $\mathbb{Z}/2^{32}\mathbb{Z}$, with strictly integer arithmetic (zero floating-point, zero transcendental functions).
-- **Extreme Decompression Throughput**: **35 to 56 GB/s** line rate in RAM across AVX2/NEON vector paths.
-- **Algebraic Involutions**: Symplectic phase-space transvections ($Sp(4, \mathbb{F}_{2^8})$) execute identically during compression and decompression ($T_S^2 \equiv I$).
-- **Integrated Structural Pre-Filters**:
-  - 7-Zip compatible x86 BCJ branch address collimation (Bra86) and BCJ-Split 4-plane displacement unrolling.
-  - ARM64 AArch64 `B` and `BL` branch target uncollimation.
-  - 2-Adic Mahler Ultrametric Pascal Wavelet transforms ($\det(B) \equiv 1 \pmod{256}$).
-  - 4-way interleaved Vector Asymmetric Numeral Systems (V-ANS 4x).
-  - 5-Layer Pareto-Wave Synthesis (PWS) H-DAG unrolling.
-  - Zero-overhead Schema Dictionaries (JSON, Source Code).
+## The 13 Transform Families
 
----
+PRZM decomposes heterogeneous data streams into 13 specialized algebraic and topological manifolds:
 
-## Repository Structure
+| ID | Transform Family | Opcode / Magic | Mathematical Formulation / Invariant | Measured Throughput | Target Data Domain |
+|:---|:---|:---|:---|:---|:---|
+| **01** | **Standard PRZM Engine** | `PRZM` (`0x4D5A5250`) | Multilevel fused LZSS + Macro-Trellis + V-ANS | 2.3–8.1 GB/s | General archives, mixed structured data |
+| **02** | **Fast Möbius Transform (FMT)** | `OpMOBIUS` (`0x11` / `MOBI`) | Radix-2 Yates butterfly involution $M_N^2 \equiv I$ over $\mathbb{F}_2$ | 0.5–1.1 GB/s | Multi-channel RGBA, bitmap bit-planes |
+| **03** | **Margolus Reversible CA** | `OpMARGOLUS` (`0x0F` / `MARG`) | 2D BBM partitioned reversible cellular automata | 0.4–1.9 GB/s | GPU Shaders (SPIR-V), structured grids |
+| **04** | **Discrete Heisenberg Group** | `HEIS` (`0x53494548`) | Nilpotent foliation in $H_3(\mathbb{F}_{2^8})$, $(x, y, z \oplus (x \odot y))$ | **54.0–58.0 GB/s** | Telemetry, shader bytecode, machine code |
+| **05** | **Cellular Sheaves & Hodge** | `CSHD` (`0x44485343`) | Boundary operator $\partial_1 \circ \partial_2 \equiv 0$ on 2D cell complexes | **52.3–59.7 GB/s** | Harmonic vector fields, geometric meshes |
+| **06** | **4D IsoQuant Collimation** | `OpISOQUANT` (`0x10` / `ISOQ`) | Isoclinic quaternionic rotation in $\mathbb{H}(\mathbb{F}_{2^8})$ ($\le 22$ cyc/64B) | **53.4–57.1 GB/s** | Sparse arrays, high-dimensional tensors |
+| **07** | **2-Adic Mahler Transform** | `MAHL` (`0x4D41484C`) | Unipotent Pascal wavelet transform over $\mathbb{Z}_2$, $\det(B) \equiv 1$ | **45.7–56.0 GB/s** | Polynomial trends, pointer tables, quantized weights |
+| **08** | **Symplectic Phase Foliation** | `SYMP` (`0x53594D50`) | Symplectic involution over $Sp(4, \mathbb{F}_{2^8})$, $T_S^2 \equiv I$ | **49.7–58.7 GB/s** | Multi-channel phase signals, complex audio |
+| **09** | **Persistent Homology & TDA** | `TDA` (`0x0E`) | Apparent-pair boundary reduction over $\mathbb{F}_2$ via streaming XOR | **28.1–30.0 GB/s** | Dense execution traces, binary event logs |
+| **10** | **Pareto-Wave Synthesis (PWS)** | `PWS1` (`PW\x01`) | AVX-Wave 256-bit unrolled vector synthesis + CAST parser | 1.2–2.6 GB/s | High-entropy source code, JSON payloads |
+| **11** | **Hyperbolic MDS (h-MDS)** | `HMDS` (`0x0B`) | Minkowski spectral metric projection $-Y = XX^T - \mathbf{u}\mathbf{u}^T$ in $\mathcal{M}^4$ | 1.6–1.9 GB/s | Deep AST trees, nested XML/JSON graphs |
+| **12** | **Quantum Spectral Unitary** | `QUNT` (`0x0C`) | Orthogonal Givens rotations over $\mathbb{F}_{2^8}$ ($s = c \oplus 1$) | **29.5–31.5 GB/s** | Correlated sensor channels, audio stems |
+| **13** | **Hensel Ultrametric Matcher** | *Internal L3/L4* | $p$-Adic ultrametric triangle inequality $d(x,z) \le \max(d(x,y), d(y,z))$ | 2.03x Match Speed | Level 3/4 match finding on 64 KiB window |
+
+## Verified Benchmark Results
+
+Hardware: 12th Gen Intel Core i5-12400F | Windows 11 x86_64 | GCC 16.1.0 (`-O3`) | Go 1.27 (`amd64`). All tests bounded to $\le 8$ threads. Data from `BENCHMARK_REPORT.md`:
+
+### Specialized Transforms vs Baseline
+
+| Dataset / Domain | Baseline Method | Specialized Transform | Compression Ratio | Decompression Speed | Hardware Cycles / 64B | Allocations |
+|:---|:---|:---|:---|:---|:---|:---|
+| **GPU Shaders (SPIR-V)** | Standard L1 (2.27x) | Margolus RCA (OpMARGOLUS) | **4.00x (+76.4%)** | 635.1 MB/s | 239.89 cyc | **0 allocs/op** |
+| **Multi-Channel RGBA** | Standard L1 (1.00x) | Fast Möbius (OpMOBIUS) | **9.33x (+832.9%)** | 477.6 MB/s | 318.97 cyc | **0 allocs/op** |
+| **Discrete Heisenberg** | Standard L1 (1.00x) | Heisenberg $H_3(\mathbb{F}_{2^8})$ | 1.00x | **58,026.2 MB/s (58.0 GB/s)** | **2.63 cyc** | **0 allocs/op** |
+| **Cellular Sheaf Hodge** | Standard L1 (1.00x) | Cellular Sheaf (CSHD) | 1.00x | **59,694.4 MB/s (59.7 GB/s)** | **2.75 cyc** | **0 allocs/op** |
+| **Sparse Arrays (RLE)** | Standard L1 (1394x) | 4D IsoQuant Collimation | 23.60x | **55,614.9 MB/s (55.6 GB/s)** | **2.75 cyc** | **0 allocs/op** |
+| **Tabular Telemetry** | Standard L1 (3.92x) | 2-Adic Mahler Transform | 1.36x | **53,501.1 MB/s (53.5 GB/s)** | **2.85 cyc** | **0 allocs/op** |
+| **Symplectic Phase** | Standard L1 (1.00x) | Symplectic $Sp(4, \mathbb{F}_{2^8})$ | 1.13x | **58,718.5 MB/s (58.7 GB/s)** | **2.60 cyc** | **0 allocs/op** |
+
+### $p$-Adic Hensel Lifting vs Naive Hash Chaining (64 KiB Window)
+
+| Traversal Depth | Hensel Ultrametric Search | Naive Hash Chaining | Measured Speedup | Longest Common Prefix Accuracy | Invariant Proof |
+|:---|:---|:---|:---|:---|:---|
+| **Depth 16** | 27.6 ns/op | 26.4 ns/op | 0.96x | 100% Bit-Identical | Theorem HL1/HL2 Verified |
+| **Depth 32** | 26.3 ns/op | 53.2 ns/op | **2.03x** | 100% Bit-Identical | Theorem HL1/HL2 Verified |
+| **Depth 64** | 26.9 ns/op | 54.6 ns/op | **2.03x** | 100% Bit-Identical | Theorem HL1/HL2 Verified |
+
+## Repository Layout
 
 ```
 przm/
 ├── include/
-│   ├── przm.h              # Umbrella header
-│   └── przm_dec.h          # Pure C Decompressor API
+│   ├── przm.h                   # Umbrella C header
+│   └── przm_dec.h               # Pure C zero-allocation decompressor API
 ├── src/
-│   └── przm_dec.c          # Core zero-allocation C11 implementation
+│   ├── przm_dec.c               # Core zero-allocation C11 decompressor
+│   └── aes_distinguisher.c      # C implementation of AES integral distinguisher
 ├── tests/
-│   └── test_przm_dec.c     # Standalone unit & CLI decompressor test suite
-├── docs/
-│   └── PRZM_SPEC.md        # Complete PRZM-SPEC-0.5.0 Bitstream Specification
-├── MANIFESTO.md            # Foundational mathematical philosophy of PRZM
-├── Makefile                # GCC / Clang build script
-└── CMakeLists.txt          # Modern CMake package definition
+│   ├── test_przm_dec.c          # Pure C verification suite (all 13 transforms)
+│   ├── bench_przm_c.c           # Hardware RDTSC benchmark tool
+│   └── test_m3_cross_codec.c    # Bidirectional Go <-> C cross-codec tester
+├── pkg/
+│   └── aes_distinguisher/       # High-order AES algebraic integral distinguisher
+├── PRZM/                        # Lean 4 formal mathematical verification suite
+│   ├── Heisenberg.lean          # Theorem 39 formal proof (0 sorry)
+│   ├── CellularSheaf.lean       # Discrete Hodge Laplacian proof (0 sorry)
+│   ├── Hensel.lean              # Hensel lifting ultrametric proofs (0 sorry)
+│   └── ...                      # 30 additional formal Lean 4 modules
+├── tools/
+│   ├── m4_bench/                # Milestone 4 benchmark runner
+│   └── checkmate.go             # Statistical randomness and distinguisher tool
+├── adversarial_suite_test.go    # Unified adversarial & challenger test suite
+├── BENCHMARK_REPORT.md          # Comprehensive empirical benchmark data
+├── MATHEMATICAL_REPORT.md       # Full formal mathematical exposition
+├── Makefile                     # GCC / Clang build configuration
+└── CMakeLists.txt               # CMake multi-platform build definition
 ```
 
----
+## API Usage
 
-## C API Quickstart
-
-Include `przm_dec.h` in your project:
+### Pure C99/C11 API (Zero Allocation)
 
 ```c
 #include "przm_dec.h"
 #include <stdio.h>
 #include <stdlib.h>
 
-void decompress_example(const uint8_t* compressed_data, size_t compressed_len) {
-    // 1. Query the uncompressed payload size from the frame header (O(1))
-    int64_t u_size = przm_get_uncompressed_size(compressed_data, compressed_len);
+void decompress_buffer(const uint8_t* compressed, size_t comp_len) {
+    // 1. Query exact output capacity in O(1) time
+    int64_t u_size = przm_get_uncompressed_size(compressed, comp_len);
     if (u_size < 0) {
-        fprintf(stderr, "Invalid PRZM frame: error %lld\n", (long long)u_size);
+        fprintf(stderr, "Malformed PRZM stream\n");
         return;
     }
 
-    // 2. Allocate destination buffer with safety padding (64 bytes)
-    size_t dst_capacity = (size_t)u_size + PRZM_SAFETY_PADDING;
-    uint8_t* output = (uint8_t*)malloc(dst_capacity);
+    // 2. Allocate output buffer with standard safety padding
+    size_t out_cap = (size_t)u_size + PRZM_SAFETY_PADDING;
+    uint8_t* out_buf = (uint8_t*)malloc(out_cap);
 
-    // 3. Decompress with 0 dynamic heap allocations
-    int64_t bytes_written = przm_decompress(compressed_data, compressed_len, output, dst_capacity);
-    if (bytes_written < 0 || bytes_written != u_size) {
-        fprintf(stderr, "Decompression failed: error %lld\n", (long long)bytes_written);
-        free(output);
+    // 3. Decompress with strictly ZERO heap allocations
+    int64_t written = przm_decompress(compressed, comp_len, out_buf, out_cap);
+    if (written < 0 || written != u_size) {
+        fprintf(stderr, "Decompression error: %lld\n", (long long)written);
+        free(out_buf);
         return;
     }
 
-    printf("Successfully decompressed %lld bytes!\n", (long long)bytes_written);
-
-    // ... use output buffer ...
-    free(output);
+    printf("Decompressed %lld bytes at line-rate speed!\n", (long long)written);
+    free(out_buf);
 }
 ```
 
----
+### Go API (Zero Allocation In-Place)
 
-## Building
+```go
+package main
 
-### Using Make (GCC / Clang)
+import (
+	"fmt"
+	"log"
 
-```bash
-# Build static library (libprzm_dec.a) and test harness
-make
+	"github.com/lemon4ksan/foundation/bufkit"
+	"github.com/lemon4ksan/przm"
+)
 
-# Run standalone verification test suite
-make test
+func main() {
+	data := []byte("Autonomous geometric compression across discrete Riemannian manifolds!")
+
+	// Compress at Level 3 (with Hensel's ultrametric match lifting)
+	compressed, err := przm.Compress(data, 3)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Allocate aligned output buffer
+	dst := bufkit.AlignedBytes(len(data)+64, bufkit.CacheLineSize)
+
+	// Zero-allocation in-place decompression
+	n, err := przm.DecompressTo(compressed, dst)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Decompressed %d bytes: %s\n", n, string(dst[:n]))
+}
 ```
 
-### Using CMake
+## Building & Verification
 
+### 1. Build and Run Pure C Decompressor Tests
 ```bash
-mkdir build && cd build
-cmake ..
-cmake --build .
-ctest --output-on-failure
+gcc -O3 -Wall -Wextra -Werror -Iinclude src/przm_dec.c tests/test_przm_dec.c -o test_przm_dec.exe
+./test_przm_dec.exe
+```
+Output:
+```
+=== Running przm_dec Pure C Verification Suite ===
+[PASS] przm_get_uncompressed_size
+[PASS] symplectic_involution
+[PASS] mahler_transform
+[PASS] standard_fused_raw
+[PASS] standard_fused_lz
+[PASS] pws_grammar
+[PASS] isoquant_uncollimation
+[PASS] gctr_decompression
+[PASS] heisenberg_unfoliation
+[PASS] cellular_sheaf_decompression
+[PASS] mobius_decompression
+[PASS] margolus_decompression
+[PASS] dictionary_decompression
+[PASS] sheaf_trellis_decompression
+[PASS] corrupted_and_truncated_frames
+>>> ALL TESTS PASSED SUCCESSFULLY! (0 Allocations, 100% Lossless) <<<
 ```
 
----
+### 2. Run Go Test Suite with Bounded Concurrency
+```bash
+go test -count=1 -parallel 8 ./...
+```
+
+### 3. Verify Formal Proofs in Lean 4
+```bash
+lake build
+```
 
 ## CLI Usage
 
-The test binary also functions as a standalone CLI decompressor:
+The standalone C verification executable doubles as a high-speed CLI decompressor:
 
 ```bash
-./test_przm_dec <input.przm> <output.bin>
+# Decompress any valid PRZM archive bitstream to destination file:
+./test_przm_dec.exe archive.przm recovered_payload.bin
 ```
-
----
-
-## Verification & Interoperability
-
-PRZM includes a comprehensive cross-language test suite. Payloads compressed by the Go implementation at compression levels 1 through 4 across JSON, telemetry, Go source code, and x86 machine binaries decompress in pure C bit-for-bit identical to original sources.
-
----
 
 ## License
 
-PRZM is licensed under the 3-Clause BSD License. See [LICENSE](LICENSE) for details.
+PRZM is distributed under the **3-Clause BSD License**. See [LICENSE](LICENSE) for details.

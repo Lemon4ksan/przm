@@ -11,12 +11,12 @@ import (
 
 // ANFProfile encapsulates algebraic metrics extracted from an ANF polynomial.
 type ANFProfile struct {
-	Degree          int        // Maximum degree among active monomials (0..8)
-	HasDegreeDefect bool       // True if degree < 8 (specifically, a_{255} == 0)
-	TopMonomialZero bool       // True if coefficient for x0*x1*...*x7 is 0 (a_{255} == 0)
-	ActiveMonomials int        // Total count of non-zero ANF coefficients
-	DegreeHistogram [9]int     // Count of active monomials for each degree 0..8
-	MonomialDensity float64    // ActiveMonomials / 256.0
+	Degree          int     // Maximum degree among active monomials (0..8)
+	HasDegreeDefect bool    // True if degree < 8 (specifically, a_{255} == 0)
+	TopMonomialZero bool    // True if coefficient for x0*x1*...*x7 is 0 (a_{255} == 0)
+	ActiveMonomials int     // Total count of non-zero ANF coefficients
+	DegreeHistogram [9]int  // Count of active monomials for each degree 0..8
+	MonomialDensity float64 // ActiveMonomials / 256.0
 }
 
 // FastMobiusTransform8 computes the Algebraic Normal Form (ANF) in-place for an 8-variable Boolean function
@@ -114,7 +114,7 @@ func ComputeANFDegree(anf []byte) int {
 	}
 
 	maxDeg := -1
-	for u := 0; u < 256; u++ {
+	for u := range 256 {
 		bit := (buf[u/8] >> (u % 8)) & 1
 		if bit == 1 {
 			deg := bits.OnesCount8(uint8(u))
@@ -138,7 +138,7 @@ func AnalyzeBooleanFunction(truthTable [32]byte) (anf [32]byte, profile ANFProfi
 	active := 0
 	var hist [9]int
 
-	for u := 0; u < 256; u++ {
+	for u := range 256 {
 		bit := (anf[u/8] >> (u % 8)) & 1
 		if bit == 1 {
 			deg := bits.OnesCount8(uint8(u))
@@ -175,7 +175,7 @@ func ExtractCoordinateTruthTable(sbox [256]byte, bit int) [32]byte {
 	if bit < 0 || bit >= 8 {
 		return tt
 	}
-	for x := 0; x < 256; x++ {
+	for x := range 256 {
 		val := sbox[x]
 		coordBit := (val >> bit) & 1
 		if coordBit == 1 {
@@ -189,7 +189,7 @@ func ExtractCoordinateTruthTable(sbox [256]byte, bit int) [32]byte {
 // f_c(x) = c . S(x) = \bigoplus_{k=0}^7 c_k S_k(x) for non-zero c in GF(2^8).
 func ComponentFunctionTruthTable(sbox [256]byte, mask byte) [32]byte {
 	var tt [32]byte
-	for x := 0; x < 256; x++ {
+	for x := range 256 {
 		val := sbox[x] & mask
 		parity := byte(bits.OnesCount8(val) & 1)
 		if parity == 1 {
@@ -202,7 +202,7 @@ func ComponentFunctionTruthTable(sbox [256]byte, mask byte) [32]byte {
 // AnalyzeSBox evaluates all 8 coordinate Boolean functions of an 8x8 S-box.
 func AnalyzeSBox(sbox [256]byte) [8]ANFProfile {
 	var profiles [8]ANFProfile
-	for k := 0; k < 8; k++ {
+	for k := range 8 {
 		tt := ExtractCoordinateTruthTable(sbox, k)
 		_, profiles[k] = AnalyzeBooleanFunction(tt)
 	}

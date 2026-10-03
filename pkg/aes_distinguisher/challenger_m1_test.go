@@ -22,7 +22,7 @@ func TestChallenger_DifferentialOracle_10000(t *testing.T) {
 	var key [16]byte
 	var stdCT [16]byte
 
-	for trial := 0; trial < numTrials; trial++ {
+	for trial := range numTrials {
 		if _, err := rand.Read(pt[:]); err != nil {
 			t.Fatalf("rand.Read(pt) failed: %v", err)
 		}
@@ -109,7 +109,7 @@ func TestChallenger_Engine_StreamDifferential(t *testing.T) {
 		t.Fatalf("aes.NewCipher failed: %v", err)
 	}
 
-	for b := 0; b < numBlocks; b++ {
+	for b := range numBlocks {
 		cipher.Encrypt(expected[b*16:(b+1)*16], src[b*16:(b+1)*16])
 	}
 
@@ -137,7 +137,7 @@ func TestChallenger_Engine_StreamDifferential(t *testing.T) {
 // 1. Involution M_8(M_8(e_i)) == e_i.
 // 2. Exact theoretical ANF coefficient: a_u = 1 iff (i &^ u) == 0 (subcube incidence).
 func TestChallenger_FMT_UnitBasisVectors_All256(t *testing.T) {
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		var tt [32]byte
 		tt[i/8] = 1 << (i % 8)
 
@@ -154,7 +154,7 @@ func TestChallenger_FMT_UnitBasisVectors_All256(t *testing.T) {
 		}
 
 		// Mathematical incidence check: a_u == 1 iff i is a subcube of u (i &^ u == 0)
-		for u := 0; u < 256; u++ {
+		for u := range 256 {
 			actualBit := (anf[u/8] >> (u % 8)) & 1
 			expectedBit := byte(0)
 			if (i &^ u) == 0 {
@@ -183,7 +183,7 @@ func TestChallenger_FMT_RandomTruthTables_Involution(t *testing.T) {
 	const numTrials = 10000
 	var orig [32]byte
 
-	for trial := 0; trial < numTrials; trial++ {
+	for trial := range numTrials {
 		if _, err := rand.Read(orig[:]); err != nil {
 			t.Fatalf("rand.Read failed: %v", err)
 		}
@@ -204,11 +204,11 @@ func TestChallenger_FMT_Linearity(t *testing.T) {
 	const numTrials = 10000
 	var t1, t2, tXor [32]byte
 
-	for trial := 0; trial < numTrials; trial++ {
+	for trial := range numTrials {
 		_, _ = rand.Read(t1[:])
 		_, _ = rand.Read(t2[:])
 
-		for i := 0; i < 32; i++ {
+		for i := range 32 {
 			tXor[i] = t1[i] ^ t2[i]
 		}
 
@@ -222,7 +222,7 @@ func TestChallenger_FMT_Linearity(t *testing.T) {
 		FastMobiusTransform8(&anfXor)
 
 		var expectedAnfXor [32]byte
-		for i := 0; i < 32; i++ {
+		for i := range 32 {
 			expectedAnfXor[i] = anf1[i] ^ anf2[i]
 		}
 
@@ -240,7 +240,7 @@ func TestChallenger_KeySchedule_LinearInvariant_100000(t *testing.T) {
 	key := make([]byte, 16)
 	w := make([]uint32, 44)
 
-	for trial := 0; trial < numKeys; trial++ {
+	for trial := range numKeys {
 		// Populate random key
 		binary.LittleEndian.PutUint64(key[0:8], uint64(trial)*0x9E3779B97F4A7C15^0x123456789ABCDEF0)
 		binary.LittleEndian.PutUint64(key[8:16], uint64(trial)*0xC6A4A7935BD1E995^0x0FEDCBA987654321)
@@ -249,7 +249,7 @@ func TestChallenger_KeySchedule_LinearInvariant_100000(t *testing.T) {
 
 		// Convert 11 round keys to 44 32-bit words
 		for r := 0; r <= 10; r++ {
-			for col := 0; col < 4; col++ {
+			for col := range 4 {
 				idx := 4*r + col
 				w[idx] = uint32(rks[r][4*col]) |
 					(uint32(rks[r][4*col+1]) << 8) |

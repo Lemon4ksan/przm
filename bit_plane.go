@@ -47,10 +47,10 @@ func BitPlaneSliceForward(src []byte, dst []byte) []byte {
 		dst = dst[:n]
 	}
 
-	for i := 0; i < num8; i++ {
+	for i := range num8 {
 		chunk := binary.LittleEndian.Uint64(src[i*8 : i*8+8])
 		trans := Transpose8x8(chunk)
-		for p := 0; p < 8; p++ {
+		for p := range 8 {
 			dst[p*planeLen+i] = byte(trans >> (p * 8))
 		}
 	}
@@ -77,9 +77,9 @@ func BitPlaneSliceInverse(src []byte, dst []byte) []byte {
 		dst = dst[:n]
 	}
 
-	for i := 0; i < num8; i++ {
+	for i := range num8 {
 		var trans uint64
-		for p := 0; p < 8; p++ {
+		for p := range 8 {
 			trans |= uint64(src[p*planeLen+i]) << (p * 8)
 		}
 		chunk := Transpose8x8(trans)

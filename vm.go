@@ -99,7 +99,7 @@ func ExecuteProgramScalar(prog *VMProgram, ctx *VMContext, streamData [][]byte, 
 
 	for *outPtr < uSize {
 		skip := false
-		for i := 0; i < numInsts; i++ {
+		for i := range numInsts {
 			op, dstReg, s1, s2, imm := prog.Instructions[i].Decode()
 
 			if skip {
@@ -145,7 +145,7 @@ func ExecuteProgramScalar(prog *VMProgram, ctx *VMContext, streamData [][]byte, 
 
 			case OpEXPAND:
 				b := byte(imm)
-				for j := 0; j < VMRegSize; j++ {
+				for j := range VMRegSize {
 					ctx.Regs[dstReg][j] = b
 				}
 
@@ -153,17 +153,17 @@ func ExecuteProgramScalar(prog *VMProgram, ctx *VMContext, streamData [][]byte, 
 				ctx.Regs[dstReg] = ctx.Regs[s1]
 
 			case OpXOR:
-				for j := 0; j < VMRegSize; j++ {
+				for j := range VMRegSize {
 					ctx.Regs[dstReg][j] = ctx.Regs[s1][j] ^ ctx.Regs[s2][j]
 				}
 
 			case OpTERNLOG:
-				for j := 0; j < VMRegSize; j++ {
+				for j := range VMRegSize {
 					ctx.Regs[dstReg][j] ^= ctx.Regs[s1][j] ^ ctx.Regs[s2][j]
 				}
 
 			case OpGFMUL:
-				for j := 0; j < VMRegSize; j++ {
+				for j := range VMRegSize {
 					ctx.Regs[dstReg][j] = GF256Mul(ctx.Regs[s1][j], ctx.Regs[s2][j])
 				}
 
@@ -174,23 +174,23 @@ func ExecuteProgramScalar(prog *VMProgram, ctx *VMContext, streamData [][]byte, 
 				}
 
 			case OpPERM:
-				for j := 0; j < VMRegSize; j++ {
+				for j := range VMRegSize {
 					idx := ctx.Regs[s1][j] & 0x3F // mod 64
 					ctx.Regs[dstReg][j] = ctx.Regs[s2][idx]
 				}
 
 			case OpADD:
-				for j := 0; j < VMRegSize; j++ {
+				for j := range VMRegSize {
 					ctx.Regs[dstReg][j] = ctx.Regs[s1][j] + ctx.Regs[s2][j]
 				}
 
 			case OpSUB:
-				for j := 0; j < VMRegSize; j++ {
+				for j := range VMRegSize {
 					ctx.Regs[dstReg][j] = ctx.Regs[s1][j] - ctx.Regs[s2][j]
 				}
 
 			case OpCMP_EQ:
-				for j := 0; j < VMRegSize; j++ {
+				for j := range VMRegSize {
 					if ctx.Regs[s1][j] == ctx.Regs[s2][j] {
 						ctx.Regs[dstReg][j] = 0xFF
 					} else {
@@ -200,7 +200,7 @@ func ExecuteProgramScalar(prog *VMProgram, ctx *VMContext, streamData [][]byte, 
 
 			case OpSKIP_CHUNK:
 				allZero := true
-				for j := 0; j < VMRegSize; j++ {
+				for j := range VMRegSize {
 					if ctx.Regs[s1][j] != 0 {
 						allZero = false
 						break
@@ -282,7 +282,7 @@ func SynthesizeMicroprogram(schema *SynthesizedSchema, src []byte) (*VMProgram, 
 
 		wPtr := 0
 		for _, colIdx := range cluster.ColumnIndices {
-			for r := 0; r < numRows; r++ {
+			for r := range numRows {
 				streams[cIdx][wPtr] = src[r*stride+colIdx]
 				wPtr++
 			}
@@ -422,7 +422,7 @@ func VMDecode(src []byte) ([]byte, error) {
 	}
 
 	insts := make([]VMInstruction, numInsts)
-	for i := 0; i < numInsts; i++ {
+	for i := range numInsts {
 		insts[i] = VMInstruction(binary.LittleEndian.Uint32(src[rPtr : rPtr+4]))
 		rPtr += 4
 	}
@@ -440,13 +440,13 @@ func VMDecode(src []byte) ([]byte, error) {
 	}
 
 	streamLens := make([]int, numStreams)
-	for k := 0; k < numStreams; k++ {
+	for k := range numStreams {
 		streamLens[k] = int(binary.LittleEndian.Uint32(src[rPtr : rPtr+4]))
 		rPtr += 4
 	}
 
 	streams := make([][]byte, numStreams)
-	for k := 0; k < numStreams; k++ {
+	for k := range numStreams {
 		sLen := streamLens[k]
 		if len(src) < rPtr+sLen {
 			return nil, ErrVMCorruptedHeader

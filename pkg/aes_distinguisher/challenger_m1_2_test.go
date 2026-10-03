@@ -137,7 +137,7 @@ func TestChallenger_SBoxBalancedness_Proof(t *testing.T) {
 	sbox := GetSBox()
 
 	// Prove each coordinate has weight 128 (balanced) => a_255 = wt % 2 = 0
-	for k := 0; k < 8; k++ {
+	for k := range 8 {
 		tt := ExtractCoordinateTruthTable(sbox, k)
 		hw := 0
 		for _, b := range tt {
@@ -174,7 +174,7 @@ func TestChallenger_SBoxDegreeHistogram(t *testing.T) {
 	expDeg7 := [8]int{3, 4, 5, 4, 3, 2, 2, 2}
 	totalDeg7 := 0
 
-	for k := 0; k < 8; k++ {
+	for k := range 8 {
 		p := profiles[k]
 		if p.Degree != 7 {
 			t.Fatalf("Coord %d degree != 7: got %d", k, p.Degree)

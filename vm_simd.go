@@ -35,7 +35,7 @@ func ExecuteProgramSIMD(prog *VMProgram, ctx *VMContext, streamData [][]byte, st
 
 	for *outPtr+VMRegSize <= uSize {
 		skip := false
-		for i := 0; i < numInsts; i++ {
+		for i := range numInsts {
 			op, dstReg, s1, s2, imm := prog.Instructions[i].Decode()
 
 			if skip {
@@ -95,8 +95,8 @@ func ExecuteProgramSIMD(prog *VMProgram, ctx *VMContext, streamData [][]byte, st
 				regsHi[dstReg] = regsHi[s1].GaloisFieldMul(regsHi[s2])
 
 			case OpCMP_EQ:
-				regsLo[dstReg] = regsLo[s1].Equal(regsLo[s2]).ToInt8x32().AsUint8x32()
-				regsHi[dstReg] = regsHi[s1].Equal(regsHi[s2]).ToInt8x32().AsUint8x32()
+				regsLo[dstReg] = regsLo[s1].Equal(regsLo[s2]).ToInt8x32().ToBits()
+				regsHi[dstReg] = regsHi[s1].Equal(regsHi[s2]).ToInt8x32().ToBits()
 
 			case OpSKIP_CHUNK:
 				if regsLo[s1].IsZero() && regsHi[s1].IsZero() {
@@ -159,7 +159,7 @@ func executeProgramSIMD512(prog *VMProgram, ctx *VMContext, streamData [][]byte,
 
 	for *outPtr+VMRegSize <= uSize {
 		skip := false
-		for i := 0; i < numInsts; i++ {
+		for i := range numInsts {
 			op, dstReg, s1, s2, imm := prog.Instructions[i].Decode()
 
 			if skip {
@@ -212,7 +212,7 @@ func executeProgramSIMD512(prog *VMProgram, ctx *VMContext, streamData [][]byte,
 				regs[dstReg] = regs[s1].GaloisFieldMul(regs[s2])
 
 			case OpCMP_EQ:
-				regs[dstReg] = regs[s1].Equal(regs[s2]).ToInt8x64().AsUint8x64()
+				regs[dstReg] = regs[s1].Equal(regs[s2]).ToInt8x64().ToBits()
 
 			case OpSKIP_CHUNK:
 				if regs[s1].Equal(zeroVec).ToBits() == ^uint64(0) {

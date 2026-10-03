@@ -150,7 +150,7 @@ type pairCandidate struct {
 func insertTopCand(cands []pairCandidate, maxLen int, cand pairCandidate) []pairCandidate {
 	n := len(cands)
 	pos := -1
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if cand.count > cands[i].count {
 			pos = i
 			break
@@ -174,20 +174,20 @@ func insertTopCand(cands []pairCandidate, maxLen int, cand pairCandidate) []pair
 }
 
 type grammarScratchpad struct {
-	tokensA   []uint16
-	tokensB   []uint16
-	dirtyL1   []uint32
-	cands     []pairCandidate
-	freqL1    [65536]uint16
-	pairToL1  [65536]uint8
-	freqL2    [4096]uint16
-	pairToL2  [4096]uint8
-	freqL3    [1024]uint16
-	pairToL3  [1024]uint8
-	freq256   [256]uint16
-	pairTo256 [256]uint8
+	tokensA    []uint16
+	tokensB    []uint16
+	dirtyL1    []uint32
+	cands      []pairCandidate
+	freqL1     [65536]uint16
+	pairToL1   [65536]uint8
+	freqL2     [4096]uint16
+	pairToL2   [4096]uint8
+	freqL3     [1024]uint16
+	pairToL3   [1024]uint8
+	freq256    [256]uint16
+	pairTo256  [256]uint8
 	matchTable [65536]uint32
-	kb        KBScratchpad
+	kb         KBScratchpad
 }
 
 var grammarScratchpadPool = generic.NewPool(func() *grammarScratchpad {
@@ -341,7 +341,7 @@ func induceGrammarWithScratchpadNoPrune(src []byte, sp *grammarScratchpad) (*Gra
 	}
 
 	l1Limit := min(len(sp.cands), maxL1Rules)
-	for i := 0; i < l1Limit; i++ {
+	for i := range l1Limit {
 		k := sp.cands[i].key
 		u := byte(k >> 8)
 		v := byte(k & 0xFF)
@@ -353,7 +353,7 @@ func induceGrammarWithScratchpadNoPrune(src []byte, sp *grammarScratchpad) (*Gra
 	// Substitute Layer 1 rules with Knuth-Bendix confluent rewriting
 	if len(g.L1) > 0 {
 		tokens = KBConfluentSubstituteL1(tokens, sp.tokensB[:0], sp.pairToL1[:], sp.freqL1[:])
-		for i := 0; i < l1Limit; i++ {
+		for i := range l1Limit {
 			sp.pairToL1[sp.cands[i].key] = 0
 		}
 	}
@@ -391,7 +391,7 @@ func induceGrammarWithScratchpadNoPrune(src []byte, sp *grammarScratchpad) (*Gra
 
 		l2Limit := min(len(sp.cands), maxL2Rules)
 
-		for i := 0; i < l2Limit; i++ {
+		for i := range l2Limit {
 			k := sp.cands[i].key
 			l1A := uint8(k >> 6)
 			l1B := uint8(k & 0x3F)
@@ -403,7 +403,7 @@ func induceGrammarWithScratchpadNoPrune(src []byte, sp *grammarScratchpad) (*Gra
 		// Substitute Layer 2 rules with Knuth-Bendix confluent rewriting
 		if len(g.L2) > 0 {
 			tokens = KBConfluentSubstituteL2(tokens, sp.tokensA[:0], sp.pairToL2[:], sp.freqL2[:], l1Count)
-			for i := 0; i < l2Limit; i++ {
+			for i := range l2Limit {
 				sp.pairToL2[sp.cands[i].key] = 0
 			}
 		}
@@ -442,7 +442,7 @@ func induceGrammarWithScratchpadNoPrune(src []byte, sp *grammarScratchpad) (*Gra
 
 		l3Limit := min(len(sp.cands), maxL3Rules)
 
-		for i := 0; i < l3Limit; i++ {
+		for i := range l3Limit {
 			k := sp.cands[i].key
 			l2A := uint8(k >> 5)
 			l2B := uint8(k & 0x1F)
@@ -454,7 +454,7 @@ func induceGrammarWithScratchpadNoPrune(src []byte, sp *grammarScratchpad) (*Gra
 		// Substitute Layer 3 rules with Knuth-Bendix confluent rewriting
 		if len(g.L3) > 0 {
 			tokens = KBConfluentSubstituteL3(tokens, sp.tokensB[:0], sp.pairToL3[:], sp.freqL3[:], l2Count)
-			for i := 0; i < l3Limit; i++ {
+			for i := range l3Limit {
 				sp.pairToL3[sp.cands[i].key] = 0
 			}
 		}
@@ -845,19 +845,19 @@ func GGTCDecode(src []byte) ([]byte, error) {
 
 	var g GrammarH_DAG
 	g.L1 = make([]RuleL1, numL1)
-	for i := 0; i < numL1; i++ {
+	for i := range numL1 {
 		g.L1[i] = RuleL1{U: src[ptr], V: src[ptr+1]}
 		ptr += 2
 	}
 
 	g.L2 = make([]RuleL2, numL2)
-	for i := 0; i < numL2; i++ {
+	for i := range numL2 {
 		g.L2[i] = RuleL2{L1A: src[ptr], L1B: src[ptr+1]}
 		ptr += 2
 	}
 
 	g.L3 = make([]RuleL3, numL3)
-	for i := 0; i < numL3; i++ {
+	for i := range numL3 {
 		g.L3[i] = RuleL3{L2A: src[ptr], L2B: src[ptr+1]}
 		ptr += 2
 	}

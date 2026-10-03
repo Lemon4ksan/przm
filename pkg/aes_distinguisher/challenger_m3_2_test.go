@@ -54,7 +54,7 @@ func TestChallengerM3_2_ZeroAllocation_10000Runs(t *testing.T) {
 	// 2. Prepare 100% balanced compressed frame (8 KiB raw, 2 balanced chunks)
 	rawBal := make([]byte, 8192)
 	key := [16]byte{0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c}
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		var pt [16]byte
 		pt[0] = byte(i)
 		for j := 1; j < 16; j++ {
@@ -63,10 +63,10 @@ func TestChallengerM3_2_ZeroAllocation_10000Runs(t *testing.T) {
 		blk := EncryptReducedRound(pt[:], key[:], 3, true)
 		copy(rawBal[i*16:(i+1)*16], blk[:])
 	}
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		var pt [16]byte
 		pt[1] = byte(i)
-		for j := 0; j < 16; j++ {
+		for j := range 16 {
 			if j != 1 {
 				pt[j] = byte(j*19 + 5)
 			}
@@ -174,7 +174,7 @@ func TestChallengerM3_2_ZeroAllocation_10000Runs(t *testing.T) {
 }
 
 // TestChallengerM3_2_ZeroAllocation_HighConcurrencyStress executes DecompressCryptoCore
-// across 32 concurrent goroutines performing 5,000 iterations each (160,000 total operations)
+// across 8 concurrent goroutines performing 5,000 iterations each (40,000 total operations)
 // validating zero race conditions, bit-exact roundtrips, and zero heap leakages.
 func TestChallengerM3_2_ZeroAllocation_HighConcurrencyStress(t *testing.T) {
 	const (
@@ -210,14 +210,14 @@ func TestChallengerM3_2_ZeroAllocation_HighConcurrencyStress(t *testing.T) {
 
 	start := time.Now()
 
-	for w := 0; w < numWorkers; w++ {
+	for w := range numWorkers {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
 			// Each worker has its own pre-allocated destination buffer
 			workerDst := make([]byte, len(raw))
 
-			for i := 0; i < itersPerWorker; i++ {
+			for i := range itersPerWorker {
 				n, decErr := DecompressCryptoCore(compressed, workerDst)
 				if decErr != nil || n != len(raw) {
 					atomic.AddInt64(&mismatchCount, 1)
@@ -263,10 +263,13 @@ func TestChallengerM3_2_ZeroAllocation_HighConcurrencyStress(t *testing.T) {
 // TestChallengerM3_2_CycleLatency_Block64_10000Runs benchmarks DecompressCryptoCoreBlock64
 // across 10,000 runs for both balanced and unbalanced modes, asserting <= 384 cycles.
 func TestChallengerM3_2_CycleLatency_Block64_10000Runs(t *testing.T) {
+	if RaceEnabled {
+		t.Skip("skipping empirical cycle latency benchmark under race detector (instrumentation invalidates microarchitectural bounds)")
+	}
 	const runs = 10000
 
 	var b0, b1, b2, b3 [16]byte
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		b0[i] = byte(i*5 + 1)
 		b1[i] = byte(i*11 + 3)
 		b2[i] = byte(i*17 + 7)
@@ -287,7 +290,7 @@ func TestChallengerM3_2_CycleLatency_Block64_10000Runs(t *testing.T) {
 	var sinkIn, sinkOut int
 
 	// 1. Warm-up
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		inB, outB := DecompressCryptoCoreBlock64(src48[:], dst[:], true)
 		sinkIn += inB
 		sinkOut += outB
@@ -298,7 +301,7 @@ func TestChallengerM3_2_CycleLatency_Block64_10000Runs(t *testing.T) {
 
 	// 2. Benchmark Balanced Mode (reads 48 B, reconstructs B3 = B0 ^ B1 ^ B2, writes 64 B)
 	startBal := time.Now()
-	for i := 0; i < runs; i++ {
+	for range runs {
 		inB, outB := DecompressCryptoCoreBlock64(src48[:], dst[:], true)
 		sinkIn += inB
 		sinkOut += outB
@@ -316,7 +319,7 @@ func TestChallengerM3_2_CycleLatency_Block64_10000Runs(t *testing.T) {
 
 	// 3. Benchmark Unbalanced Mode (copies 64 B)
 	startUnbal := time.Now()
-	for i := 0; i < runs; i++ {
+	for range runs {
 		inB, outB := DecompressCryptoCoreBlock64(src64[:], dst[:], false)
 		sinkIn += inB
 		sinkOut += outB
@@ -419,7 +422,7 @@ func TestChallengerM3_2_MalformedFrames_TruncatedFrames(t *testing.T) {
 	dst := make([]byte, 8192)
 
 	// 1. Truncated before minimum header length (0..15 bytes)
-	for sz := 0; sz < CryptoCoreHeaderSize; sz++ {
+	for sz := range CryptoCoreHeaderSize {
 		truncBuf := make([]byte, sz)
 		n, err := DecompressCryptoCore(truncBuf, dst)
 		if n != 0 || !errors.Is(err, ErrCorruptFrame) {
@@ -588,7 +591,7 @@ func TestChallengerM3_2_MalformedFrames_AdversarialMutationFuzzing(t *testing.T)
 
 	t.Logf("[Challenge 3 | Fuzzing] Commencing %d adversarial mutation trials...", fuzzRuns)
 
-	for iter := 0; iter < fuzzRuns; iter++ {
+	for iter := range fuzzRuns {
 		// Clone base frame
 		mut := make([]byte, len(baseFrame))
 		copy(mut, baseFrame)
@@ -602,7 +605,7 @@ func TestChallengerM3_2_MalformedFrames_AdversarialMutationFuzzing(t *testing.T)
 		case 1:
 			// Bit flips in header (bytes 0..15)
 			flips := rnd.Intn(8) + 1
-			for f := 0; f < flips; f++ {
+			for range flips {
 				pos := rnd.Intn(16)
 				bit := rnd.Intn(8)
 				mut[pos] ^= byte(1 << bit)
@@ -610,7 +613,7 @@ func TestChallengerM3_2_MalformedFrames_AdversarialMutationFuzzing(t *testing.T)
 		case 2:
 			// Bit flips across entire frame
 			flips := rnd.Intn(32) + 1
-			for f := 0; f < flips; f++ {
+			for range flips {
 				pos := rnd.Intn(len(mut))
 				mut[pos] ^= byte(rnd.Intn(256))
 			}

@@ -51,10 +51,7 @@ func main() {
 	}
 
 	roundStrs := strings.Split(*roundsFlag, ",")
-	numBlocks := *blocksFlag
-	if numBlocks < 256 {
-		numBlocks = 256
-	}
+	numBlocks := max(*blocksFlag, 256)
 
 	report := SweepReport{
 		SampleBlocks: numBlocks,
@@ -79,7 +76,7 @@ func main() {
 		// For other rounds: use multi-stream structured counter plaintexts.
 		plaintexts := make([][16]byte, numBlocks)
 		if r == 4 {
-			for i := 0; i < numBlocks; i++ {
+			for i := range numBlocks {
 				var pt [16]byte
 				pt[0] = byte(i)
 				pt[5] = byte(i * 13)
@@ -93,7 +90,7 @@ func main() {
 				plaintexts[i] = pt
 			}
 		} else {
-			for i := 0; i < numBlocks; i++ {
+			for i := range numBlocks {
 				plaintexts[i][0] = byte(i)
 				plaintexts[i][1] = byte(i >> 8)
 				plaintexts[i][5] = byte(i * 13)
@@ -109,7 +106,7 @@ func main() {
 
 		ciphertexts := make([][16]byte, numBlocks)
 		flatCT := make([]byte, numBlocks*16)
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			ct := aes_distinguisher.EncryptReducedRound(plaintexts[i][:], keyBytes, r, true)
 			ciphertexts[i] = ct
 			copy(flatCT[i*16:(i+1)*16], ct[:])

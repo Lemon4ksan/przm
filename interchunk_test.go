@@ -19,7 +19,7 @@ func TestInterChunk_Theorem4_LosslessRoundtrip(t *testing.T) {
 	numChunks := 8
 	chunkSize := 16 * 1024
 	chunks := make([][]byte, numChunks)
-	for i := 0; i < numChunks; i++ {
+	for i := range numChunks {
 		chunks[i] = bench.GenerateJSON(chunkSize)
 	}
 
@@ -37,7 +37,7 @@ func TestInterChunk_Theorem4_LosslessRoundtrip(t *testing.T) {
 		t.Fatalf("chunk count mismatch: got %d, want %d", len(decoded), len(chunks))
 	}
 
-	for i := 0; i < numChunks; i++ {
+	for i := range numChunks {
 		if !bytes.Equal(decoded[i], chunks[i]) {
 			t.Fatalf("Theorem 4 violation on chunk %d: mismatch with original data", i)
 		}
@@ -50,7 +50,7 @@ func TestInterChunk_Theorem5_HeaderConvergence(t *testing.T) {
 	numChunks := 10
 	chunkSize := 16 * 1024
 	chunks := make([][]byte, numChunks)
-	for i := 0; i < numChunks; i++ {
+	for i := range numChunks {
 		chunks[i] = bench.GenerateJSON(chunkSize)
 	}
 

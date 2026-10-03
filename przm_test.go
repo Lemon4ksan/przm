@@ -70,7 +70,7 @@ func TestPRZM_RLE(t *testing.T) {
 func TestPRZM_PeriodicStride(t *testing.T) {
 	// Synthesize structured CSV/table records with stride S = 32
 	var buf bytes.Buffer
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		// Exactly 32 bytes per row
 		row := fmt.Sprintf("ID:%05d|STATUS:OK|METRIC:%05d\n", i, (i*17)%10000)
 		if len(row) != 32 {
@@ -354,10 +354,7 @@ func TestPRZM_GoExeChunks(t *testing.T) {
 	chunkSize := 4 * 1024 * 1024
 	for _, level := range []int{1, 2, 3} {
 		for start := 0; start < len(data); start += chunkSize {
-			end := start + chunkSize
-			if end > len(data) {
-				end = len(data)
-			}
+			end := min(start+chunkSize, len(data))
 			chunk := data[start:end]
 			comp, err := przm.Compress(chunk, level)
 			if err != nil {
@@ -418,7 +415,7 @@ func TestPRZM_Unified_v03_Engines(t *testing.T) {
 	t.Run("SpectralUnitary_4Channel", func(t *testing.T) {
 		n := 1024
 		raw := make([]byte, n*4)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			raw[i*4+0] = byte(i)
 			raw[i*4+1] = byte(i) // identical channel -> collapses to zero under unitary rotation!
 			raw[i*4+2] = byte(i * 3)
@@ -441,7 +438,7 @@ func TestPRZM_Unified_v03_Engines(t *testing.T) {
 	t.Run("HMDS_4Channel", func(t *testing.T) {
 		n := 1024
 		raw := make([]byte, n*4)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			val := byte(i & 0xFF)
 			raw[i*4+0] = val
 			raw[i*4+1] = val + 1

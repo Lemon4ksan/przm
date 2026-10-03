@@ -71,10 +71,10 @@ func ComputeChannelDistances4(src []byte) [4][4]float64 {
 	}
 
 	// Compute differences between channels
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		for j := i + 1; j < 4; j++ {
 			diffCount := 0
-			for t := 0; t < n; t++ {
+			for t := range n {
 				if src[t*4+i] != src[t*4+j] {
 					diffCount++
 				}
@@ -94,8 +94,8 @@ func ComputeChannelDistances4(src []byte) [4][4]float64 {
 func AnalyticalHMDS4(dist [4][4]float64) [4]HyperbolicCoord4 {
 	// Step 1: Compute Y_ij = cosh(d_ij)
 	var Y [4][4]float64
-	for i := 0; i < 4; i++ {
-		for j := 0; j < 4; j++ {
+	for i := range 4 {
+		for j := range 4 {
 			if i == j {
 				Y[i][j] = 1.0
 			} else {
@@ -106,8 +106,8 @@ func AnalyticalHMDS4(dist [4][4]float64) [4]HyperbolicCoord4 {
 
 	// Step 2: Target matrix A = -Y
 	var A [4][4]float64
-	for i := 0; i < 4; i++ {
-		for j := 0; j < 4; j++ {
+	for i := range 4 {
+		for j := range 4 {
 			A[i][j] = -Y[i][j]
 		}
 	}
@@ -117,7 +117,7 @@ func AnalyticalHMDS4(dist [4][4]float64) [4]HyperbolicCoord4 {
 
 	// Sort eigenvalues descending
 	idx := []int{0, 1, 2, 3}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		for j := i + 1; j < 4; j++ {
 			if eigenvals[idx[j]] > eigenvals[idx[i]] {
 				idx[i], idx[j] = idx[j], idx[i]
@@ -128,7 +128,7 @@ func AnalyticalHMDS4(dist [4][4]float64) [4]HyperbolicCoord4 {
 	// Step 4: Extract spatial coordinates X from top positive eigenvalues of A
 	// and time coordinate u from the negative eigenvalue
 	var coords [4]HyperbolicCoord4
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		// Time coordinate u corresponds to the negative eigenvalue of A (positive of Y)
 		negIdx := idx[3]
 		valNeg := -eigenvals[negIdx]
@@ -142,7 +142,7 @@ func AnalyticalHMDS4(dist [4][4]float64) [4]HyperbolicCoord4 {
 		coords[i].Time = u_i
 
 		// Spatial coordinates from top positive eigenvalues of A
-		for k := 0; k < 3; k++ {
+		for k := range 3 {
 			posIdx := idx[k]
 			valPos := eigenvals[posIdx]
 			if valPos > 0 {
@@ -163,15 +163,15 @@ func AnalyticalHMDS4(dist [4][4]float64) [4]HyperbolicCoord4 {
 // jacobiEigen4 computes eigenvalues and eigenvectors for 4x4 symmetric matrix.
 func jacobiEigen4(A [4][4]float64) ([4]float64, [4][4]float64) {
 	var V [4][4]float64
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		V[i][i] = 1.0
 	}
 
-	for iter := 0; iter < 20; iter++ {
+	for range 20 {
 		// Find max off-diagonal element
 		maxVal := 0.0
 		p, q := 0, 1
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			for j := i + 1; j < 4; j++ {
 				val := math.Abs(A[i][j])
 				if val > maxVal {
@@ -206,7 +206,7 @@ func jacobiEigen4(A [4][4]float64) ([4]float64, [4][4]float64) {
 		A[p][q] = 0.0
 		A[q][p] = 0.0
 
-		for k := 0; k < 4; k++ {
+		for k := range 4 {
 			if k != p && k != q {
 				Akp := A[k][p]
 				Akq := A[k][q]
@@ -218,7 +218,7 @@ func jacobiEigen4(A [4][4]float64) ([4]float64, [4][4]float64) {
 		}
 
 		// Accumulate eigenvectors in V
-		for k := 0; k < 4; k++ {
+		for k := range 4 {
 			Vkp := V[k][p]
 			Vkq := V[k][q]
 			V[k][p] = c*Vkp - s*Vkq
@@ -227,7 +227,7 @@ func jacobiEigen4(A [4][4]float64) ([4]float64, [4][4]float64) {
 	}
 
 	var eigenvalues [4]float64
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		eigenvalues[i] = A[i][i]
 	}
 	return eigenvalues, V
@@ -250,9 +250,9 @@ func CompressHMDS(src []byte) []byte {
 	// Quantize Poincaré ball coordinates into 8-bit integers per channel
 	// 4 channels x 3 spatial coordinates = 12 bytes header
 	var qCoords [4][3]int8
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		ball := coords[i].ProjectToPoincareBall()
-		for k := 0; k < 3; k++ {
+		for k := range 3 {
 			q := int8(ball[k] * 127.0)
 			qCoords[i][k] = q
 		}
@@ -261,10 +261,10 @@ func CompressHMDS(src []byte) []byte {
 	// Apply channels permutation sorted by hyperbolic radius (distance to origin)
 	radii := make([]float64, 4)
 	perm := []int{0, 1, 2, 3}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		radii[i] = coords[i].Time // x0 is monotonically related to hyperbolic radius
 	}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		for j := i + 1; j < 4; j++ {
 			if radii[perm[j]] < radii[perm[i]] {
 				perm[i], perm[j] = perm[j], perm[i]
@@ -274,8 +274,8 @@ func CompressHMDS(src []byte) []byte {
 
 	// Reorder channels by hyperbolic hierarchy
 	transformed := make([]byte, alignedLen)
-	for t := 0; t < numVectors; t++ {
-		for c := 0; c < 4; c++ {
+	for t := range numVectors {
+		for c := range 4 {
 			transformed[t*4+c] = src[t*4+perm[c]]
 		}
 	}
@@ -286,12 +286,12 @@ func CompressHMDS(src []byte) []byte {
 		binary.LittleEndian.PutUint32(dst[0:4], HMDSMagic)
 		dst[4] = HMDSModeCompressed
 		binary.LittleEndian.PutUint32(dst[5:9], uint32(n))
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			dst[9+i] = uint8(perm[i])
 		}
 		pos := 13
-		for i := 0; i < 4; i++ {
-			for k := 0; k < 3; k++ {
+		for i := range 4 {
+			for k := range 3 {
 				dst[pos] = uint8(qCoords[i][k])
 				pos++
 			}
@@ -310,12 +310,12 @@ func CompressHMDS(src []byte) []byte {
 	binary.LittleEndian.PutUint32(dst[0:4], HMDSMagic)
 	dst[4] = HMDSMode4D
 	binary.LittleEndian.PutUint32(dst[5:9], uint32(n))
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		dst[9+i] = uint8(perm[i])
 	}
 	pos := 13
-	for i := 0; i < 4; i++ {
-		for k := 0; k < 3; k++ {
+	for i := range 4 {
+		for k := range 3 {
 			dst[pos] = uint8(qCoords[i][k])
 			pos++
 		}
@@ -387,7 +387,7 @@ func DecompressHMDS(src []byte, dst []byte) ([]byte, error) {
 
 	// Read permutation and compute inverse
 	var invPerm [4]int
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		origChannel := int(src[9+i])
 		if origChannel >= 0 && origChannel < 4 {
 			invPerm[i] = origChannel
@@ -421,7 +421,7 @@ func DecompressHMDS(src []byte, dst []byte) ([]byte, error) {
 		if len(dst) > 0 && len(transformed) > 0 && &dst[0] != &transformed[0] {
 			copy(dst, transformed[:alignedLen])
 		}
-		for t := 0; t < numVectors; t++ {
+		for t := range numVectors {
 			v0 := dst[t*4]
 			v1 := dst[t*4+1]
 			v2 := dst[t*4+2]
@@ -444,8 +444,8 @@ func DecompressHMDS(src []byte, dst []byte) ([]byte, error) {
 	payload := src[pos : pos+alignedLen]
 
 	// Invert permutation into dst
-	for t := 0; t < numVectors; t++ {
-		for c := 0; c < 4; c++ {
+	for t := range numVectors {
+		for c := range 4 {
 			dst[t*4+invPerm[c]] = payload[t*4+c]
 		}
 	}

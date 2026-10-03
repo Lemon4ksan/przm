@@ -23,14 +23,14 @@ func generateMacroData(totalSize int, numRepeats int) []byte {
 	// Create 3 distinct 8 KB templates
 	templateSize := 8192
 	templates := make([][]byte, 3)
-	for t := 0; t < 3; t++ {
+	for t := range 3 {
 		templates[t] = make([]byte, templateSize)
 		rng.Read(templates[t])
 	}
 
 	// Stamp templates at random positions throughout data
 	step := totalSize / (numRepeats + 1)
-	for i := 0; i < numRepeats; i++ {
+	for i := range numRepeats {
 		pos := (i + 1) * step
 		if pos+templateSize <= totalSize {
 			tmpl := templates[i%len(templates)]

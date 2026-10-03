@@ -21,7 +21,7 @@ import (
 )
 
 // -----------------------------------------------------------------------------
-// 1. Concurrency Stress Test: 100 concurrent goroutines under -race
+// 1. Concurrency Stress Test: 8 concurrent goroutines under -race
 // -----------------------------------------------------------------------------
 func TestMilestone3_ConcurrencyStress_100Goroutines(t *testing.T) {
 	const numGoroutines = 8
@@ -33,12 +33,12 @@ func TestMilestone3_ConcurrencyStress_100Goroutines(t *testing.T) {
 		func() []byte {
 			b := make([]byte, 64)
 			b[0] = 0x55
-			for j := 0; j < 7; j++ {
+			for j := range 7 {
 				b[j+1] = b[j] ^ byte(j+1)
 			}
 			for i := 1; i < 8; i++ {
 				v := byte(i * 3)
-				for j := 0; j < 8; j++ {
+				for j := range 8 {
 					b[i*8+j] = b[(i-1)*8+j] ^ v
 				}
 			}
@@ -48,11 +48,11 @@ func TestMilestone3_ConcurrencyStress_100Goroutines(t *testing.T) {
 		func() []byte {
 			b := make([]byte, 256)
 			b[0] = 0xAA
-			for j := 0; j < 15; j++ {
+			for j := range 15 {
 				b[j+1] = b[j] ^ 0x03
 			}
 			for i := 1; i < 16; i++ {
-				for j := 0; j < 16; j++ {
+				for j := range 16 {
 					b[i*16+j] = b[(i-1)*16+j] ^ 0x07
 				}
 			}
@@ -72,12 +72,12 @@ func TestMilestone3_ConcurrencyStress_100Goroutines(t *testing.T) {
 		func() []byte {
 			b := make([]byte, 4096)
 			b[0] = 0x12
-			for j := 0; j < 63; j++ {
+			for j := range 63 {
 				b[j+1] = b[j] ^ byte((j%5)+1)
 			}
 			for i := 1; i < 64; i++ {
 				v := byte((i % 3) + 1)
-				for j := 0; j < 64; j++ {
+				for j := range 64 {
 					b[i*64+j] = b[(i-1)*64+j] ^ v
 				}
 			}
@@ -90,14 +90,14 @@ func TestMilestone3_ConcurrencyStress_100Goroutines(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, numGoroutines*iterations)
 
-	for g := 0; g < numGoroutines; g++ {
+	for g := range numGoroutines {
 		wg.Add(1)
 		go func(gid int) {
 			defer wg.Done()
 			rng := rand.New(rand.NewSource(int64(gid*7919 + 101)))
 			dst := make([]byte, 8192)
 
-			for iter := 0; iter < iterations; iter++ {
+			for iter := range iterations {
 				data := datasets[rng.Intn(len(datasets))]
 
 				comp, err := przm.CompressCellularSheaf(data, 3)
@@ -143,12 +143,12 @@ func TestMilestone3_ZeroAllocDecompression_Assertion(t *testing.T) {
 			gen: func() []byte {
 				b := make([]byte, 64)
 				b[0] = 0x42
-				for j := 0; j < 7; j++ {
+				for j := range 7 {
 					b[j+1] = b[j] ^ byte(j+1)
 				}
 				for i := 1; i < 8; i++ {
 					v := byte(i * 3)
-					for j := 0; j < 8; j++ {
+					for j := range 8 {
 						b[i*8+j] = b[(i-1)*8+j] ^ v
 					}
 				}
@@ -160,11 +160,11 @@ func TestMilestone3_ZeroAllocDecompression_Assertion(t *testing.T) {
 			gen: func() []byte {
 				b := make([]byte, 256)
 				b[0] = 0x99
-				for j := 0; j < 15; j++ {
+				for j := range 15 {
 					b[j+1] = b[j] ^ 0x02
 				}
 				for i := 1; i < 16; i++ {
-					for j := 0; j < 16; j++ {
+					for j := range 16 {
 						b[i*16+j] = b[(i-1)*16+j] ^ 0x05
 					}
 				}
@@ -176,12 +176,12 @@ func TestMilestone3_ZeroAllocDecompression_Assertion(t *testing.T) {
 			gen: func() []byte {
 				b := make([]byte, 4096)
 				b[0] = 0x22
-				for j := 0; j < 63; j++ {
+				for j := range 63 {
 					b[j+1] = b[j] ^ byte(j+1)
 				}
 				for i := 1; i < 64; i++ {
 					v := byte(i + 1)
-					for j := 0; j < 64; j++ {
+					for j := range 64 {
 						b[i*64+j] = b[(i-1)*64+j] ^ v
 					}
 				}
@@ -249,7 +249,7 @@ func TestMilestone3_PureC_50RandomFrames(t *testing.T) {
 
 	strides := []int{4, 8, 16, 32, 64}
 
-	for frameID := 0; frameID < 50; frameID++ {
+	for frameID := range 50 {
 		W := strides[rng.Intn(len(strides))]
 		M := 2 + rng.Intn(35)
 		remLen := rng.Intn(W)
@@ -269,7 +269,7 @@ func TestMilestone3_PureC_50RandomFrames(t *testing.T) {
 				buf[j+1] = buf[j] ^ gammaH
 			}
 			for i := 1; i < M; i++ {
-				for j := 0; j < W; j++ {
+				for j := range W {
 					buf[i*W+j] = buf[(i-1)*W+j] ^ gammaV
 				}
 			}
@@ -285,7 +285,7 @@ func TestMilestone3_PureC_50RandomFrames(t *testing.T) {
 			}
 			for i := 1; i < M; i++ {
 				v := ev[i-1]
-				for j := 0; j < W; j++ {
+				for j := range W {
 					buf[i*W+j] = buf[(i-1)*W+j] ^ v
 				}
 			}
@@ -301,12 +301,12 @@ func TestMilestone3_PureC_50RandomFrames(t *testing.T) {
 			}
 			for i := 1; i < M; i++ {
 				v := ev[i-1]
-				for j := 0; j < W; j++ {
+				for j := range W {
 					buf[i*W+j] = buf[(i-1)*W+j] ^ v
 				}
 			}
 			numCurls := 1 + rng.Intn(min(3, (M-1)*(W-1)))
-			for c := 0; c < numCurls; c++ {
+			for range numCurls {
 				fi := 1 + rng.Intn(M-1)
 				fj := 1 + rng.Intn(W-1)
 				buf[fi*W+fj] ^= byte(rng.Intn(255) + 1)
@@ -450,11 +450,11 @@ func TestMilestone3_MultiplicativeProgression_EndToEndInterop(t *testing.T) {
 	// Row i: x_{i, j} = 2 * x_{i-1, j}
 	src := make([]byte, 128)
 	src[0] = 0x01
-	for j := 0; j < 7; j++ {
+	for j := range 7 {
 		src[j+1] = przm.GF256Mul(0x02, src[j])
 	}
 	for i := 1; i < 16; i++ {
-		for j := 0; j < 8; j++ {
+		for j := range 8 {
 			src[i*8+j] = przm.GF256Mul(0x02, src[(i-1)*8+j])
 		}
 	}
@@ -530,13 +530,13 @@ func TestMilestone3_Twist2_NonZeroEv_EndToEndInterop(t *testing.T) {
 	src := make([]byte, 128)
 	// Row 0
 	src[0] = 0x03
-	for j := 0; j < 7; j++ {
+	for j := range 7 {
 		src[j+1] = przm.GF256Mul(0x02, src[j])
 	}
 	// Rows 1..15
 	for i := 1; i < 16; i++ {
 		curV := byte(0x05)
-		for j := 0; j < 8; j++ {
+		for j := range 8 {
 			src[i*8+j] = przm.GF256Mul(0x02, src[(i-1)*8+j]) ^ curV
 			curV = przm.GF256Mul(0x02, curV)
 		}
@@ -588,8 +588,6 @@ func TestMilestone3_Twist2_NonZeroEv_EndToEndInterop(t *testing.T) {
 	}
 }
 
-
-
 // -----------------------------------------------------------------------------
 // 5. Benchmark Decompression Line Rate and CPU Cycles
 // -----------------------------------------------------------------------------
@@ -623,7 +621,6 @@ func BenchmarkMilestone3_MicroarchitecturalLineRate(b *testing.B) {
 		b.Fatalf("CompressCellularSheaf failed: %v", err)
 	}
 
-
 	dst := bufkit.AlignedBytes(size+64, bufkit.CacheLineSize)
 	b.SetBytes(int64(size))
 	b.ResetTimer()
@@ -647,11 +644,11 @@ func BenchmarkMilestone3_PureRowSweepThroughput(b *testing.B) {
 	const size = 64 * 1024
 	orig := make([]byte, size)
 	orig[0] = 0x55
-	for j := 0; j < 63; j++ {
+	for j := range 63 {
 		orig[j+1] = orig[j] ^ 0x01
 	}
 	for i := 1; i < 1024; i++ {
-		for j := 0; j < 64; j++ {
+		for j := range 64 {
 			orig[i*64+j] = orig[(i-1)*64+j] ^ 0x02
 		}
 	}
@@ -678,4 +675,3 @@ func BenchmarkMilestone3_PureRowSweepThroughput(b *testing.B) {
 	b.ReportMetric(gbPerSec, "GB/s")
 	b.ReportMetric(cyclesPer64B, "cycles/64B")
 }
-

@@ -35,9 +35,9 @@ func TestPureCDecompressorInterop(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	testCases := []struct {
-		name     string
-		data     []byte
-		levels   []int
+		name   string
+		data   []byte
+		levels []int
 	}{
 		{
 			name:   "SmallASCII",
@@ -48,7 +48,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 			name: "RepetitiveTelemetry",
 			data: func() []byte {
 				var buf bytes.Buffer
-				for i := 0; i < 500; i++ {
+				for i := range 500 {
 					fmt.Fprintf(&buf, "{\"timestamp\":%d,\"user_id\":%d,\"status\":200,\"response_time_ms\":%d}\n",
 						1700000000+i, 1000+(i%10), i%50)
 				}
@@ -61,7 +61,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 			data: func() []byte {
 				var buf bytes.Buffer
 				buf.WriteString("package main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n)\n\n")
-				for i := 0; i < 100; i++ {
+				for range 100 {
 					buf.WriteString("func (s *Server) HandleRequest() (int, error) {\n")
 					buf.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")
 					buf.WriteString("\treturn 0, nil\n}\n")
@@ -74,7 +74,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 			name: "x86MachineCode",
 			data: func() []byte {
 				code := make([]byte, 8192)
-				for i := 0; i < len(code); i++ {
+				for i := range code {
 					code[i] = byte(i & 0xFF)
 				}
 				for i := 16; i < len(code)-10; i += 64 {
@@ -92,7 +92,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 			name: "IsoQuantMultiChannelRGBA",
 			data: func() []byte {
 				buf := make([]byte, 1024*4)
-				for i := 0; i < 1024; i++ {
+				for i := range 1024 {
 					baseVal := uint8(i % 128)
 					buf[i*4+0] = baseVal
 					buf[i*4+1] = baseVal ^ 0x05
@@ -123,7 +123,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 			name: "HeisenbergMultiChannelRGB",
 			data: func() []byte {
 				buf := make([]byte, 3072)
-				for i := 0; i < 1024; i++ {
+				for i := range 1024 {
 					x := uint8((i % 64) + 1)
 					y := uint8(((i / 64) % 64) + 1)
 					buf[i*3+0] = x
@@ -175,7 +175,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 	// Test direct Go-compressed IsoQuant frame interop with Pure C decompressor
 	t.Run("DirectIsoQuantFrame", func(t *testing.T) {
 		raw := make([]byte, 4096)
-		for i := 0; i < 1024; i++ {
+		for i := range 1024 {
 			b := uint8(i % 128)
 			raw[i*4+0] = b
 			raw[i*4+1] = b ^ 0x03
@@ -214,7 +214,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 	// Test direct Go-compressed Heisenberg frame interop with Pure C decompressor
 	t.Run("DirectHeisenbergFrame_Stride3", func(t *testing.T) {
 		raw := make([]byte, 3072)
-		for i := 0; i < 1024; i++ {
+		for i := range 1024 {
 			x := uint8((i % 64) + 1)
 			y := uint8(((i / 64) % 64) + 1)
 			raw[i*3+0] = x
@@ -252,7 +252,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 
 	t.Run("DirectHeisenbergFrame_Stride4", func(t *testing.T) {
 		raw := make([]byte, 4096)
-		for i := 0; i < 1024; i++ {
+		for i := range 1024 {
 			x := uint8((i % 64) + 1)
 			y := uint8(((i / 64) % 64) + 1)
 			raw[i*4+0] = x
@@ -289,4 +289,3 @@ func TestPureCDecompressorInterop(t *testing.T) {
 		}
 	})
 }
-

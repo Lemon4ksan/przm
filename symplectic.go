@@ -24,23 +24,24 @@ const (
 )
 
 var (
-	ErrSymplecticCorrupt    = errors.New("przm/symplectic: corrupted frame")
+	ErrSymplecticCorrupt     = errors.New("przm/symplectic: corrupted frame")
 	ErrSymplecticBufTooSmall = errors.New("przm/symplectic: destination buffer too small")
 )
 
 // SymplecticShear represents a symmetric 2x2 matrix S over F_{2^8} defining
 // a symplectic transvection T_S in Sp(4, F_{2^8}):
 //
-//     T_S = [ I_2   S ]
-//           [  0   I_2 ]
+//	T_S = [ I_2   S ]
+//	      [  0   I_2 ]
 //
 // where S = [ S00  S01 ]
-//           [ S01  S11 ]  (symmetric: S01 == S10).
+//
+//	[ S01  S11 ]  (symmetric: S01 == S10).
 //
 // By Theorem 30 (Symplectic Involutive Lossless Guarantee), in characteristic 2:
 //
-//     T_S^2 = [ I_2  S ⊕ S ] = [ I_2   0  ] = I_4
-//             [  0    I_2  ]   [  0   I_2 ]
+//	T_S^2 = [ I_2  S ⊕ S ] = [ I_2   0  ] = I_4
+//	        [  0    I_2  ]   [  0   I_2 ]
 //
 // The transform is a strict involution: applying the forward transformation
 // twice reconstructs the original vector identically with zero division and zero loss.
@@ -58,10 +59,11 @@ func (s SymplecticShear) IsIdentity() bool {
 // Apply4 applies the involutive symplectic shear to a single 4-byte phase vector:
 // q = (q0, q1), p = (p0, p1).
 // Computes:
-//   q0' = q0 ⊕ (S00 ⊙ p0 ⊕ S01 ⊙ p1)
-//   q1' = q1 ⊕ (S01 ⊙ p0 ⊕ S11 ⊙ p1)
-//   p0' = p0
-//   p1' = p1
+//
+//	q0' = q0 ⊕ (S00 ⊙ p0 ⊕ S01 ⊙ p1)
+//	q1' = q1 ⊕ (S01 ⊙ p0 ⊕ S11 ⊙ p1)
+//	p0' = p0
+//	p1' = p1
 func (s SymplecticShear) Apply4(q0, q1, p0, p1 uint8) (uint8, uint8, uint8, uint8) {
 	term0 := GF256Mul(s.S00, p0) ^ GF256Mul(s.S01, p1)
 	term1 := GF256Mul(s.S01, p0) ^ GF256Mul(s.S11, p1)
@@ -148,9 +150,9 @@ func EstimateOptimalSymplecticShear(data []byte) (SymplecticShear, float64) {
 	}
 
 	candidates := []SymplecticShear{
-		{S00: 1, S01: 0, S11: 1},     // Unit diagonal shear
-		{S00: 0, S01: 1, S11: 0},     // Anti-diagonal shear
-		{S00: 1, S01: 1, S11: 1},     // Full-coupling shear
+		{S00: 1, S01: 0, S11: 1}, // Unit diagonal shear
+		{S00: 0, S01: 1, S11: 0}, // Anti-diagonal shear
+		{S00: 1, S01: 1, S11: 1}, // Full-coupling shear
 		{S00: GF256Mul(q0Sum, GF256Inv(p0Sum)), S01: 0, S11: GF256Mul(q1Sum, GF256Inv(p1Sum))}, // Moment ratio
 	}
 

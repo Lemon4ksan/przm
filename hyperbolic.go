@@ -106,7 +106,7 @@ func HadamardCodeword8(childIdx int) [8]int8 {
 // HammingDistance8 computes the coordinate difference between two 8D Hadamard codewords.
 func HammingDistance8(a, b [8]int8) int {
 	dist := 0
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		if a[i] != b[i] {
 			dist++
 		}
@@ -187,10 +187,7 @@ func EmbedPoincareTree(src []byte) (*HyperbolicTree, error) {
 		if b == '{' || b == '[' || b == '(' {
 			cur := &stack[spIdx]
 			childAngle := cur.start + (cur.count * (cur.span / 16))
-			childSpan := cur.span / 16
-			if childSpan < 1 {
-				childSpan = 1
-			}
+			childSpan := max(cur.span/16, 1)
 			cur.count++
 
 			sp.nodes = append(sp.nodes, PoincareNode{
@@ -336,7 +333,7 @@ func DecodeHyperbolic(src []byte) ([]byte, error) {
 	out := make([]byte, 0, capEst)
 
 	litPtr := 0
-	for i := 0; i < nodeCount; i++ {
+	for i := range nodeCount {
 		offset := i * 6
 		symType := nodeData[offset+4]
 		itemLen := int(nodeData[offset+5])

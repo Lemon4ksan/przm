@@ -17,8 +17,8 @@ import (
 const (
 	MacroTrellisMagic uint32 = 0x4D414352 // "MACR"
 
-	MacroModeRaw      uint8 = 0
-	MacroModeTrellis  uint8 = 1
+	MacroModeRaw     uint8 = 0
+	MacroModeTrellis uint8 = 1
 
 	macroMinChunk = 256
 	macroMaxChunk = 65536
@@ -182,7 +182,7 @@ func CompressMacroTrellis(src []byte) []byte {
 		gearHash = (gearHash << 1) + gearTable[src[pos]]
 
 		// Check for CDC anchor condition
-		if (gearHash & mask) == 0 && pos >= 32 && pos+32 <= n {
+		if (gearHash&mask) == 0 && pos >= 32 && pos+32 <= n {
 			// Compute 64-bit fingerprint of 32-byte anchor window
 			fp := CyclotomicHash64(src[pos-32 : pos+32])
 			slot := uint16(fp ^ (fp >> 16) ^ (fp >> 32) ^ (fp >> 48))

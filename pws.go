@@ -176,7 +176,7 @@ func induceGrammar5WithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_
 
 	l4Limit := min(len(sp.cands), maxL4Rules)
 
-	for i := 0; i < l4Limit; i++ {
+	for i := range l4Limit {
 		k := sp.cands[i].key
 		l3A := uint8(k >> 4)
 		l3B := uint8(k & 0x0F)
@@ -188,7 +188,7 @@ func induceGrammar5WithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_
 	// Substitute Layer 4 rules with Knuth-Bendix confluent rewriting
 	if len(g.L4) > 0 {
 		tokens = KBConfluentSubstituteL4(tokens, sp.otherBuffer(tokens), sp.pairTo256[:], sp.freq256[:], l3Count)
-		for i := 0; i < l4Limit; i++ {
+		for i := range l4Limit {
 			sp.pairTo256[sp.cands[i].key] = 0
 		}
 	}
@@ -226,7 +226,7 @@ func induceGrammar5WithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_
 
 		l5Limit := min(len(sp.cands), maxL5Rules)
 
-		for i := 0; i < l5Limit; i++ {
+		for i := range l5Limit {
 			k := sp.cands[i].key
 			l4A := uint8(k >> 4)
 			l4B := uint8(k & 0x0F)
@@ -238,7 +238,7 @@ func induceGrammar5WithScratchpad(src []byte, sp *grammarScratchpad) (*GrammarH_
 		// Substitute Layer 5 rules with Knuth-Bendix confluent rewriting
 		if len(g.L5) > 0 {
 			tokens = KBConfluentSubstituteL5(tokens, sp.otherBuffer(tokens), sp.pairTo256[:], sp.freq256[:], l4Count)
-			for i := 0; i < l5Limit; i++ {
+			for i := range l5Limit {
 				sp.pairTo256[sp.cands[i].key] = 0
 			}
 		}
@@ -419,11 +419,11 @@ func PWSDecodeTo(dst, src []byte) ([]byte, error) {
 
 	var exp PWSExpansionTables
 
-	for i := 0; i < numL1; i++ {
+	for i := range numL1 {
 		exp.ExpL1[i] = uint16(src[ptr]) | (uint16(src[ptr+1]) << 8)
 		ptr += 2
 	}
-	for i := 0; i < numL2; i++ {
+	for i := range numL2 {
 		l1a, l1b := src[ptr], src[ptr+1]
 		ptr += 2
 		if int(l1a) >= numL1 || int(l1b) >= numL1 {
@@ -431,7 +431,7 @@ func PWSDecodeTo(dst, src []byte) ([]byte, error) {
 		}
 		exp.ExpL2[i] = uint32(exp.ExpL1[l1a]) | (uint32(exp.ExpL1[l1b]) << 16)
 	}
-	for i := 0; i < numL3; i++ {
+	for i := range numL3 {
 		l2a, l2b := src[ptr], src[ptr+1]
 		ptr += 2
 		if int(l2a) >= numL2 || int(l2b) >= numL2 {
@@ -439,7 +439,7 @@ func PWSDecodeTo(dst, src []byte) ([]byte, error) {
 		}
 		exp.ExpL3[i] = uint64(exp.ExpL2[l2a]) | (uint64(exp.ExpL2[l2b]) << 32)
 	}
-	for i := 0; i < numL4; i++ {
+	for i := range numL4 {
 		l3a, l3b := src[ptr], src[ptr+1]
 		ptr += 2
 		if int(l3a) >= numL3 || int(l3b) >= numL3 {
@@ -448,7 +448,7 @@ func PWSDecodeTo(dst, src []byte) ([]byte, error) {
 		binary.LittleEndian.PutUint64(exp.ExpL4[i][0:8], exp.ExpL3[l3a])
 		binary.LittleEndian.PutUint64(exp.ExpL4[i][8:16], exp.ExpL3[l3b])
 	}
-	for i := 0; i < numL5; i++ {
+	for i := range numL5 {
 		l4a, l4b := src[ptr], src[ptr+1]
 		ptr += 2
 		if int(l4a) >= numL4 || int(l4b) >= numL4 {
@@ -663,11 +663,8 @@ func DetectStride(src []byte) (int, float64) {
 			continue
 		}
 		matches := 0
-		samples := (n - s) / 2
-		if samples > 2048 {
-			samples = 2048
-		}
-		for i := 0; i < samples; i++ {
+		samples := min((n-s)/2, 2048)
+		for i := range samples {
 			if src[i] == src[i+s] {
 				matches++
 			}
@@ -697,8 +694,8 @@ func TransposeStride(src []byte, S int) []byte {
 	out := make([]byte, n)
 
 	idx := 0
-	for col := 0; col < S; col++ {
-		for r := 0; r < rows; r++ {
+	for col := range S {
+		for r := range rows {
 			out[idx] = src[r*S+col]
 			idx++
 		}
@@ -723,8 +720,8 @@ func UntransposeStrideTo(dst, src []byte, S int) {
 	rem := n % S
 
 	idx := 0
-	for col := 0; col < S; col++ {
-		for r := 0; r < rows; r++ {
+	for col := range S {
+		for r := range rows {
 			dst[r*S+col] = src[idx]
 			idx++
 		}

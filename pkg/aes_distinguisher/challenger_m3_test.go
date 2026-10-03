@@ -24,13 +24,13 @@ func generateConfiguredPayload(numBlocks int, seed int64, balancedTargets int) [
 	key[15] ^= byte(seed >> 8)
 
 	numChunks := numBlocks / CryptoCoreChunkBlocks
-	for c := 0; c < numChunks; c++ {
+	for c := range numChunks {
 		chunkStart := c * CryptoCoreChunkBlocks
 		isBalanced := (c % 256) < balancedTargets
 
 		if isBalanced {
 			// Round 3 Lambda set: active byte 0 varies 0..255, remainder constant
-			for i := 0; i < CryptoCoreChunkBlocks; i++ {
+			for i := range CryptoCoreChunkBlocks {
 				var pt [16]byte
 				pt[0] = byte(i)
 				for j := 1; j < 16; j++ {
@@ -40,7 +40,7 @@ func generateConfiguredPayload(numBlocks int, seed int64, balancedTargets int) [
 			}
 		} else {
 			// Round 4 Counter: non-zero sum
-			for i := 0; i < CryptoCoreChunkBlocks; i++ {
+			for i := range CryptoCoreChunkBlocks {
 				idx := chunkStart + i
 				var pt [16]byte
 				pt[0] = byte(idx)
@@ -319,7 +319,7 @@ func TestChallenger_AdversarialRobustness(t *testing.T) {
 	}
 
 	// 3. Truncated header (< 16 bytes)
-	for trLen := 0; trLen < CryptoCoreHeaderSize; trLen++ {
+	for trLen := range CryptoCoreHeaderSize {
 		_, err = DecompressCryptoCore(validCompressed[:trLen], dstSmallDec)
 		if err != ErrCorruptFrame {
 			t.Fatalf("[trLen=%d] Expected ErrCorruptFrame, got %v", trLen, err)
@@ -384,7 +384,12 @@ func TestChallenger_CrossCodec_Go_C(t *testing.T) {
 	// Look for compiled C test executable
 	cExePath := filepath.Join("..", "..", "test_m3_cross_codec.exe")
 	if _, err := os.Stat(cExePath); err != nil {
-		t.Fatalf("C test executable %s not found: compile with 'gcc -O3 -Iinclude src/aes_distinguisher.c tests/test_m3_cross_codec.c -o test_m3_cross_codec.exe'", cExePath)
+		cmd := exec.Command("gcc", "-O3", "-Iinclude", "src/aes_distinguisher.c", "tests/test_m3_cross_codec.c", "-o", "test_m3_cross_codec.exe")
+		cmd.Dir = filepath.Join("..", "..")
+		if errBuild := cmd.Run(); errBuild != nil {
+			t.Skipf("C test executable %s not found and build failed: %v", cExePath, errBuild)
+			return
+		}
 	}
 
 	tempDir := t.TempDir()

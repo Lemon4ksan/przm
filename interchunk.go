@@ -259,7 +259,7 @@ func substituteGrammarGreedy(src []byte, g *GrammarH_DAG) []uint16 {
 	var l2Map map[uint32]uint16
 	if numL2 > 0 {
 		l2Map = make(map[uint32]uint16, numL2)
-		for id := 0; id < numL2; id++ {
+		for id := range numL2 {
 			l2Map[g.ExpL2[id]] = uint16(id)
 		}
 	}
@@ -267,7 +267,7 @@ func substituteGrammarGreedy(src []byte, g *GrammarH_DAG) []uint16 {
 	var l1Map map[uint16]uint16
 	if numL1 > 0 {
 		l1Map = make(map[uint16]uint16, numL1)
-		for id := 0; id < numL1; id++ {
+		for id := range numL1 {
 			l1Map[g.ExpL1[id]] = uint16(id)
 		}
 	}
@@ -278,7 +278,7 @@ func substituteGrammarGreedy(src []byte, g *GrammarH_DAG) []uint16 {
 		if numL3 > 0 && i+8 <= n {
 			w8 := binary.LittleEndian.Uint64(src[i : i+8])
 			matched := false
-			for id := 0; id < numL3; id++ {
+			for id := range numL3 {
 				if g.ExpL3[id] == w8 {
 					outTokens = append(outTokens, 1024+uint16(id))
 					i += 8
@@ -505,17 +505,17 @@ func decodeFullFrame(src []byte) ([]byte, *GrammarH_DAG, error) {
 
 	g := &GrammarH_DAG{}
 	g.L1 = make([]RuleL1, numL1)
-	for i := 0; i < numL1; i++ {
+	for i := range numL1 {
 		g.L1[i] = RuleL1{U: src[ptr], V: src[ptr+1]}
 		ptr += 2
 	}
 	g.L2 = make([]RuleL2, numL2)
-	for i := 0; i < numL2; i++ {
+	for i := range numL2 {
 		g.L2[i] = RuleL2{L1A: src[ptr], L1B: src[ptr+1]}
 		ptr += 2
 	}
 	g.L3 = make([]RuleL3, numL3)
-	for i := 0; i < numL3; i++ {
+	for i := range numL3 {
 		g.L3[i] = RuleL3{L2A: src[ptr], L2B: src[ptr+1]}
 		ptr += 2
 	}
@@ -668,7 +668,7 @@ func DecompressStream(r io.Reader, w io.Writer) error {
 
 	frames := make([][]byte, numFrames)
 	var lenBuf [4]byte
-	for i := 0; i < numFrames; i++ {
+	for i := range numFrames {
 		if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
 			return err
 		}

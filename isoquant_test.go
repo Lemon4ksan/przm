@@ -30,7 +30,7 @@ func TestIsoQuant_AlgebraInversion(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	ident := przm.IdentityQuaternion4()
 
-	for iter := 0; iter < 1000; iter++ {
+	for range 1000 {
 		q := przm.Quaternion4{uint8(rng.Intn(256)), uint8(rng.Intn(256)), uint8(rng.Intn(256)), uint8(rng.Intn(256))}
 		inv, ok := q.Inv()
 		if !ok {
@@ -96,7 +96,7 @@ func TestIsoQuant_Roundtrip_SyntheticMultiChannel(t *testing.T) {
 	// Synthesize 4-channel RGBA image gradient with strong cross-channel correlation
 	numPixels := 1024
 	src := make([]byte, numPixels*4)
-	for i := 0; i < numPixels; i++ {
+	for i := range numPixels {
 		r := uint8(i % 256)
 		g := uint8((i + 2) % 256)
 		b := uint8((i + 4) % 256)
@@ -138,7 +138,7 @@ func TestIsoQuant_Roundtrip_Tabular4(t *testing.T) {
 	// Tabular 4-column structured metrics
 	numRows := 500
 	src := make([]byte, numRows*4)
-	for i := 0; i < numRows; i++ {
+	for i := range numRows {
 		src[i*4+0] = uint8(i % 100)
 		src[i*4+1] = uint8((i * 2) % 100)
 		src[i*4+2] = uint8((i * 3) % 100)
@@ -187,11 +187,11 @@ func TestIsoQuant_Roundtrip_BinaryTrajectory(t *testing.T) {
 	// 4D trajectory (x, y, z, t)
 	numSteps := 400
 	src := make([]byte, numSteps*4)
-	for i := 0; i < numSteps; i++ {
+	for i := range numSteps {
 		src[i*4+0] = uint8((i * 7) % 256)
-		src[i*4+1] = uint8((i * 7 + 10) % 256)
-		src[i*4+2] = uint8((i * 7 + 20) % 256)
-		src[i*4+3] = uint8((i * 7 + 30) % 256)
+		src[i*4+1] = uint8((i*7 + 10) % 256)
+		src[i*4+2] = uint8((i*7 + 20) % 256)
+		src[i*4+3] = uint8((i*7 + 30) % 256)
 	}
 
 	compressed, err := przm.CompressIsoQuant(src)
@@ -258,7 +258,7 @@ func TestIsoQuant_CompressionRatioAdvantage(t *testing.T) {
 	// Synthesize 4-channel image data with heavy channel cross-correlation
 	numPixels := 4096
 	src := make([]byte, numPixels*4)
-	for i := 0; i < numPixels; i++ {
+	for i := range numPixels {
 		baseVal := uint8(i % 128)
 		src[i*4+0] = baseVal
 		src[i*4+1] = baseVal ^ 0x05

@@ -24,6 +24,9 @@ const (
 	DataSourceCode  DataType = "source_code_go"
 	DataRLE         DataType = "rle_sparse"
 	DataRandom      DataType = "random_noise"
+	DataRGBA        DataType = "multichannel_rgba"
+	DataSPIRV       DataType = "shader_spirv"
+	DataAIWeights   DataType = "ai_weights_quant"
 )
 
 // CorpusItem encapsulates a named dataset with its raw bytes and metadata.
@@ -92,6 +95,27 @@ func GenerateCorpus(sizes []int) []CorpusItem {
 				Name:     fmt.Sprintf("random_%dK", size/1024),
 				Data:     GenerateRandom(size),
 				Metadata: "High-entropy incompressible cryptographic noise",
+			},
+			CorpusItem{
+				Type:     DataRGBA,
+				Size:     size,
+				Name:     fmt.Sprintf("rgba_%dK", size/1024),
+				Data:     GenerateRGBA(size),
+				Metadata: "Multi-channel 4-byte RGBA texture data with cross-channel correlation",
+			},
+			CorpusItem{
+				Type:     DataSPIRV,
+				Size:     size,
+				Name:     fmt.Sprintf("spirv_%dK", size/1024),
+				Data:     GenerateSPIRV(size),
+				Metadata: "SPIR-V GPU shader bytecode with 4-byte instructions and vector arithmetic",
+			},
+			CorpusItem{
+				Type:     DataAIWeights,
+				Size:     size,
+				Name:     fmt.Sprintf("aiweights_%dK", size/1024),
+				Data:     GenerateAIWeights(size),
+				Metadata: "Quantized neural network weights with localized covariance",
 			},
 		)
 	}
@@ -270,5 +294,73 @@ func GenerateRLE(targetSize int) []byte {
 func GenerateRandom(targetSize int) []byte {
 	data := make([]byte, targetSize)
 	_, _ = rand.Read(data)
+	return data
+}
+
+// GenerateRGBA produces 4-channel pixel data (R, G, B, A) with spatial gradients and high inter-channel correlation.
+func GenerateRGBA(targetSize int) []byte {
+	data := make([]byte, targetSize)
+	numPixels := targetSize / 4
+	for i := range numPixels {
+		x := i % 128
+		y := (i / 128) % 128
+		r := byte((x * 2) & 0xFF)
+		g := byte((y * 2) & 0xFF)
+		b := byte(((x + y) * 2) & 0xFF)
+		a := byte(255)
+		data[i*4+0] = r
+		data[i*4+1] = g
+		data[i*4+2] = b
+		data[i*4+3] = a
+	}
+	return data
+}
+
+// GenerateSPIRV simulates 32-bit word aligned SPIR-V GPU shader bytecode with OpCapability, OpTypeVector, and OpFMul.
+func GenerateSPIRV(targetSize int) []byte {
+	data := make([]byte, targetSize)
+	if targetSize < 20 {
+		return data
+	}
+	// SPIR-V Header
+	binary.LittleEndian.PutUint32(data[0:4], 0x07230203)   // Magic
+	binary.LittleEndian.PutUint32(data[4:8], 0x00010500)   // Version 1.5
+	binary.LittleEndian.PutUint32(data[8:12], 0x00080001)  // Generator
+	binary.LittleEndian.PutUint32(data[12:16], 0x000000FF) // Bound
+	binary.LittleEndian.PutUint32(data[16:20], 0x00000000) // Schema
+	i := 20
+	opID := uint32(1)
+	for i < targetSize-16 {
+		wordCount := uint32(4)
+		opcode := uint32(12) // OpTypeVector
+		if (opID % 5) == 0 {
+			opcode = 148 // OpDot
+		} else if (opID % 3) == 0 {
+			opcode = 133 // OpFMul
+		}
+		data[i+0] = byte(opcode)
+		data[i+1] = byte(opcode >> 8)
+		data[i+2] = byte(wordCount)
+		data[i+3] = byte(wordCount >> 8)
+		binary.LittleEndian.PutUint32(data[i+4:i+8], opID)
+		binary.LittleEndian.PutUint32(data[i+8:i+12], (opID*7)&0xFFFF)
+		binary.LittleEndian.PutUint32(data[i+12:i+16], 0x3F800000) // float 1.0
+		i += 16
+		opID++
+	}
+	return data
+}
+
+// GenerateAIWeights generates quantized neural network weights (int8 / fp16) with localized variance.
+func GenerateAIWeights(targetSize int) []byte {
+	data := make([]byte, targetSize)
+	numVecs := targetSize / 16
+	for v := range numVecs {
+		baseVal := int8((v * 3) % 40)
+		for j := range 16 {
+			noise := int8(((j * 17) % 7) - 3)
+			data[v*16+j] = byte(baseVal + noise)
+		}
+	}
 	return data
 }

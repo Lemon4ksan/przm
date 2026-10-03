@@ -197,6 +197,10 @@ func TestPWSDecodeTo_ZeroAllocAndCorrectness(t *testing.T) {
 				t.Fatalf("PWSDecodeTo roundtrip mismatch on %s", item.Name)
 			}
 
+			if przm.RaceEnabled {
+				return
+			}
+
 			// Verify strictly 0 heap allocations
 			allocs := testing.AllocsPerRun(100, func() {
 				_, decErr := przm.PWSDecodeTo(dst, enc)

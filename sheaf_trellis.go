@@ -111,26 +111,17 @@ func satAdd(a, b int32) int32 {
 // C[i][j] = min_k (A[i][k] + B[k][j]) with saturating addition.
 // Associative invariant: (A (x) B) (x) C == A (x) (B (x) C).
 func TropicalMul4(A, B, C *TropicalMatrix4) {
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		a0 := A.M[i][0]
 		a1 := A.M[i][1]
 		a2 := A.M[i][2]
 		a3 := A.M[i][3]
-		for j := 0; j < 4; j++ {
+		for j := range 4 {
 			c0 := satAdd(a0, B.M[0][j])
 			c1 := satAdd(a1, B.M[1][j])
 			c2 := satAdd(a2, B.M[2][j])
 			c3 := satAdd(a3, B.M[3][j])
-			m := c0
-			if c1 < m {
-				m = c1
-			}
-			if c2 < m {
-				m = c2
-			}
-			if c3 < m {
-				m = c3
-			}
+			m := min(c3, min(c2, min(c1, c0)))
 			C.M[i][j] = m
 		}
 	}
@@ -139,21 +130,12 @@ func TropicalMul4(A, B, C *TropicalMatrix4) {
 // TropicalVecMul4 computes out = d (x) W over the min-plus semiring with saturating addition.
 func TropicalVecMul4(d *TropicalVector4, W *TropicalMatrix4, out *TropicalVector4) {
 	d0, d1, d2, d3 := d[0], d[1], d[2], d[3]
-	for j := 0; j < 4; j++ {
+	for j := range 4 {
 		c0 := satAdd(d0, W.M[0][j])
 		c1 := satAdd(d1, W.M[1][j])
 		c2 := satAdd(d2, W.M[2][j])
 		c3 := satAdd(d3, W.M[3][j])
-		m := c0
-		if c1 < m {
-			m = c1
-		}
-		if c2 < m {
-			m = c2
-		}
-		if c3 < m {
-			m = c3
-		}
+		m := min(c3, min(c2, min(c1, c0)))
 		out[j] = m
 	}
 }
@@ -422,7 +404,6 @@ func putSheafDecBuf(b []byte) {
 	}
 }
 
-
 // matchLength computes the contiguous matching byte count between src[p1:] and src[p2:].
 func matchLength(src []byte, p1, p2, maxLen int) int {
 	m := 0
@@ -566,7 +547,7 @@ func encodeTrellisStream(src []byte, out []byte, pad *sheafScratchpad) []byte {
 		// --- 1. Fast SWAR RepQueue4 Check ---
 		// 16-bit match gating: rejects 99.9% of non-matching probes in 1 CPU cycle
 		srcWord16 := uint16(srcWord)
-		for slot := 0; slot < 4; slot++ {
+		for slot := range 4 {
 			d := rq.Q[slot]
 			if d <= 0 || pos < d {
 				continue
@@ -633,10 +614,10 @@ func encodeTrellisStream(src []byte, out []byte, pad *sheafScratchpad) []byte {
 		// Multi-step horizon evaluation via Blelloch parallel prefix scan over RepQueue4 states.
 		if pos+5 <= n && bestLen < 32 {
 			H := min(4, n-pos) // Multi-step parsing horizon (up to 4 steps)
-			for t := 0; t < H; t++ {
+			for t := range H {
 				curPos := pos + t
-				for r := 0; r < 4; r++ {
-					for c := 0; c < 4; c++ {
+				for r := range 4 {
+					for c := range 4 {
 						pad.trellisMats[t].M[r][c] = TropicalInf
 					}
 					// Literal self-transition: stays in state r with 1-byte literal cost
@@ -647,7 +628,7 @@ func encodeTrellisStream(src []byte, out []byte, pad *sheafScratchpad) []byte {
 					w := binary.LittleEndian.Uint32(src[curPos : curPos+4])
 					w16 := uint16(w)
 					// RepQueue transitions: matching slot s transitions any state i -> s
-					for s := 0; s < 4; s++ {
+					for s := range 4 {
 						d := rq.Q[s]
 						if d > 0 && curPos >= d && w16 == binary.LittleEndian.Uint16(src[curPos-d:curPos-d+2]) {
 							maxM := min(n-curPos, 258)
@@ -657,7 +638,7 @@ func encodeTrellisStream(src []byte, out []byte, pad *sheafScratchpad) []byte {
 								if m > 16 {
 									cost = 24
 								}
-								for i := 0; i < 4; i++ {
+								for i := range 4 {
 									if cost < pad.trellisMats[t].M[i][s] {
 										pad.trellisMats[t].M[i][s] = cost
 									}
@@ -683,7 +664,7 @@ func encodeTrellisStream(src []byte, out []byte, pad *sheafScratchpad) []byte {
 									if m > 34 {
 										cost = 40
 									}
-									for i := 0; i < 4; i++ {
+									for i := range 4 {
 										if cost < pad.trellisMats[t].M[i][0] {
 											pad.trellisMats[t].M[i][0] = cost
 										}
@@ -712,12 +693,12 @@ func encodeTrellisStream(src []byte, out []byte, pad *sheafScratchpad) []byte {
 			lookLen := 0
 
 			// RepQueue check at pos+1 with 16-bit match gating
-			for slot := 0; slot < 4; slot++ {
+			for slot := range 4 {
 				d := rq.Q[slot]
 				if d <= 0 || (pos+1) < d {
 					continue
 				}
-				if nextWord16 != binary.LittleEndian.Uint16(src[pos+1-d : pos+1-d+2]) {
+				if nextWord16 != binary.LittleEndian.Uint16(src[pos+1-d:pos+1-d+2]) {
 					continue
 				}
 				maxM := min(n-(pos+1), 258)

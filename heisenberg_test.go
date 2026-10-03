@@ -19,7 +19,7 @@ func TestHeisenberg_AlgebraAxioms(t *testing.T) {
 
 	ident := przm.HeisenbergElement3{X: 0, Y: 0, Z: 0}
 
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		a := przm.HeisenbergElement3{X: uint8(rng.Intn(256)), Y: uint8(rng.Intn(256)), Z: uint8(rng.Intn(256))}
 		b := przm.HeisenbergElement3{X: uint8(rng.Intn(256)), Y: uint8(rng.Intn(256)), Z: uint8(rng.Intn(256))}
 		c := przm.HeisenbergElement3{X: uint8(rng.Intn(256)), Y: uint8(rng.Intn(256)), Z: uint8(rng.Intn(256))}
@@ -262,7 +262,7 @@ func TestHeisenberg_ZeroAllocDecompression(t *testing.T) {
 func TestHeisenberg_CompressionRatioAdvantage(t *testing.T) {
 	numPixels := 4096
 	src := make([]byte, numPixels*3)
-	for i := 0; i < numPixels; i++ {
+	for i := range numPixels {
 		x := uint8((i % 64) + 1)
 		y := uint8(((i / 64) % 64) + 1)
 		// Nonlinear interaction: z = x * y

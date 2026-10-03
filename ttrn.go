@@ -15,7 +15,7 @@ var (
 func ShuffleStride2(src []byte, dst []byte) {
 	n := len(src)
 	half := (n + 1) / 2
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i%2 == 0 {
 			dst[i/2] = src[i]
 		} else {
@@ -28,7 +28,7 @@ func ShuffleStride2(src []byte, dst []byte) {
 func UnshuffleStride2(src []byte, dst []byte) {
 	n := len(src)
 	half := (n + 1) / 2
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i%2 == 0 {
 			dst[i] = src[i/2]
 		} else {
@@ -40,7 +40,7 @@ func UnshuffleStride2(src []byte, dst []byte) {
 // CompressTTRN compresses a tensor using the Hybrid Tensor Train mechanism.
 func CompressTTRN(src []byte, dict []byte) ([]byte, error) {
 	n := len(src)
-	
+
 	out := make([]byte, 8)
 	binary.LittleEndian.PutUint32(out[0:4], MagicTTRN)
 	binary.LittleEndian.PutUint32(out[4:8], uint32(n))
@@ -58,7 +58,7 @@ func CompressTTRN(src []byte, dict []byte) ([]byte, error) {
 	if compA == nil {
 		compA = streamA
 	}
-	
+
 	var szBuf [4]byte
 	binary.LittleEndian.PutUint32(szBuf[:], uint32(len(compA)))
 	out = append(out, szBuf[:]...)
@@ -72,7 +72,7 @@ func CompressTTRN(src []byte, dict []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	binary.LittleEndian.PutUint32(szBuf[:], uint32(len(compB)))
 	out = append(out, szBuf[:]...)
 	out = append(out, compB...)
@@ -111,7 +111,7 @@ func DecompressTTRNDirect(src, dict, dst []byte) error {
 	if ptr+lenA > len(src) {
 		return ErrTTRNCorrupted
 	}
-	
+
 	_, err := DecompressSymplectic(src[ptr:ptr+lenA], dst[:half])
 	if err != nil {
 		return err
@@ -155,7 +155,8 @@ func DecompressTTRNDirect(src, dict, dst []byte) error {
 		flag := streamB[ptrB]
 		ptrB++
 
-		if flag == 0x00 {
+		switch flag {
+		case 0x00:
 			if ptrB >= len(streamB) {
 				return ErrTTRNCorrupted
 			}
@@ -164,7 +165,7 @@ func DecompressTTRNDirect(src, dict, dst []byte) error {
 			if ptrB+blockLen > len(streamB) || dstOff+blockLen > N {
 				return ErrTTRNCorrupted
 			}
-			for k := 0; k < blockLen; k++ {
+			for k := range blockLen {
 				val := streamB[ptrB+k]
 				idx := dstOff + k
 				if idx < halfN {
@@ -175,7 +176,7 @@ func DecompressTTRNDirect(src, dict, dst []byte) error {
 			}
 			ptrB += blockLen
 			dstOff += blockLen
-		} else if flag == 0x01 {
+		case 0x01:
 			if ptrB+3 > len(streamB) {
 				return ErrTTRNCorrupted
 			}
@@ -200,7 +201,7 @@ func DecompressTTRNDirect(src, dict, dst []byte) error {
 				block[k] = uVec[k] ^ vVec[k]
 			}
 
-			for e := 0; e < errCount; e++ {
+			for range errCount {
 				idx := int(streamB[ptrB])
 				val := streamB[ptrB+1]
 				ptrB += 2
@@ -218,7 +219,7 @@ func DecompressTTRNDirect(src, dict, dst []byte) error {
 				}
 			}
 			dstOff += blockLen
-		} else {
+		default:
 			return ErrTTRNCorrupted
 		}
 	}

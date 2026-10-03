@@ -37,11 +37,11 @@ func reconstructBlockSIMD(b *LRGGFBlock, dst []byte) bool {
 
 	M, N, R := b.M, b.N, b.Rank
 
-	for r := 0; r < R; r++ {
+	for r := range R {
 		uOffset := r * M
 		vOffset := r * N
 
-		for i := 0; i < M; i++ {
+		for i := range M {
 			u_val := b.U[uOffset+i]
 			if u_val == 0 {
 				continue
@@ -94,11 +94,11 @@ func reconstructBlockSIMD512(b *LRGGFBlock, dst []byte) bool {
 
 	M, N, R := b.M, b.N, b.Rank
 
-	for r := 0; r < R; r++ {
+	for r := range R {
 		uOffset := r * M
 		vOffset := r * N
 
-		for i := 0; i < M; i++ {
+		for i := range M {
 			u_val := b.U[uOffset+i]
 			if u_val == 0 {
 				continue

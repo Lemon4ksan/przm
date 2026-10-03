@@ -24,7 +24,7 @@ func ApplyMicroPredictorForward(src []byte, dst []byte) []byte {
 	// 4-tap integer weights (Q7 fixed-point, initially balanced)
 	w1, w2, w3, w4 := 64, 32, 16, 8
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		orig := int(src[i])
 
 		// Compute predicted byte in Q7
@@ -118,7 +118,7 @@ func ApplyMicroPredictorInverse(src []byte, dst []byte) []byte {
 	// 4-tap integer weights (identical initial state)
 	w1, w2, w3, w4 := 64, 32, 16, 8
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		res := src[i]
 
 		// Recompute identical predicted byte

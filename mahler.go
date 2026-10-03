@@ -16,10 +16,10 @@ import (
 const (
 	MahlerMagic uint32 = 0x4D41484C // "MAHL"
 
-	MahlerModeRaw       uint8 = 0
-	MahlerMode16        uint8 = 1 // 16-byte Fast Pascal Mahler Basis
-	MahlerMode32        uint8 = 2 // 32-byte Fast Pascal Mahler Basis
-	MahlerModeCascaded  uint8 = 3 // Mahler spectral transform cascaded with PWS AVX-Wave
+	MahlerModeRaw      uint8 = 0
+	MahlerMode16       uint8 = 1 // 16-byte Fast Pascal Mahler Basis
+	MahlerMode32       uint8 = 2 // 32-byte Fast Pascal Mahler Basis
+	MahlerModeCascaded uint8 = 3 // Mahler spectral transform cascaded with PWS AVX-Wave
 )
 
 var (
@@ -32,7 +32,7 @@ var (
 //
 // By Theorem 32, this is an exact discrete unimodular isomorphism over (Z/256Z)^16:
 //
-//     c_n = (\Delta^n f)(0) = \sum_{k=0}^n (-1)^{n-k} \binom{n}{k} f(k)  (mod 256)
+//	c_n = (\Delta^n f)(0) = \sum_{k=0}^n (-1)^{n-k} \binom{n}{k} f(k)  (mod 256)
 //
 // It decomposes the unipotent Pascal matrix B_16^{-1} into 15 elementary difference steps.
 // Zero heap allocations, strictly integer arithmetic, 100% lossless.
@@ -46,7 +46,7 @@ func Mahler16Forward(buf *[16]byte) {
 
 // Mahler16Inverse computes the exact inverse Mahler synthesis on a 16-byte vector in-place:
 //
-//     f(x) = \sum_{n=0}^x \binom{x}{n} c_n  (mod 256)
+//	f(x) = \sum_{n=0}^x \binom{x}{n} c_n  (mod 256)
 //
 // Unipotent Pascal synthesis restores the original byte values bit-for-bit without loss.
 func Mahler16Inverse(buf *[16]byte) {
@@ -126,7 +126,7 @@ func EstimateMahlerGain(data []byte) (bestMode uint8, gain float64) {
 	}
 
 	baseZeros := 0
-	for i := 0; i < sampleLen; i++ {
+	for i := range sampleLen {
 		if data[i] == 0 {
 			baseZeros++
 		}
@@ -138,7 +138,7 @@ func EstimateMahlerGain(data []byte) (bestMode uint8, gain float64) {
 	MahlerTransform16Inplace(sample[:sampleLen])
 
 	transZeros := 0
-	for i := 0; i < sampleLen; i++ {
+	for i := range sampleLen {
 		if sample[i] == 0 {
 			transZeros++
 		}

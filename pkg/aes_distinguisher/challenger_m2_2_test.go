@@ -15,7 +15,9 @@ import (
 // ============================================================================
 
 // TestChallengerM2_2_LambdaZeroSum_10000Sets rigorously stress-tests the integral zero-sum invariant:
-//   \bigoplus_{i=0}^{255} C_i = 0^{128}
+//
+//	\bigoplus_{i=0}^{255} C_i = 0^{128}
+//
 // across exactly 10,000 independent Lambda-sets with random 128-bit keys, cycling across all 16
 // active byte positions and varying constant background bytes for rounds 1, 2, and 3.
 func TestChallengerM2_2_LambdaZeroSum_10000Sets(t *testing.T) {
@@ -32,7 +34,7 @@ func TestChallengerM2_2_LambdaZeroSum_10000Sets(t *testing.T) {
 
 	var failuresR1NoMC, failuresR1MC, failuresR2, failuresR3 int
 
-	for iter := 0; iter < totalSets; iter++ {
+	for iter := range totalSets {
 		// Generate random 128-bit key
 		var key [16]byte
 		binary.LittleEndian.PutUint64(key[0:8], nextRand())
@@ -49,7 +51,7 @@ func TestChallengerM2_2_LambdaZeroSum_10000Sets(t *testing.T) {
 
 		// 1. Round 1 without MixColumns
 		var ctR1NoMC [256][16]byte
-		for i := 0; i < 256; i++ {
+		for i := range 256 {
 			ctR1NoMC[i] = EncryptReducedRound(lambdaSet[i][:], key[:], 1, false)
 		}
 		if balanced, _ := VerifyLambdaZeroSum(ctR1NoMC[:]); !balanced {
@@ -58,7 +60,7 @@ func TestChallengerM2_2_LambdaZeroSum_10000Sets(t *testing.T) {
 
 		// 2. Round 1 with MixColumns
 		var ctR1MC [256][16]byte
-		for i := 0; i < 256; i++ {
+		for i := range 256 {
 			ctR1MC[i] = EncryptReducedRound(lambdaSet[i][:], key[:], 1, true)
 		}
 		if balanced, _ := VerifyLambdaZeroSum(ctR1MC[:]); !balanced {
@@ -67,7 +69,7 @@ func TestChallengerM2_2_LambdaZeroSum_10000Sets(t *testing.T) {
 
 		// 3. Round 2 with MixColumns
 		var ctR2 [256][16]byte
-		for i := 0; i < 256; i++ {
+		for i := range 256 {
 			ctR2[i] = EncryptReducedRound(lambdaSet[i][:], key[:], 2, true)
 		}
 		if balanced, _ := VerifyLambdaZeroSum(ctR2[:]); !balanced {
@@ -76,7 +78,7 @@ func TestChallengerM2_2_LambdaZeroSum_10000Sets(t *testing.T) {
 
 		// 4. Round 3 with MixColumns
 		var ctR3 [256][16]byte
-		for i := 0; i < 256; i++ {
+		for i := range 256 {
 			ctR3[i] = EncryptReducedRound(lambdaSet[i][:], key[:], 3, true)
 		}
 		if balanced, _ := VerifyLambdaZeroSum(ctR3[:]); !balanced {
@@ -115,7 +117,7 @@ func TestChallengerM2_2_Round4_1ByteActive_Unbalanced(t *testing.T) {
 	zeroByteTotal := 0
 	totalByteEvaluations := trials * 16
 
-	for iter := 0; iter < trials; iter++ {
+	for iter := range trials {
 		var key [16]byte
 		binary.LittleEndian.PutUint64(key[0:8], nextRand())
 		binary.LittleEndian.PutUint64(key[8:16], nextRand())
@@ -128,7 +130,7 @@ func TestChallengerM2_2_Round4_1ByteActive_Unbalanced(t *testing.T) {
 		lambdaSet := GenerateLambdaSetWithConstants(activeIdx, constants)
 
 		var ctR4 [256][16]byte
-		for i := 0; i < 256; i++ {
+		for i := range 256 {
 			ctR4[i] = EncryptReducedRound(lambdaSet[i][:], key[:], 4, true)
 		}
 
@@ -136,7 +138,7 @@ func TestChallengerM2_2_Round4_1ByteActive_Unbalanced(t *testing.T) {
 		if allBalanced {
 			fullBalancedCount++
 		}
-		for b := 0; b < 16; b++ {
+		for b := range 16 {
 			if isBalanced[b] {
 				zeroByteTotal++
 			}
@@ -175,7 +177,7 @@ func TestChallengerM2_2_DiagonalSets_DivisionProperty(t *testing.T) {
 	key := []byte{0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c}
 
 	// 1. Test all 4 AES diagonals with numActiveBytes=1 (256 blocks each) for rounds 1, 2, 3
-	for diagIdx := 0; diagIdx < 4; diagIdx++ {
+	for diagIdx := range 4 {
 		diagSet := GenerateDiagonalSet(diagIdx, 1, byte(0x10*diagIdx+0x05))
 		if len(diagSet) != 256 {
 			t.Fatalf("expected 256 blocks in diagonal set, got %d", len(diagSet))
@@ -183,7 +185,7 @@ func TestChallengerM2_2_DiagonalSets_DivisionProperty(t *testing.T) {
 
 		for r := 1; r <= 3; r++ {
 			ciphertexts := make([][16]byte, 256)
-			for i := 0; i < 256; i++ {
+			for i := range 256 {
 				ciphertexts[i] = EncryptReducedRound(diagSet[i][:], key, r, true)
 			}
 			balanced, xorSum := VerifyLambdaZeroSum(ciphertexts)
@@ -194,7 +196,7 @@ func TestChallengerM2_2_DiagonalSets_DivisionProperty(t *testing.T) {
 			if paritySum != [16]byte{0} {
 				t.Fatalf("Diagonal %d Round %d parity sum != 0", diagIdx, r)
 			}
-			for bit := 0; bit < 128; bit++ {
+			for bit := range 128 {
 				if !balancedBits[bit] {
 					t.Fatalf("Diagonal %d Round %d bit %d not balanced", diagIdx, r, bit)
 				}
@@ -212,7 +214,7 @@ func TestChallengerM2_2_DiagonalSets_DivisionProperty(t *testing.T) {
 
 	// Verify Round 3 on 2-byte diagonal set
 	ctR3 := make([][16]byte, len(diagSet2))
-	for i := 0; i < len(diagSet2); i++ {
+	for i := range diagSet2 {
 		ctR3[i] = EncryptReducedRound(diagSet2[i][:], key, 3, true)
 	}
 	balancedR3, xorR3 := VerifyLambdaZeroSum(ctR3)
@@ -223,12 +225,12 @@ func TestChallengerM2_2_DiagonalSets_DivisionProperty(t *testing.T) {
 
 	// Check Round 4 on 2-byte diagonal set
 	ctR4 := make([][16]byte, len(diagSet2))
-	for i := 0; i < len(diagSet2); i++ {
+	for i := range diagSet2 {
 		ctR4[i] = EncryptReducedRound(diagSet2[i][:], key, 4, true)
 	}
 	balancedBitsR4, paritySumR4 := VerifyDivisionProperty4R(ctR4)
 	balancedBitCount := 0
-	for bit := 0; bit < 128; bit++ {
+	for bit := range 128 {
 		if balancedBitsR4[bit] {
 			balancedBitCount++
 		}
@@ -258,7 +260,7 @@ func TestChallengerM2_2_MultiVectorAggregated_Rounds1To4(t *testing.T) {
 		for _, numBlocks := range sampleSizes {
 			for r := 1; r <= 4; r++ {
 				blocks := make([][16]byte, numBlocks)
-				for i := 0; i < numBlocks; i++ {
+				for i := range numBlocks {
 					var pt [16]byte
 					if r <= 3 {
 						// Rounds 1-3: Low-entropy structured counter stream (Lambda-set ensembles)
@@ -296,7 +298,7 @@ func TestChallengerM2_2_MultiVectorAggregated_Rounds1To4(t *testing.T) {
 
 			// Control: Round 10 must NOT distinguish (Delta H <= 0.05%)
 			controlBlocks := make([][16]byte, numBlocks)
-			for i := 0; i < numBlocks; i++ {
+			for i := range numBlocks {
 				var pt [16]byte
 				pt[0] = byte(i)
 				pt[1] = byte(i >> 8)
@@ -322,17 +324,17 @@ func TestChallengerM2_2_AllDiagonals_EntropyPenetration(t *testing.T) {
 	key := []byte{0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c}
 	numBlocks := 4096
 
-	for diagIdx := 0; diagIdx < 4; diagIdx++ {
+	for diagIdx := range 4 {
 		diag := aesDiagonals[diagIdx]
 
 		plaintexts := make([][16]byte, numBlocks)
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			// Populate all 4 diagonal positions with varying counter / modular streams
 			plaintexts[i][diag[0]] = byte(i)
 			plaintexts[i][diag[1]] = byte(i * 13)
 			plaintexts[i][diag[2]] = byte(i * 37)
 			plaintexts[i][diag[3]] = byte(i * 61)
-			for j := 0; j < 16; j++ {
+			for j := range 16 {
 				if j != diag[0] && j != diag[1] && j != diag[2] && j != diag[3] {
 					plaintexts[i][j] = byte(j * 17)
 				}
@@ -340,7 +342,7 @@ func TestChallengerM2_2_AllDiagonals_EntropyPenetration(t *testing.T) {
 		}
 
 		blocksR4 := make([][16]byte, numBlocks)
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			blocksR4[i] = EncryptReducedRound(plaintexts[i][:], key, 4, true)
 		}
 

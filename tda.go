@@ -111,7 +111,7 @@ func CompressTDA(src []byte) []byte {
 	rem := n % 8
 
 	words := make([]uint64, numWords)
-	for i := 0; i < numWords; i++ {
+	for i := range numWords {
 		words[i] = binary.LittleEndian.Uint64(src[i*8 : (i+1)*8])
 	}
 
@@ -165,7 +165,7 @@ func CompressTDA(src []byte) []byte {
 	// Check if diffWords has lower total Hamming weight
 	origHamming := 0
 	diffHamming := 0
-	for i := 0; i < numWords; i++ {
+	for i := range numWords {
 		origHamming += bits.OnesCount64(workWords[i])
 		diffHamming += bits.OnesCount64(diffWords[i])
 	}
@@ -323,7 +323,7 @@ func DecompressTDA(src []byte, dst []byte) ([]byte, error) {
 	var bcs []barcodeEntry
 	if numBarcodes > 0 {
 		bcs = make([]barcodeEntry, numBarcodes)
-		for b := 0; b < numBarcodes; b++ {
+		for b := range numBarcodes {
 			bcs[b].offset = binary.LittleEndian.Uint32(src[pos : pos+4])
 			bcs[b].length = binary.LittleEndian.Uint16(src[pos+4 : pos+6])
 			bcs[b].mask = binary.LittleEndian.Uint64(src[pos+6 : pos+14])
@@ -341,7 +341,7 @@ func DecompressTDA(src []byte, dst []byte) ([]byte, error) {
 	if pos+numNZ*12 > len(src) {
 		return nil, ErrTDACorrupt
 	}
-	for i := 0; i < numNZ; i++ {
+	for range numNZ {
 		idx := binary.LittleEndian.Uint32(src[pos : pos+4])
 		val := binary.LittleEndian.Uint64(src[pos+4 : pos+12])
 		pos += 12
@@ -360,17 +360,14 @@ func DecompressTDA(src []byte, dst []byte) ([]byte, error) {
 
 	// Step 4: Add Persistent 1-cycles (Cycle Filling via bitwise XOR)
 	for _, bc := range bcs {
-		end := int(bc.offset) + int(bc.length)
-		if end > numWords {
-			end = numWords
-		}
+		end := min(int(bc.offset)+int(bc.length), numWords)
 		for i := int(bc.offset); i < end; i++ {
 			words[i] ^= bc.mask
 		}
 	}
 
 	// Step 5: Write out 64-bit words
-	for i := 0; i < numWords; i++ {
+	for i := range numWords {
 		binary.LittleEndian.PutUint64(dst[i*8:(i+1)*8], words[i])
 	}
 

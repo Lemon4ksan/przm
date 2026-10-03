@@ -97,7 +97,7 @@ func TestHyperbolic_MoebiusReflections(t *testing.T) {
 
 // TestHyperbolic_HadamardSphericalCodes verifies pairwise distance >= 4 in 8D.
 func TestHyperbolic_HadamardSphericalCodes(t *testing.T) {
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		cI := HadamardCodeword8(i)
 		for j := i + 1; j < 8; j++ {
 			cJ := HadamardCodeword8(j)

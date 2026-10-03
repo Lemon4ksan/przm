@@ -17,7 +17,7 @@ import (
 // associativity, commutativity, distributivity, and multiplicative inverse.
 func TestGFPI_FieldAxioms(t *testing.T) {
 	// 1. Identity: a * 1 == a, a * 0 == 0
-	for a := 0; a < 256; a++ {
+	for a := range 256 {
 		ba := byte(a)
 		if przm.GF256Mul(ba, 1) != ba {
 			t.Fatalf("identity failure: %d * 1 != %d", a, a)
@@ -38,8 +38,8 @@ func TestGFPI_FieldAxioms(t *testing.T) {
 	}
 
 	// 3. Commutativity: a * b == b * a
-	for a := 0; a < 256; a++ {
-		for b := 0; b < 256; b++ {
+	for a := range 256 {
+		for b := range 256 {
 			ba, bb := byte(a), byte(b)
 			if przm.GF256Mul(ba, bb) != przm.GF256Mul(bb, ba) {
 				t.Fatalf("commutativity failure: %d * %d != %d * %d", a, b, b, a)
@@ -48,9 +48,9 @@ func TestGFPI_FieldAxioms(t *testing.T) {
 	}
 
 	// 4. Distributivity: a * (b ^ c) == (a * b) ^ (a * c) on sample subset
-	for a := 0; a < 64; a++ {
-		for b := 0; b < 64; b++ {
-			for c := 0; c < 16; c++ {
+	for a := range 64 {
+		for b := range 64 {
+			for c := range 16 {
 				ba, bb, bc := byte(a), byte(b), byte(c)
 				left := przm.GF256Mul(ba, bb^bc)
 				right := przm.GF256Mul(ba, bb) ^ przm.GF256Mul(ba, bc)
@@ -81,7 +81,7 @@ func TestGFPI_Theorem3_LosslessReconstruction(t *testing.T) {
 
 			y := make([]byte, K)
 			delta := make([]byte, K)
-			for tIdx := 0; tIdx < K; tIdx++ {
+			for tIdx := range K {
 				pt := c0Target ^ przm.GF256Mul(c1Target, byte(tIdx))
 				delta[tIdx] = pt
 				y[tIdx] = ref[tIdx] ^ pt
@@ -133,7 +133,7 @@ func TestGFPI_Quadratic(t *testing.T) {
 
 	y := make([]byte, K)
 	delta := make([]byte, K)
-	for tIdx := 0; tIdx < K; tIdx++ {
+	for tIdx := range K {
 		bt := byte(tIdx)
 		pt := c0Target ^ przm.GF256Mul(c1Target, bt) ^ przm.GF256Mul(c2Target, przm.GF256Mul(bt, bt))
 		delta[tIdx] = pt
@@ -266,7 +266,7 @@ func BenchmarkGFPI_Throughput(b *testing.B) {
 	})
 
 	delta := make([]byte, K)
-	for tIdx := 0; tIdx < K; tIdx++ {
+	for tIdx := range K {
 		delta[tIdx] = c0 ^ przm.GF256Mul(c1, byte(tIdx))
 	}
 
