@@ -25,6 +25,15 @@ PRZM features both a pure **Go 1.27** implementation with SIMD acceleration (`si
 4. **Non-Archimedean $p$-Adic Match Finding**: Level 3/4 match finding replaces linear hash chains with ultrametric Hensel lifting, achieving a **2.03x search speedup** (26.3 ns vs 54.6 ns at depth 64) with guaranteed zero false candidate dismissals (Theorems HL1/HL2).
 5. **Lossless Bit-Exact Parity**: 100% bidirectional cross-language compatibility between Go compressors and Pure C decompressors across all supported payload profiles.
 
+## Why Go?
+
+**Because Go is fun!** But beyond that, it brings massive technical leverage to this specific architecture:
+
+1. **Trivial Concurrency:** PRZM breaks data into independent chunks (64KB - 8MB). Go's native goroutines and work-stealing scheduler make parallelizing the encoder across all CPU cores completely effortless compared to C++ threads.
+2. **Assembly & SIMD Integration:** Go allows writing raw `.s` assembly files (AVX2/AVX-512/NEON) for the heavy math transforms (Base64 Normalization, BitPlane, BCJ), while keeping the surrounding routing logic memory-safe.
+3. **Cross-Compilation:** With `GOOS` and `GOARCH`, we can compile the PRZM CLI for Windows, Linux, macOS, ARM, and x86 with a single command, without wrestling with CMake matrices.
+4. **Safety Meets Speed:** The *Encoder* runs in Go's memory-safe environment, preventing buffer overflows during complex graph analysis (DAG parsing). The *Decoder* (`DecompressTo`) bypasses the Garbage Collector entirely by maintaining a strict `0 allocs` contract, achieving C-level speeds while retaining Go's safety nets for the framing logic.
+
 ## The 13 Transform Families
 
 PRZM decomposes heterogeneous data streams into 13 specialized algebraic and topological manifolds:

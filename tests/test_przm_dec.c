@@ -113,6 +113,13 @@ static void test_get_uncompressed_size(void) {
     sz = przm_get_uncompressed_size(frame_marg, sizeof(frame_marg));
     TEST_ASSERT(sz == 8192, "MARGOLUS size mismatch");
 
+    uint8_t frame_png[12];
+    write_u32_le(frame_png, PRZM_MAGIC_ARCHIVAL_PNG);
+    write_u32_le(frame_png + 4, 16384);
+    write_u32_le(frame_png + 8, 24);
+    sz = przm_get_uncompressed_size(frame_png, sizeof(frame_png));
+    TEST_ASSERT(sz == 16384, "Archival PNG size mismatch");
+
     TEST_PASS("przm_get_uncompressed_size");
 }
 
@@ -220,14 +227,16 @@ static void test_standard_fused_lz(void) {
     frame[fptr++] = 0;
     frame[fptr++] = 0;
 
-    /* Section Directory: CmdStreamSize = 2, OffsetStreamSize = 0 */
-    frame[fptr++] = 2; frame[fptr++] = 0; /* CmdSize = 2 */
+    /* Section Directory: CmdStreamSize = 7, OffsetStreamSize = 0 */
+    frame[fptr++] = 7; frame[fptr++] = 0; /* CmdSize = 7 */
     frame[fptr++] = 0; frame[fptr++] = 0; /* OffSize = 0 */
 
     /* Section 1: 8 zeroes */
     memset(frame + fptr, 0, 8); fptr += 8;
 
-    /* Section 2: Command stream */
+    /* Section 2: Command stream (ModeFlat: mode 0, orig_len 2) */
+    frame[fptr++] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame + fptr, 2); fptr += 4;
     frame[fptr++] = 0xF3; /* 1 literal */
     frame[fptr++] = 0x00; /* Fused Repeat: L=0, M=4, k=0 (d=1) */
 
@@ -809,14 +818,16 @@ static void test_dictionary_decompression(void) {
     };
 
     /* Standard frame referencing DictID 0x1001 with 1-byte opcode 0xD8 (tok_id 0) */
-    uint8_t frame[8 + 4 + 4 + 1];
+    uint8_t frame[8 + 4 + 4 + 5 + 1];
     write_u32_le(frame, PRZM_MAGIC_STANDARD);
     frame[4] = PRZM_FLAG_DICT_REF;
     frame[5] = 10; frame[6] = 0; frame[7] = 0; /* Uncompressed size = 10 */
     write_u32_le(frame + 8, 0x1001);           /* DictID */
-    write_u16_le(frame + 12, 1);               /* cmd_size = 1 */
+    write_u16_le(frame + 12, 6);               /* cmd_size = 5 + 1 = 6 */
     write_u16_le(frame + 14, 0);               /* off_size = 0 */
-    frame[16] = 0xD8;                          /* Opcode 0xD8 -> token 0 */
+    frame[16] = PRZM_ENTROPY_MODE_FLAT;        /* ModeFlat */
+    write_u32_le(frame + 17, 1);               /* orig_len = 1 */
+    frame[21] = 0xD8;                          /* Opcode 0xD8 -> token 0 */
 
     uint8_t dst[128];
     memset(dst, 0, sizeof(dst));
@@ -942,24 +953,29 @@ static void test_corrupted_and_truncated_frames(void) {
     TEST_ASSERT(przm_decompress(huge_frame, sizeof(huge_frame), dst, sizeof(dst)) == PRZM_ERR_EXCEEDS_MAX_BLOCK, "huge frame should error");
 
     /* 8. Offset out of bounds in match replication */
-    uint8_t oob_frame[16] = {
+    uint8_t oob_frame[26] = {
         'P', 'R', 'Z', 'M',
         0x00,               /* flags */
         0x20, 0x00, 0x00,   /* 32 bytes */
-        0x01, 0x00,         /* cmd_size = 1 */
+        0x06, 0x00,         /* cmd_size = 6 (5B ModeFlat + 1B cmd) */
         0x00, 0x00,         /* off_size = 0 */
-        0x00,               /* cmd 0x00: repeat match d=1 from pos=0 -> OOB */
-        0x00, 0x00, 0x00
+        0, 0, 0, 0, 0, 0, 0, 0, /* Section 1: 8 zeroes */
+        0x00,               /* ModeFlat */
+        0x01, 0x00, 0x00, 0x00, /* orig_len = 1 */
+        0x00                /* cmd 0x00: repeat match d=1 from pos=0 -> OOB */
     };
     TEST_ASSERT(przm_decompress(oob_frame, sizeof(oob_frame), dst, sizeof(dst)) == PRZM_ERR_OFFSET_OOB, "match d=1 at pos=0 should error OFFSET_OOB");
 
     /* 9. Truncated literal stream */
-    uint8_t trunc_lit_frame[16] = {
+    uint8_t trunc_lit_frame[27] = {
         'P', 'R', 'Z', 'M',
         0x00,               /* flags */
         0x20, 0x00, 0x00,   /* 32 bytes */
-        0x01, 0x00,         /* cmd_size = 1 */
+        0x07, 0x00,         /* cmd_size = 7 (5B ModeFlat + 2B cmd) */
         0x00, 0x00,         /* off_size = 0 */
+        0, 0, 0, 0, 0, 0, 0, 0, /* Section 1: 8 zeroes */
+        0x00,               /* ModeFlat */
+        0x02, 0x00, 0x00, 0x00, /* orig_len = 2 */
         0xF0, 0x10          /* cmd 0xF0: literal run of 16 bytes, but 0 literals in section 4 */
     };
     TEST_ASSERT(przm_decompress(trunc_lit_frame, sizeof(trunc_lit_frame), dst, sizeof(dst)) == PRZM_ERR_CORRUPTED_FRAME, "truncated literals should error");
@@ -1050,6 +1066,348 @@ static void test_corrupted_and_truncated_frames(void) {
     TEST_PASS("corrupted_and_truncated_frames");
 }
 
+/* 16. Test Base64 and Hex Normalization Decoding */
+static void test_normalization(void) {
+    /* 1. Hex expansion unit test */
+    uint8_t raw_hex[4] = {0xDE, 0xAD, 0xBE, 0xEF};
+    uint8_t exp_hex_lower[8];
+    uint8_t exp_hex_upper[8];
+    przm_expand_hex(exp_hex_lower, raw_hex, 4, 0);
+    przm_expand_hex(exp_hex_upper, raw_hex, 4, 1);
+    TEST_ASSERT(memcmp(exp_hex_lower, "deadbeef", 8) == 0, "Hex lower expansion mismatch");
+    TEST_ASSERT(memcmp(exp_hex_upper, "DEADBEEF", 8) == 0, "Hex upper expansion mismatch");
+
+    /* 2. Base64 expansion unit test */
+    uint8_t raw_b64[6] = {'f', 'o', 'o', 'b', 'a', 'r'};
+    uint8_t exp_b64[8];
+    przm_expand_base64(exp_b64, raw_b64, 6, 0, 0);
+    TEST_ASSERT(memcmp(exp_b64, "Zm9vYmFy", 8) == 0, "Base64 expansion mismatch");
+
+    /* Base64 with padding 1 ('=') */
+    uint8_t raw_b64_p1[5] = {'h', 'e', 'l', 'l', 'o'};
+    uint8_t exp_b64_p1[8];
+    przm_expand_base64(exp_b64_p1, raw_b64_p1, 5, 1, 0);
+    TEST_ASSERT(memcmp(exp_b64_p1, "aGVsbG8=", 8) == 0, "Base64 pad1 mismatch");
+
+    /* Base64 with padding 2 ('==') */
+    uint8_t raw_b64_p2[4] = {'m', 'a', 'n', 'y'};
+    uint8_t exp_b64_p2[8];
+    przm_expand_base64(exp_b64_p2, raw_b64_p2, 4, 2, 0);
+    TEST_ASSERT(memcmp(exp_b64_p2, "bWFueQ==", 8) == 0, "Base64 pad2 mismatch");
+
+    /* 3. Synthetic Hex-normalized frame */
+    uint8_t frame_hex[64];
+    size_t fptr = 0;
+    memcpy(frame_hex + fptr, "PRZM", 4); fptr += 4;
+    frame_hex[fptr++] = PRZM_FLAG_NORM; /* 0x20 */
+    frame_hex[fptr++] = 8; /* u_size = 8 ASCII hex bytes */
+    frame_hex[fptr++] = 0;
+    frame_hex[fptr++] = 0;
+
+    /* Section Directory: CmdSize = 6, OffSize = 0 */
+    frame_hex[fptr++] = 6; frame_hex[fptr++] = 0;
+    frame_hex[fptr++] = 0; frame_hex[fptr++] = 0;
+
+    /* Section 1: 8 bytes */
+    memset(frame_hex + fptr, 0, 8);
+    frame_hex[fptr + 1] = 16; /* WindowLog = 16 */
+    frame_hex[fptr + 2] = PRZM_NORM_HEX; /* 1 */
+    write_u16_le(frame_hex + fptr + 3, 4); /* contracted_len = 4 */
+    fptr += 8;
+
+    /* Section 2: Command stream (ModeFlat, 1 opcode 0xF6 = 4 direct literals) */
+    frame_hex[fptr++] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame_hex + fptr, 1); fptr += 4;
+    frame_hex[fptr++] = 0xF6; /* 4 direct literals (0xF2 + 4) */
+
+    /* Section 4: 4 raw bytes */
+    frame_hex[fptr++] = 0xCA;
+    frame_hex[fptr++] = 0xFE;
+    frame_hex[fptr++] = 0xBA;
+    frame_hex[fptr++] = 0xBE;
+
+    uint8_t dst[128];
+    int64_t res = przm_decompress(frame_hex, fptr, dst, sizeof(dst));
+    TEST_ASSERT(res == 8, "Hex normalized frame decompress size mismatch");
+    TEST_ASSERT(memcmp(dst, "cafebabe", 8) == 0, "Hex normalized payload mismatch");
+
+    TEST_PASS("normalization");
+}
+
+/* 17. Test Block Deduplication (OpCopyBlock 0xFD) */
+static void test_block_deduplication(void) {
+    /* 1. Synthetic 2-block frame (128 KiB uncompressed) */
+    uint8_t frame2[128];
+    size_t fptr = 0;
+    memcpy(frame2 + fptr, "PRZM", 4); fptr += 4;
+    frame2[fptr++] = PRZM_FLAG_EXT_OFFSET; /* 0x08 */
+    frame2[fptr++] = 0x00; /* u_size low */
+    frame2[fptr++] = 0x00; /* u_size mid: 131072 = 0x020000 */
+    frame2[fptr++] = 0x02; /* u_size high */
+
+    /* Section Directory: CmdSize = 14 (ModeFlat), OffSize = 5 (ModeFlat) */
+    frame2[fptr++] = 14; frame2[fptr++] = 0; frame2[fptr++] = 0;
+    frame2[fptr++] = 5;  frame2[fptr++] = 0; frame2[fptr++] = 0;
+
+    /* Section 1: 8 bytes */
+    memset(frame2 + fptr, 0, 8);
+    frame2[fptr + 1] = 16; /* WindowLog = 16 */
+    fptr += 8;
+
+    /* Section 2: Command stream (ModeFlat, origLen = 9) */
+    /* Commands: RLE 65536 (4 bytes) + OpCopyBlock to block 0 (5 bytes) */
+    frame2[fptr++] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame2 + fptr, 9); fptr += 4;
+    frame2[fptr++] = 0xF1; /* OpcodePrefixRLE */
+    frame2[fptr++] = 0x80; frame2[fptr++] = 0x80; frame2[fptr++] = 0x04; /* uvarint(65536) */
+    frame2[fptr++] = PRZM_OP_COPY_BLOCK; /* 0xFD */
+    write_u32_le(frame2 + fptr, 0); fptr += 4; /* src_block_idx = 0 */
+
+    /* Section 3: Offset channel (ModeFlat, origLen = 0) */
+    frame2[fptr++] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame2 + fptr, 0); fptr += 4;
+
+    /* Section 4: Literal channel: 1 byte 0x55 for RLE */
+    frame2[fptr++] = 0x55;
+
+    size_t total_u_size = 131072;
+    uint8_t* dst = (uint8_t*)malloc(total_u_size + PRZM_SAFETY_PADDING);
+    TEST_ASSERT(dst != NULL, "malloc dst failed");
+    memset(dst, 0, total_u_size + PRZM_SAFETY_PADDING);
+
+    int64_t dec_len = przm_decompress(frame2, fptr, dst, total_u_size + PRZM_SAFETY_PADDING);
+    TEST_ASSERT(dec_len == (int64_t)total_u_size, "2-block dedup decompressed size mismatch");
+    for (size_t i = 0; i < total_u_size; i++) {
+        TEST_ASSERT(dst[i] == 0x55, "2-block dedup content mismatch");
+    }
+
+    /* 2. Synthetic 3-block frame (196608 bytes): B0=0x11, B1=0x22, B2=copy B0 */
+    uint8_t frame3[128];
+    fptr = 0;
+    memcpy(frame3 + fptr, "PRZM", 4); fptr += 4;
+    frame3[fptr++] = PRZM_FLAG_EXT_OFFSET;
+    frame3[fptr++] = 0x00; frame3[fptr++] = 0x00; frame3[fptr++] = 0x03; /* 196608 = 0x030000 */
+
+    /* CmdSize = 18, OffSize = 5 */
+    frame3[fptr++] = 18; frame3[fptr++] = 0; frame3[fptr++] = 0;
+    frame3[fptr++] = 5;  frame3[fptr++] = 0; frame3[fptr++] = 0;
+
+    memset(frame3 + fptr, 0, 8);
+    frame3[fptr + 1] = 16;
+    fptr += 8;
+
+    /* Section 2: ModeFlat, origLen = 13 */
+    /* RLE 65536 (4) + RLE 65536 (4) + OpCopyBlock 0 (5) = 13 bytes */
+    frame3[fptr++] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame3 + fptr, 13); fptr += 4;
+    frame3[fptr++] = 0xF1; frame3[fptr++] = 0x80; frame3[fptr++] = 0x80; frame3[fptr++] = 0x04;
+    frame3[fptr++] = 0xF1; frame3[fptr++] = 0x80; frame3[fptr++] = 0x80; frame3[fptr++] = 0x04;
+    frame3[fptr++] = PRZM_OP_COPY_BLOCK;
+    write_u32_le(frame3 + fptr, 0); fptr += 4; /* copy block 0 */
+
+    /* Section 3: 5 bytes */
+    frame3[fptr++] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame3 + fptr, 0); fptr += 4;
+
+    /* Section 4: 2 bytes: 0x11 for first RLE, 0x22 for second RLE */
+    frame3[fptr++] = 0x11;
+    frame3[fptr++] = 0x22;
+
+    size_t total_u_size3 = 196608;
+    uint8_t* dst3 = (uint8_t*)malloc(total_u_size3 + PRZM_SAFETY_PADDING);
+    TEST_ASSERT(dst3 != NULL, "malloc dst3 failed");
+
+    int64_t dec_len3 = przm_decompress(frame3, fptr, dst3, total_u_size3 + PRZM_SAFETY_PADDING);
+    TEST_ASSERT(dec_len3 == (int64_t)total_u_size3, "3-block dedup decompressed size mismatch");
+    for (size_t i = 0; i < 65536; i++) {
+        TEST_ASSERT(dst3[i] == 0x11, "3-block dedup B0 mismatch");
+    }
+    for (size_t i = 65536; i < 131072; i++) {
+        TEST_ASSERT(dst3[i] == 0x22, "3-block dedup B1 mismatch");
+    }
+    for (size_t i = 131072; i < 196608; i++) {
+        TEST_ASSERT(dst3[i] == 0x11, "3-block dedup B2 mismatch");
+    }
+    free(dst3);
+
+    /* 3. Adversarial / Corrupted frames testing */
+    /* A. Truncated OpCopyBlock command (missing payload) */
+    uint8_t frame_bad[128];
+    memcpy(frame_bad, frame2, sizeof(frame2));
+    /* Shorten CmdSize to truncate OpCopyBlock */
+    frame_bad[8] = 11; /* was 14 */
+    int64_t err_trunc = przm_decompress(frame_bad, fptr, dst, total_u_size + PRZM_SAFETY_PADDING);
+    TEST_ASSERT(err_trunc < 0, "truncated OpCopyBlock must fail");
+
+    /* B. Forward reference: block 0 tries to reference block 1 */
+    uint8_t frame_fwd[128];
+    memcpy(frame_fwd, frame2, sizeof(frame2));
+    /* Overwrite first command (offset 27) with OpCopyBlock referencing block 1 */
+    frame_fwd[27] = PRZM_OP_COPY_BLOCK;
+    write_u32_le(frame_fwd + 28, 1);
+    int64_t err_fwd = przm_decompress(frame_fwd, fptr, dst, total_u_size + PRZM_SAFETY_PADDING);
+    TEST_ASSERT(err_fwd < 0, "forward OpCopyBlock reference must fail");
+
+    /* C. Out-of-bounds reference: block 1 references block 999 */
+    uint8_t frame_oob[128];
+    memcpy(frame_oob, frame2, sizeof(frame2));
+    write_u32_le(frame_oob + 32, 999);
+    int64_t err_oob = przm_decompress(frame_oob, fptr, dst, total_u_size + PRZM_SAFETY_PADDING);
+    TEST_ASSERT(err_oob < 0, "out-of-bounds OpCopyBlock reference must fail");
+
+    /* D. Destination buffer too small */
+    int64_t err_buf = przm_decompress(frame2, fptr, dst, 65536);
+    TEST_ASSERT(err_buf < 0, "buffer too small must fail");
+
+    free(dst);
+    TEST_PASS("block_deduplication");
+}
+
+/* 18. Test Archival Mode PNG Deflate Container Decompression */
+static void test_archival_png(void) {
+    /* 1. Construct genuine reference PNG bitstream:
+     *    - PNG Signature: 8 bytes
+     *    - IHDR Chunk: 4B len (13) + 4B "IHDR" + 13B data + 4B CRC
+     *    - IDAT Chunk: 4B len (16) + 4B "IDAT" + 16B scanlines + 4B CRC
+     *    - IEND Chunk: 4B len (0)  + 4B "IEND" + 4B CRC
+     */
+    uint8_t orig_png[256];
+    size_t png_pos = 0;
+
+    /* 8-byte PNG signature */
+    static const uint8_t png_sig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    memcpy(orig_png + png_pos, png_sig, 8);
+    png_pos += 8;
+
+    /* IHDR chunk */
+    uint32_t ihdr_data_len = 13;
+    orig_png[png_pos]     = (uint8_t)(ihdr_data_len >> 24);
+    orig_png[png_pos + 1] = (uint8_t)(ihdr_data_len >> 16);
+    orig_png[png_pos + 2] = (uint8_t)(ihdr_data_len >> 8);
+    orig_png[png_pos + 3] = (uint8_t)ihdr_data_len;
+    png_pos += 4;
+    memcpy(orig_png + png_pos, "IHDR", 4);
+    png_pos += 4;
+    memset(orig_png + png_pos, 0, 13);
+    orig_png[png_pos + 3] = 1; /* width = 1 */
+    orig_png[png_pos + 7] = 1; /* height = 1 */
+    orig_png[png_pos + 8] = 8; /* bit depth = 8 */
+    orig_png[png_pos + 9] = 2; /* color type = RGB */
+    png_pos += 13;
+    uint8_t ihdr_crc[4] = {0x12, 0x34, 0x56, 0x78};
+    memcpy(orig_png + png_pos, ihdr_crc, 4);
+    png_pos += 4;
+
+    size_t prefix_len = png_pos; /* 33 bytes */
+
+    /* IDAT chunk */
+    const char* scanline_data = "SCANLINE_DATA_16";
+    uint32_t idat_data_len = (uint32_t)strlen(scanline_data);
+    orig_png[png_pos]     = (uint8_t)(idat_data_len >> 24);
+    orig_png[png_pos + 1] = (uint8_t)(idat_data_len >> 16);
+    orig_png[png_pos + 2] = (uint8_t)(idat_data_len >> 8);
+    orig_png[png_pos + 3] = (uint8_t)idat_data_len;
+    png_pos += 4;
+    memcpy(orig_png + png_pos, "IDAT", 4);
+    png_pos += 4;
+    memcpy(orig_png + png_pos, scanline_data, idat_data_len);
+    png_pos += idat_data_len;
+    uint8_t idat_crc[4] = {0xDE, 0xAD, 0xBE, 0xEF};
+    memcpy(orig_png + png_pos, idat_crc, 4);
+    png_pos += 4;
+
+    size_t postfix_start = png_pos;
+
+    /* IEND chunk */
+    orig_png[png_pos]     = 0;
+    orig_png[png_pos + 1] = 0;
+    orig_png[png_pos + 2] = 0;
+    orig_png[png_pos + 3] = 0;
+    png_pos += 4;
+    memcpy(orig_png + png_pos, "IEND", 4);
+    png_pos += 4;
+    uint8_t iend_crc[4] = {0xAE, 0x42, 0x60, 0x82};
+    memcpy(orig_png + png_pos, iend_crc, 4);
+    png_pos += 4;
+
+    size_t postfix_len = png_pos - postfix_start; /* 12 bytes */
+    size_t total_orig_png_len = png_pos;
+
+    /* 2. Build synthetic PRZM Archival PNG Container Frame */
+    uint8_t container[512];
+    size_t c_pos = 0;
+
+    /* 12-byte Container Header */
+    write_u32_le(container + c_pos, PRZM_MAGIC_ARCHIVAL_PNG);
+    c_pos += 4;
+    write_u32_le(container + c_pos, (uint32_t)total_orig_png_len);
+    c_pos += 4;
+
+    /* Metadata block: 8 header + 1*8 IDAT desc + prefix_len + postfix_len */
+    size_t meta_size = 8 + 8 + prefix_len + postfix_len;
+    write_u32_le(container + c_pos, (uint32_t)meta_size);
+    c_pos += 4;
+
+    /* Metadata Block Payload */
+    size_t meta_start = c_pos;
+    container[c_pos++] = 0x50; /* 'P' */
+    container[c_pos++] = 0x01; /* isZlib */
+    write_u16_le(container + c_pos, (uint16_t)prefix_len);
+    c_pos += 2;
+    write_u16_le(container + c_pos, (uint16_t)postfix_len);
+    c_pos += 2;
+    write_u16_le(container + c_pos, 1); /* idatCount = 1 */
+    c_pos += 2;
+
+    /* IDAT descriptor 0 */
+    write_u32_le(container + c_pos, idat_data_len);
+    c_pos += 4;
+    memcpy(container + c_pos, idat_crc, 4); /* CRC Big-Endian */
+    c_pos += 4;
+
+    /* Prefix bytes */
+    memcpy(container + c_pos, orig_png, prefix_len);
+    c_pos += prefix_len;
+
+    /* Postfix bytes */
+    memcpy(container + c_pos, orig_png + postfix_start, postfix_len);
+    c_pos += postfix_len;
+
+    TEST_ASSERT(c_pos - meta_start == meta_size, "Metadata size computation error");
+
+    /* Inner PRZM compressed stream (standard uncompressed frame for scanlines) */
+    memcpy(container + c_pos, "PRZM", 4);
+    c_pos += 4;
+    container[c_pos++] = PRZM_FLAG_UNCOMPRESSED;
+    container[c_pos++] = (uint8_t)idat_data_len;
+    container[c_pos++] = (uint8_t)(idat_data_len >> 8);
+    container[c_pos++] = (uint8_t)(idat_data_len >> 16);
+    memcpy(container + c_pos, scanline_data, idat_data_len);
+    c_pos += idat_data_len;
+
+    size_t container_len = c_pos;
+
+    /* 3. Verify przm_get_uncompressed_size */
+    int64_t u_size = przm_get_uncompressed_size(container, container_len);
+    TEST_ASSERT(u_size == (int64_t)total_orig_png_len, "Archival PNG uncompressed size mismatch");
+
+    /* 4. Decompress into dst */
+    uint8_t dst[512];
+    int64_t dec_len = przm_decompress(container, container_len, dst, sizeof(dst));
+    TEST_ASSERT(dec_len == (int64_t)total_orig_png_len, "Archival PNG decompressed size mismatch");
+    TEST_ASSERT(memcmp(dst, orig_png, total_orig_png_len) == 0, "Archival PNG reconstructed bytes mismatch");
+
+    /* 5. Error handling: buffer too small */
+    int64_t err_small = przm_decompress(container, container_len, dst, total_orig_png_len);
+    TEST_ASSERT(err_small < 0, "Archival PNG must fail when dst_cap < orig_len + SAFETY_PADDING");
+
+    /* 6. Error handling: truncated frame */
+    int64_t err_trunc = przm_decompress(container, 10, dst, sizeof(dst));
+    TEST_ASSERT(err_trunc < 0, "Archival PNG must fail on truncated frame");
+
+    TEST_PASS("archival_png");
+}
+
 int main(int argc, char** argv) {
     if (argc == 3) {
         /* CLI decompression mode: test_przm_dec <in.przm> <out.bin> */
@@ -1115,7 +1473,10 @@ int main(int argc, char** argv) {
     test_margolus_decompression();
     test_dictionary_decompression();
     test_sheaf_trellis_decompression();
+    test_normalization();
+    test_block_deduplication();
     test_corrupted_and_truncated_frames();
+    test_archival_png();
 
     printf("\n>>> ALL TESTS PASSED SUCCESSFULLY! (0 Allocations, 100%% Lossless) <<<\n");
     return 0;

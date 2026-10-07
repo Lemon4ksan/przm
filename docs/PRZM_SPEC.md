@@ -1,11 +1,10 @@
 # PRZM Compression Format Specification
 
 ```text
-Document:     PRZM-SPEC-0.5
-Version:      0.5.0
+Document:     PRZM-SPEC-0.6
+Version:      0.6.0
 Status:       Standard Specification
 Identifier:   PRZM (0x4D5A5250 Little-Endian)
-Codec ID:     0x06 (EON Substrate)
 Verification: Formally Proved in Lean 4 (38 Verified Theorems)
 Byte Order:   Little-Endian
 Conformance:  Deterministic Bitstream Reference (Clean-Room Interoperable)
@@ -19,7 +18,7 @@ Conformance:  Deterministic Bitstream Reference (Clean-Room Interoperable)
 
 This document specifies the binary framing, mathematical coordinate charts, decoding state machines, and hardware execution models of the **PRZM (PrismLZ) Unified Archival & Streaming Compression Engine**.
 
-PRZM is a multi-dimensional, discrete manifold compression codec engineered specifically for high-throughput streaming, storage extents (16 KiB to 64 KiB), and multi-gigabyte continuous archives. It is designed to be decompressed directly into host memory, GPU registers, and virtual filesystems (`seal mount`) at memory-bus line rate (up to 56 GB/s) without staging files to disk.
+PRZM is a multi-dimensional, discrete manifold compression codec engineered specifically for high-throughput streaming, storage extents (16 KiB to 64 KiB), and multi-gigabyte continuous archives. It is designed to be decompressed directly into host memory, GPU registers, and virtual filesystems (`VFS mount`) at memory-bus line rate (up to 56 GB/s) without staging files to disk.
 
 ### 1.1. Motivation: The Collapse of the One-Dimensional LZ77 Paradigm
 
@@ -62,19 +61,25 @@ PRZM operates as an adaptive differential-geometric atlas consisting of 12 coord
 +-------------------------------------------------------------------------------+
 | 0x4D5A5250 ("PRZM") -> Standard Fused Frame (Stride, Delta, BCJ, V-ANS)       |
 | 0x53594D50 ("SYMP") -> Sp(4, F_{2^8}) Symplectic Phase-Space Foliation        |
-| 0x4D41484C ("MAHL") -> 2-Adic Mahler Ultrametric Spectral Transform          |
-| 0x53484546 ("SHEF") -> Étale Sheaf & Tropical Rep-Queue Trellis              |
-| 0x41524D36 ("ARM6") -> ARM64 / RISC-V Affine Instruction Branch Collimation  |
-| 0x4D414352 ("MACR") -> Ultra-Long Horizon Holographic Macro-Trellis (512 MB) |
+| 0x4D41484C ("MAHL") -> 2-Adic Mahler Ultrametric Spectral Transform           |
+| 0x53484546 ("SHEF") -> Étale Sheaf & Tropical Rep-Queue Trellis               |
+| 0x41524D36 ("ARM6") -> ARM64 / RISC-V Affine Instruction Branch Collimation   |
+| 0x4D414352 ("MACR") -> Ultra-Long Horizon Holographic Macro-Trellis (512 MB)  |
 | 0x44455053 ("DEPS") -> Monoidal Dependent-Type Sheaf Stratification (Protobuf)|
-| 0x54444131 ("TDA1") -> Persistent Homology & Boundary Annihilation (F_2)     |
-| 0x53504543 ("SPEC") -> Unitary Spectral Reduction over F_{2^8}               |
+| 0x54444131 ("TDA1") -> Persistent Homology & Boundary Annihilation (F_2)      |
+| 0x53504543 ("SPEC") -> Unitary Spectral Reduction over F_{2^8}                |
 | 0x484D4453 ("HMDS") -> Analytical Hyperbolic MDS in Minkowski Space M^4       |
-| 0x4850525A ("ZRPH") -> Discrete Poincaré Disk Hyperbolic Tree Embedding      |
+| 0x4850525A ("ZRPH") -> Discrete Poincaré Disk Hyperbolic Tree Embedding       |
 | 0x434C4946 ("FILC") -> Clifford Geometric Algebra Cl_{3,1}(F_{2^8}) Rotors    |
 | 'P','V', 0x01       -> Asymmetric Zero-Schema JIT-Vector VM (PRZM-VM ISA)     |
 | 'P','W', 0x01       -> Pareto-Wave Synthesis (PWS: L4/L5 AVX-Wave)            |
 | 'G','G', 0x01       -> Grammar-Graph Tensor Compression (GGTC H-DAG)          |
+| 0x47435452 ("GCTR") -> Galois Computational Trace Reduction                   |
+| 0x514F5349 ("ISOQ" inv) -> IsoQuant 4D                                        |
+| 0x53494548 ("HEIS" inv) -> Heisenberg Group Foliation                         |
+| 0x44485343 ("CSHD" inv) -> Cellular Sheaf                                     |
+| 0x49424F4D ("MOBI" inv) -> Mobius Fast Transform                              |
+| 0x4752414D ("MARG" inv) -> Margolus RCA                                       |
 +-------------------------------------------------------------------------------+
 ```
 
@@ -89,28 +94,30 @@ The standard fused frame is the baseline streaming container optimized for struc
 ### 3.1. Binary Frame Layout
 
 ```text
-+-------------------------------------------------------------------------------+
-| Frame Header (8 Bytes Fixed)                                                  |
-| Magic (4B: 'PRZM') | Flags (1B) | UncompressedSize (3B uint24_le)             |
-+-------------------------------------------------------------------------------+
-| Optional Frame Parameters (0 to 9 Bytes, governed by Flags):                  |
-| [Stride: uint8] (if FLAG_STRIDE)                                              |
-| [DictID: uint32_le] (if FLAG_DICT_REF)                                        |
-| [CallCount: uint32_le] (if FLAG_BCJ_SPLIT)                                    |
-+-------------------------------------------------------------------------------+
-| Section Directory (4 or 6 Bytes):                                             |
-| CmdStreamSize (uint16/24_le) | OffsetStreamSize (uint16/24_le)                |
-+-------------------------------------------------------------------------------+
-| Section 1: Distribution Parameters (Uniform/Raw Model, 8 Bytes)               |
-+-------------------------------------------------------------------------------+
-| Section 2: Command Stream (Packed Fused Opcodes, CmdStreamSize Bytes)         |
-+-------------------------------------------------------------------------------+
-| Section 3: Offset and Multiplier Channel (OffsetStreamSize Bytes)             |
-+-------------------------------------------------------------------------------+
-| Section 4: Literal, Mask, and RLE Channel (Remainder of Frame)                |
-| [Raw Bytes OR SIMD Nibble-Plane Stream OR V-ANS 4-Lane Stream]                |
-+-------------------------------------------------------------------------------+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                          Magic ('PRZM')                       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |     Flags     |    UncompressedSize (24-bit Little-Endian)    |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
+
+Optional Frame Parameters (0 to 9 Bytes, governed by `Flags`):
+- `Stride` (`uint8`) (if `FLAG_STRIDE`)
+- `DictID` (`uint32_le`) (if `FLAG_DICT_REF`)
+- `CallCount` (`uint32_le`) (if `FLAG_BCJ_SPLIT`)
+
+Section Directory (4 or 6 Bytes):
+- `CmdStreamSize` (`uint16_le` or `uint24_le`)
+- `OffsetStreamSize` (`uint16_le` or `uint24_le`)
+
+Following the Section Directory are 4 structured sections:
+1. **Section 1**: Distribution Parameters (Uniform/Raw Model, 8 Bytes)
+2. **Section 2**: Command Stream (Packed Fused Opcodes, `CmdStreamSize` Bytes)
+3. **Section 3**: Offset and Multiplier Channel (`OffsetStreamSize` Bytes)
+4. **Section 4**: Literal, Mask, and RLE Channel (Remainder of Frame)
+   - *May be Raw Bytes, SIMD Nibble-Plane Stream, or V-ANS 4-Lane Stream.*
 
 ### 3.2. Frame Configuration Flags (`Flags`)
 
@@ -136,6 +143,110 @@ $$\text{Sec1Offset} = 8 + |\text{Params}| + |\text{Directory}|$$
 $$\text{Sec2Offset} = \text{Sec1Offset} + 8, \quad \text{Sec3Offset} = \text{Sec2Offset} + \text{CmdStreamSize}$$
 $$\text{Sec4Offset} = \text{Sec3Offset} + \text{OffsetStreamSize}, \quad \text{Sec4Size} = \text{TotalSize} - \text{Sec4Offset}$$
 
+
+### 3.4. Section 1: Window Size Definitions
+If the frame is compressed (`FLAG_UNCOMPRESSED == 0`), Section 1 consists of exactly 8 bytes specifying distribution parameters and window sizes.
+Byte 1 defines the `WindowLog` size:
+- `16`: **64 KiB** Window (Legacy Default)
+- `20`: **1 MiB** Window (L3 Cache Resident)
+- `23`: **8 MiB** Window (Full Baseline Coverage)
+
+Bytes 2-8 are reserved padding and MUST be `0x00`. Decoders MUST reject frames where Bytes 2-8 are non-zero.
+
+### 3.5. Entropy Packing: Canonical Huffman 4-Stream Interleaved
+Sections 2 (Commands) and 3 (Offsets) utilize a high-performance Canonical Huffman encoder mapped across 4 interleaved bitstreams for superscalar branchless decoding.
+
+The canonical header is exactly 149 bytes long, permitting rapid reconstruction of a $4 	ext{ KiB}$ L1-resident Lookup Table (2048 entries max, bit lengths bounded to `MaxHuffBits = 11`).
+
+```text
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |     Mode      |      Original Uncompressed Length (origLen)   |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |origLen (cont) | Lengths[0,1]  | Lengths[2,3]  | Lengths[4,5]  |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                              ...                              |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |Lengths[254,255]|             Stream 0 Size                    |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   | Stream 0(cont)|             Stream 1 Size                     |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   | Stream 1(cont)|             Stream 2 Size                     |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   | Stream 2(cont)|             Stream 3 Size                     |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   | Stream 3(cont)|
+   +-+-+-+-+-+-+-+-+
+```
+
+| Offset | Length | Description |
+|:---:|:---:|:---|
+| `0` | 1 byte | Mode identifier (`0x00` = Flat, `0x01` = Huffman4X). |
+| `1` | 4 bytes | `origLen`: Original uncompressed payload length (Little-Endian `uint32`). |
+| `5` | 128 bytes| Packed symbol bit-lengths for all 256 ASCII symbols. 4 bits per symbol. Layout: `(len[i] & 0x0F) | ((len[i+1] & 0x0F) << 4)`. |
+| `133` | 16 bytes | 4 interleaved Stream Sizes. 4 $\times$ `uint32` Little-Endian (Streams 0, 1, 2, 3). |
+
+Following byte 148, the 4 bit-streams are concatenated sequentially.
+
+#### 3.5.1. Bitstream Endianness & Interleaving
+
+All Huffman-coded bitstreams MUST be read **Least-Significant-Bit (LSB) first**.
+When a stream consists of bytes `[B0, B1, ...]`, the 0th bit read is the lowest bit of `B0` (`B0 & 1`), and the 7th bit is the highest bit of `B0` (`(B0 >> 7) & 1`). The 8th bit is the lowest bit of `B1`.
+This guarantees strict Little-Endian bit-ordering, enabling highly efficient shift-and-mask decoding using 64-bit integer registers on modern CPUs.
+
+The 4 independent Huffman bitstreams are decoded to produce a single interleaved byte stream of 8-bit symbols. Symbols are reconstructed sequentially in a round-robin fashion from Stream 0, Stream 1, Stream 2, and Stream 3. This decompressed output stream serves as the actual payload for Sections 2 and 3.
+
+**Crucial Note on ULEB128 Parsing:** ULEB128 integers (as documented in Section 17) are parsed strictly from the *decompressed* 8-bit symbol stream, NOT from the raw bitstream. Any 'extra' bytes required by Command Opcodes are likewise drawn from this decompressed byte stream.
+
+#### 3.5.2. Canonical Huffman Tree Reconstruction (C-Pseudocode)
+
+The decoding table maps peak lengths (`MaxHuffBits = 11`) directly to symbols. Decoders MUST reject frames containing bit lengths exceeding 11.
+
+```c
+#define MAX_BITS 11
+#define NUM_SYMBOLS 256
+#define TABLE_SIZE (1 << MAX_BITS)
+
+uint16_t decode_table[TABLE_SIZE]; // Array of decoded symbols
+uint16_t bl_count[MAX_BITS + 1] = {0};
+uint16_t next_code[MAX_BITS + 1] = {0};
+uint8_t bit_lengths[NUM_SYMBOLS];
+
+// 1. Unpack 4-bit lengths (assumes lengths populated from 128-byte header)
+for (int i = 0; i < NUM_SYMBOLS; i++) {
+    bl_count[bit_lengths[i]]++;
+}
+bl_count[0] = 0; // Length 0 means symbol does not occur
+
+// 2. Compute canonical starting codes
+uint16_t code = 0;
+for (int bits = 1; bits <= MAX_BITS; bits++) {
+    code = (code + bl_count[bits - 1]) << 1;
+    next_code[bits] = code;
+}
+
+// 3. Populate L1-resident Lookup Table
+for (int i = 0; i < NUM_SYMBOLS; i++) {
+    uint8_t len = bit_lengths[i];
+    if (len != 0) {
+        // Canonical code assigned to this symbol
+        uint16_t sym_code = next_code[len]++;
+        
+        // Reverse bits for LSB-first bitstream reading
+        uint16_t rev_code = reverse_bits(sym_code, len);
+        
+        // Broadcast this symbol across all unused upper bits in the table
+        uint16_t fill_count = 1 << (MAX_BITS - len);
+        for (uint16_t j = 0; j < fill_count; j++) {
+            uint16_t table_idx = rev_code | (j << len);
+            decode_table[table_idx] = i | (len << 8); // Store length + symbol
+        }
+    }
+}
+```
+
+
 ---
 
 ## 4. Vector-State Asymmetric Numeral Systems (V-ANS)
@@ -157,7 +268,7 @@ V-ANS models the joint state as a 2D lattice on $\mathbb{F}_{16} \times \mathbb{
 +-------------------------------------------------------------------------------+
 | Original Literal Size (uint32_le, 4B)                                         |
 +-------------------------------------------------------------------------------+
-| Serialized Frequency Matrix Header (Variable Length, see Section 18)         |
+| Serialized Frequency Matrix Header (Variable Length, see Section 18)          |
 +-------------------------------------------------------------------------------+
 | Compressed State Headers (4 Lanes x uint32_le = 16 Bytes)                     |
 +-------------------------------------------------------------------------------+
@@ -258,7 +369,7 @@ For sequential chunk streams (e.g., EON extents, distributed blocks), PRZM propa
 
 ## 14. Formal Verification: 38 Machine-Checked Theorems in Lean 4
 
-All mathematical primitives are formalized and verified in Lean 4 under `seal/codec/przm/PRZM/*.lean`:
+All mathematical primitives are formalized and verified in Lean 4 under `przm/PRZM/*.lean`:
 
 | Theorem | Formal Name | Mathematical Module | Invariant Guaranteed |
 | :--- | :--- | :--- | :--- |
@@ -331,9 +442,9 @@ All mathematical primitives are formalized and verified in Lean 4 under `seal/co
 
 ---
 
-## 16. Integration with Seal CLI and EON Substrate
+## 16. Integration with Standalone Systems and EON Substrate
 
-Allocated ID `0x06` in EON Substrate (`spec.CodecPRZM`). Extents in EON containers are indexed via Prolly Trees, enabling microsecond seek times and zero-copy direct streaming into RAM or GPU VRAM via `seal mount`.
+Allocated ID `0x06` in EON Substrate (`spec.CodecPRZM`). Extents in EON containers are indexed via Prolly Trees, enabling microsecond seek times and zero-copy direct streaming into RAM or GPU VRAM via `VFS mount`.
 
 ---
 
@@ -360,19 +471,37 @@ In the Standard Fused Frame (`Magic = 0x4D5A5250`), Section 2 is a byte stream o
 +-------------------------------------------------------------------------------+
 ```
 
-### 17.1. Locality Queue (Ring-16) Initialization and Move-To-Front
+### 17.1. 3-Repeat Register State Machine
+The LZ matched sequence is reconstructed via Command Opcodes mapped to 3 active Repeat Registers (`rep0`, `rep1`, `rep2`). This achieves extreme distance locality compression and supersedes the legacy 16-element ring buffer.
 
-At the start of every block, the decoder initializes the 16-element distance array $Q$:
-$$Q[0..15] = [1, S, 2S, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]$$
-where $S$ is the frame stride parameter (defaults to 1 if `FLAG_STRIDE` is cleared).
+**Register Initialization**:
+At the start of decompression:
+- $rep_0 = 1$
+- $rep_1 = 4$
+- $rep_2 = 8$
+If `FLAG_STRIDE` is set and $S > 1$, register initialization shifts to harmonic periods: $rep_1 = S$, $rep_2 = 2S$.
 
-When an entry $Q[k]$ is accessed, the queue executes a Move-To-Front (MTF) promotion:
-```text
-distance = Q[k]
-For j = k down to 1:
-    Q[j] = Q[j - 1]
-Q[0] = distance
-```
+**State Machine Transitions**:
+When evaluating Repeat Match Opcodes (Index $k \in [0, 2]$), the registers pivot strictly:
+- **Repeat 0 ($k=0$)**: $d = rep_0$. (No register shift occurs)
+- **Repeat 1 ($k=1$)**: $d = rep_1$. $rep_1 = rep_0$, $rep_0 = d$.
+- **Repeat 2 ($k=2$)**: $d = rep_2$. $rep_2 = rep_1$, $rep_1 = rep_0$, $rep_0 = d$.
+- **Explicit New Offset ($d$)**: $rep_2 = rep_1$, $rep_1 = rep_0$, $rep_0 = d$.
+
+*(Note: Any legacy references to $Q[k]$ and MTF in Section 17.2 refer to the $rep_k$ register state machine.)*
+
+### 17.1.1. LZ Reconstructor Safety & Bounds
+
+Decoders MUST strictly enforce boundary conditions during match copying to prevent out-of-bounds reads or buffer underflows:
+
+1. **Repetition Distance Bounds:** 
+   If any evaluated distance $d$ (whether explicit or from $rep_0, rep_1, rep_2$) exceeds the current output write position `dstPos` ($d > \text{dstPos}$), the decoder MUST halt immediately and return a fatal `ErrMatchOutOfRange` error. Attempting to read beyond `dstPos` into negative indices violates the format's memory-safety invariant.
+2. **Zero Distance Rejection:**
+   A match distance of $d = 0$ is semantically invalid. Decoders MUST reject frames evaluating to $d = 0$.
+3. **Overlapping Copies:**
+   When copying $M$ bytes from $\text{dst}[\text{dstPos} - d]$ to $\text{dst}[\text{dstPos}]$, if $M > d$, the source and destination regions overlap. Decoders MUST safely resolve this via a byte-by-byte forward copy (or overlapping-safe vector intrinsics) to ensure bytes written are sequentially replicated forward (identical to `memmove` behavior or `for(i=0; i<M; i++) dst[dstPos+i] = dst[dstPos-d+i];`).
+4. **Buffer Truncation:**
+   If `dstPos + M` or `dstPos + L` strictly exceeds the frame's `UncompressedSize` specified in the 8-byte Global Frame Header, the decoder MUST abort and return `ErrDecompressedSizeMismatch`.
 
 ### 17.2. Complete Opcode Map (`0x00` through `0xFF`)
 
@@ -380,17 +509,17 @@ Every byte `op` in Section 2 is decoded strictly according to the following disp
 
 | Opcode Range | Category | Bitfield Layout | Description & Decoding Semantics |
 | :--- | :--- | :--- | :--- |
-| `0x00 .. 0x7F` | **Fast-Path 1: Fused Repeat Token** | `0 LLL MM KK` | **Bit 7**: `0`<br>**Bits [6..4] (`LLL`)**: Literal length $L \in [0, 7]$. If $L > 0$, copy $L$ bytes from Section 4 to `dst[dstPos..dstPos+L]`.<br>**Bits [3..2] (`MM`)**: Base match length $M = \text{MM} + 4 \in [4, 7]$.<br>**Bits [1..0] (`KK`)**: Locality queue index $k \in [0, 3]$. Distance $d = Q[k]$. Update $Q$ with MTF. Copy $M$ bytes from `dst[dstPos - d]`. |
-| `0x80 .. 0xBF` | **Fast-Path 2: Fused Extended Match** | `10 LL MMMM` | **Bits [7..6]**: `10`<br>**Bits [5..4] (`LL`)**: Literal length $L \in [0, 3]$. If $L > 0$, copy $L$ bytes from Section 4 to `dst`.<br>**Bits [3..0] (`MMMM`)**: Base match length $M_{\text{base}} = \text{MMMM} + 4 \in [4, 19]$. If $\text{MMMM} == 15$, read ULEB128 `extra` from Section 2: $M = 19 + \text{extra}$.<br>Read distance $d$ from Section 3 as ULEB128. Insert $d$ at $Q[0]$ (shifting elements 0..14 to 1..15). Copy $M$ bytes from `dst[dstPos - d]`. |
-| `0xC0 .. 0xCF` | **Long Repeat Match** | `1100 KKKK` | **Bits [3..0] (`KKKK`)**: Locality queue index $k \in [0, 15]$.<br>Next byte in Section 2: `[litLen (4b) | baseLen (4b)]`.<br>Copy `litLen` literals ($0 \dots 15$) from Section 4.<br>Base match length $M = \text{baseLen} + 4$. If $\text{baseLen} == 15$, read ULEB128 `extra` from Section 2: $M = 19 + \text{extra}$.<br>Distance $d = Q[k]$. Update $Q$ with MTF. Copy $M$ bytes from `dst[dstPos - d]`. |
-| `0xD0 .. 0xD7` | **Stride Match** | `1101 0MMM` | **Bits [2..0] (`MMM`)**: Stride multiplier index $m = \text{MMM} + 1 \in [1, 8]$.<br>Distance is strictly computed as $d = m \cdot S$.<br>Next byte in Section 2: `[litLen (4b) | baseLen (4b)]`.<br>Copy `litLen` literals from Section 4, then copy $\text{baseLen} + 4$ bytes from `dst[dstPos - d]`. |
+| `0x00 .. 0x7F` | **Fast-Path 1: Fused Repeat Token** | `0 LLL MM KK` | **Bit 7**: `0`<br>**Bits [6..4] (`LLL`)**: Literal length $L \in [0, 7]$. If $L > 0$, copy $L$ bytes from Section 4 to `dst[dstPos..dstPos+L]`.<br>**Bits [3..2] (`MM`)**: Base match length $M = \text{MM} + 4 \in [4, 7]$.<br>**Bits [1..0] (`KK`)**: Register index $k \in [0, 3]$. If $k \in [0, 2]$, use `rep_k` and pivot registers. If $k = 3$, read explicit distance $d$ from Section 3 and pivot registers. Copy $M$ bytes from `dst[dstPos - d]`. |
+| `0x80 .. 0xBF` | **Fast-Path 2: Fused Extended Match** | `10 LL MMMM` | **Bits [7..6]**: `10`<br>**Bits [5..4] (`LL`)**: Literal length $L \in [0, 3]$. If $L > 0$, copy $L$ bytes from Section 4 to `dst`.<br>**Bits [3..0] (`MMMM`)**: Base match length $M_{\text{base}} = \text{MMMM} + 4 \in [4, 19]$. If $\text{MMMM} == 15$, read ULEB128 `extra` from Section 2's decompressed symbol stream: $M = 19 + \text{extra}$.<br>Read explicit distance $d$ from Section 3 as ULEB128 and pivot registers. Copy $M$ bytes from `dst[dstPos - d]`. |
+| `0xC0 .. 0xCF` | **Long Repeat Match** | `1100 KKKK` | **Bits [3..0] (`KKKK`)**: Register index $k \in [0, 15]$. If $k \in [0, 2]$, use `rep_k`. If $k = 3$, read explicit distance $d$ from Section 3. If $k > 3$, RESERVED/INVALID (decoder MUST reject).<br>Next byte in Section 2's decompressed stream: `[litLen (4b) | baseLen (4b)]`.<br>Copy `litLen` literals from Section 4.<br>Base match length $M = \text{baseLen} + 4$. If $\text{baseLen} == 15$, read ULEB128 `extra` from Section 2's decompressed stream: $M = 19 + \text{extra}$.<br>Pivot registers. Copy $M$ bytes from `dst[dstPos - d]`. |
+| `0xD0 .. 0xD7` | **Stride Match** | `1101 0MMM` | **Bits [2..0] (`MMM`)**: Stride multiplier index $m = \text{MMM} + 1 \in [1, 8]$.<br>Distance is strictly computed as $d = m \cdot S$.<br>Next byte in Section 2's decompressed stream: `[litLen (4b) | baseLen (4b)]`.<br>Copy `litLen` literals from Section 4, then copy $\text{baseLen} + 4$ bytes from `dst[dstPos - d]`. |
 | `0xD8 .. 0xDF` | **Direct 1-Byte Schema Token** | `1101 1TTT` | **Bits [2..0] (`TTT`)**: Token index $T \in [0, 7]$ from active `DictID`.<br>Immediately copies the pre-defined token string (see Section 17.5) directly into `dst` with 0 literal overhead and 0 offset bytes. |
-| `0xE0 .. 0xE7` | **Delta-Mask Match (Locality)** | `1110 0KKK` | **Bits [2..0] (`KKK`)**: Locality queue index $k \in [0, 7]$. Distance $d = Q[k]$. Update $Q$ with MTF.<br>Next byte in Section 2: length byte $B$. Match length $M = B + 4$ (if $B == 255$, read ULEB128 `extra`: $M = 259 + \text{extra}$).<br>Execute vector match copy of $M$ bytes from `dst[dstPos - d]`.<br>Read mutations from Section 4 and apply in-place XOR deltas (see Section 17.4). |
-| `0xE8` | **Delta-Mask Match (Explicit)** | `1110 1000` | Read distance $d$ from Section 3 as ULEB128. Insert $d$ into $Q[0]$.<br>Next byte in Section 2: length byte $B$. Match length $M = B + 4$ (if $B == 255$, read ULEB128 `extra`).<br>Copy $M$ bytes from `dst[dstPos - d]`. Read mutations from Section 4 and apply XOR deltas. |
+| `0xE0 .. 0xE7` | **Delta-Mask Match (Locality)** | `1110 0KKK` | **Bits [2..0] (`KKK`)**: Register index $k \in [0, 7]$. If $k \in [0, 2]$, use `rep_k`. If $k = 3$, read explicit distance $d$ from Section 3. If $k > 3$, RESERVED/INVALID. Pivot registers.<br>Next byte in Section 2's decompressed stream: length byte $B$. Match length $M = B + 4$ (if $B == 255$, read ULEB128 `extra` from Section 2's decompressed stream: $M = 259 + \text{extra}$).<br>Execute vector match copy of $M$ bytes from `dst[dstPos - d]`.<br>Read mutations from Section 4 and apply in-place XOR deltas. |
+| `0xE8` | **Delta-Mask Match (Explicit)** | `1110 1000` | Read explicit distance $d$ from Section 3 as ULEB128. Pivot registers.<br>Next byte in Section 2's decompressed stream: length byte $B$. Match length $M = B + 4$ (if $B == 255$, read ULEB128 `extra` from Section 2's decompressed stream).<br>Copy $M$ bytes from `dst[dstPos - d]`. Read mutations from Section 4 and apply XOR deltas. |
 | `0xE9 .. 0xEF` | *Reserved* | — | Reserved for future format expansions. Decoders MUST reject with `ErrCorruptedFrame`. |
-| `0xF0` | **Pure Literal Run** | `1111 0000` | Next bytes in Section 2: ULEB128 `runLen`.<br>Copies `runLen` raw bytes from Section 4 directly into `dst`. |
-| `0xF1` | **Pure RLE Run** | `1111 0001` | Next bytes in Section 2: ULEB128 `rleLen`.<br>Read 1 byte $V$ from Section 4. Replicate $V$ across `dst[dstPos .. dstPos+rleLen]`. |
-| `0xF2` | **Extended Schema Token** | `1111 0010` | Next byte in Section 2: `tokenID` (uint8, range $8 \dots 79$).<br>Copies entry `tokenID` from active `DictID` into `dst`. |
+| `0xF0` | **Pure Literal Run** | `1111 0000` | Next bytes in Section 2's decompressed stream: ULEB128 `runLen`.<br>Copies `runLen` raw bytes from Section 4 directly into `dst`. |
+| `0xF1` | **Pure RLE Run** | `1111 0001` | Next bytes in Section 2's decompressed stream: ULEB128 `rleLen`.<br>Read 1 byte $V$ from Section 4. Replicate $V$ across `dst[dstPos .. dstPos+rleLen]`. |
+| `0xF2` | **Extended Schema Token** | `1111 0010` | Next byte in Section 2's decompressed stream: `tokenID` (uint8, range $8 \dots 79$).<br>Copies entry `tokenID` from active `DictID` into `dst`. |
 | `0xF3 .. 0xFA` | **Direct 1-Byte Literal Run** | `1111 0LLL` | Direct literal transfer without extra length bytes.<br>Literal length $L = \text{op} - \mathtt{0xF3} + 1 \in [1, 8]$.<br>Copies $L$ bytes from Section 4 directly into `dst`. |
 | `0xFB .. 0xFF` | *Reserved* | — | Reserved for future fast-paths. |
 
@@ -694,3 +823,59 @@ Offset  Length  Field Name      Type            Description
    For any conforming encoder $\mathcal{E}$ and decoder $\mathcal{D}$:
    $$\forall \mathbf{X} \in \Sigma^*: \quad \mathcal{D}(\mathcal{E}(\mathbf{X})) \equiv \mathbf{X}$$
    Reconstruction is 100% bit-exact with zero approximation error.
+
+---
+
+## Appendix A: Non-Normative Reference Encoder Architecture
+
+This appendix is **non-normative**. It describes the reference PRZM encoder architecture, providing implementers with the algorithmic strategies required to achieve optimal compression ratios and the advertised $>55 \text{ GB/s}$ decompression throughput.
+
+### A.1. $p$-Adic Hensel Ultrametric Match Finder
+
+Classical LZ77 encoders use naive chained hashing, which severely degrades in performance on structured data due to hash collisions and $O(N)$ traversal dependencies. The PRZM encoder supersedes this with a **$p$-Adic Hensel Ultrametric Search Tree** for its 1M to 8M resident search windows.
+
+By defining the distance between two byte-strings $X, Y \in \Sigma^*$ under the $p$-adic norm ($p=257$, a prime), the match search is formulated as finding the closest point in an ultrametric space:
+$$ d_p(X, Y) = p^{-\text{LCP}(X, Y)} $$
+where $\text{LCP}$ is the Longest Common Prefix.
+
+**Algorithmic Properties:**
+1. **Strong Triangle Inequality**: $d_p(X, Z) \le \max(d_p(X, Y), d_p(Y, Z))$.
+2. **$O(1)$ Collision Resolution**: Because the space is ultrametric, every triangle is isosceles. The encoder partitions the sliding window into a discrete Galois Tree. Traversing the tree to find the optimal match guarantees an exact upper bound of $\log_p(\text{WindowSize})$ memory accesses, bypassing pathological $O(N)$ linked-list hash chain searches entirely.
+
+### A.2. Optimal Forward DAG and Backward DP Parser
+
+Instead of greedy heuristic match selection (e.g., matching the longest string immediately), the PRZM encoder constructs a **Directed Acyclic Graph (DAG)** of all possible parse paths over the input chunk, minimizing the global Shannon entropy bit-cost.
+
+#### A.2.1. The Bit-Cost Function
+For each position $i$, transitions are scored via an empirical cost function $C(i \to j)$:
+- **Literal Cost**: $C_{\text{lit}} \approx -\log_2 P_{\text{lit}}(x_i)$.
+- **Repeat Register Cost ($rep_k$)**: $C_{\text{rep}} \approx 2 \text{ bits} + \text{Cost}(M)$.
+- **Explicit Match Cost**: $C_{\text{match}} \approx 6 \text{ bits} + \text{Cost}(M) + \text{Cost}(d)$.
+
+#### A.2.2. Dynamic Programming (DP) Trellis
+The encoder executes a two-pass parser:
+1. **Forward DAG Generation**: As the window slides, populate the Trellis DAG with edges for every valid literal, $rep_k$ match, and new explicit match.
+2. **Backward Viterbi DP Trace**: Solve for the shortest path $\mathcal{P}^*$:
+   $$ \text{TotalCost}(N) = \min_{\mathcal{P}} \sum_{(u,v) \in \mathcal{P}} C(u \to v) $$
+
+```text
+    [Pos 0] ---> (lit) ---> [Pos 1] ---> (lit) ---> [Pos 2]
+       \                       \                       /
+        \------- (rep0, len 2) -\---------------------/
+         \                                           /
+          \----------- (match d=14, len 3) ---------/
+```
+
+The DP parser enforces strict evaluations against the 3-repeat registers ($rep_0, rep_1, rep_2$), ensuring locality opcodes are saturated, significantly shrinking the final command stream.
+
+### A.3. Canonical Huffman Histogram Builder
+
+The final encoding step maps the optimized Trellis path into the 149-byte Canonical Huffman structure specified in Section 3.5.
+
+1. **Frequency Counting**: The encoder scans the chosen operations, tabulating an exact 256-bin histogram for the Command Stream (Section 2) and the ULEB128 Offset Stream (Section 3).
+2. **Length Assignment (Package-Merge)**: Using the Package-Merge algorithm (or length-limited Kraft-McMillan reduction), the encoder bounds the maximum bit length to `MaxHuffBits = 11`.
+3. **4-Way Interleaving Generation**:
+   The output symbols are distributed across 4 independent logical streams:
+   $$ \text{Stream}[i \bmod 4]\text{.append}(\text{symbol}_i) $$
+   Each of the 4 streams is then encoded in reverse or serialized directly depending on the bit-writer orientation, yielding four tightly packed LSB-first bitstreams.
+4. **Header Packaging**: The 128-byte length array is packed at 4 bits per symbol, followed by the four 32-bit `Stream Sizes`, successfully generating the exact 149-byte Canonical Header required for superscalar parallel decompression.

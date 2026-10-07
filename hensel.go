@@ -8,25 +8,35 @@ import (
 	"encoding/binary"
 	"math/bits"
 
+	"github.com/lemon4ksan/foundation/generic"
 	"github.com/lemon4ksan/foundation/silicon/simd"
 )
 
 const (
-	// HenselWindowSize is the sliding-window ring buffer size (64 KiB).
-	HenselWindowSize = 65536
-	// HenselWindowMask wraps offsets within the 64 KiB window.
+	// Legacy 64 KiB constants (retained for backward compatibility)
+	HenselWindowSize = 1 << WindowLog64K // 65,536
 	HenselWindowMask = HenselWindowSize - 1
-	// HenselHashBits is the bit-width of the first-tier hash table.
-	HenselHashBits = 16
-	// HenselHashSize is the number of hash buckets (65,536).
-	HenselHashSize = 1 << HenselHashBits
-	// HenselHashMask masks hash values to the bucket range.
-	HenselHashMask = HenselHashSize - 1
-	// HenselHashPrime is the multiplicative hash multiplier.
-	HenselHashPrime = 0x1E35A7BD
+	HenselHashBits   = 16
+	HenselHashSize   = 1 << HenselHashBits // 65,536
+	HenselHashMask   = HenselHashSize - 1
+	HenselHashPrime  = 0x1E35A7BD
+
+	// Mode 1M (1 MiB Window, ~9.2 MiB Scratchpad - L3 Cache Resident)
+	WindowSize1M = 1 << WindowLog1M // 1,048,576
+	WindowMask1M = WindowSize1M - 1
+	HashBits1M   = 18
+	HashSize1M   = 1 << HashBits1M // 262,144
+	HashMask1M   = HashSize1M - 1
+
+	// Mode 8M (8 MiB Window, ~68.0 MiB Scratchpad - Full Corpus Coverage)
+	WindowSize8M = 1 << WindowLog8M // 8,388,608
+	WindowMask8M = WindowSize8M - 1
+	HashBits8M   = 20
+	HashSize8M   = 1 << HashBits8M // 1,048,576
+	HashMask8M   = HashSize8M - 1
 )
 
-// HenselScratchpad encapsulates the ultrametric search tables for Hensel's lifting.
+// HenselScratchpad encapsulates the ultrametric search tables for Hensel's lifting (64 KiB).
 // Total resident memory footprint: exactly 768 KiB (contiguous, cache-friendly).
 type HenselScratchpad struct {
 	// head stores the most recent 1-based position for each 4-byte hash (0 = empty).
@@ -37,7 +47,7 @@ type HenselScratchpad struct {
 	fp32 [HenselWindowSize]uint32 // 256 KiB
 }
 
-// Reset clears the hash bucket heads, re-initializing the search structure in ~5 µs.
+// Reset clears the hash bucket heads, re-initializing the search structure in ~1.5 µs.
 func (sp *HenselScratchpad) Reset() {
 	clear(sp.head[:])
 }
@@ -52,35 +62,155 @@ func (sp *HenselScratchpad) PrevSlice() []int32 {
 	return sp.prev[:]
 }
 
+// HenselScratchpad1M encapsulates L3-resident 1 MiB search tables (~9.2 MiB total).
+type HenselScratchpad1M struct {
+	head [HashSize1M]int32    // 1,024 KiB (262,144 entries)
+	prev [WindowSize1M]int32  // 4,096 KiB (1,048,576 entries)
+	fp32 [WindowSize1M]uint32 // 4,096 KiB (1,048,576 entries)
+}
+
+// Reset clears only the head array (~20 µs) bypassing zeroing of prev and fp32.
+func (sp *HenselScratchpad1M) Reset() {
+	clear(sp.head[:])
+}
+
+// HeadSlice returns a slice view of the bucket heads for oracle inspection.
+func (sp *HenselScratchpad1M) HeadSlice() []int32 {
+	return sp.head[:]
+}
+
+// PrevSlice returns a slice view of the collision chains for oracle inspection.
+func (sp *HenselScratchpad1M) PrevSlice() []int32 {
+	return sp.prev[:]
+}
+
+// HenselScratchpad8M encapsulates full-coverage 8 MiB search tables (~68.0 MiB total).
+type HenselScratchpad8M struct {
+	head [HashSize8M]int32    // 4,096 KiB (1,048,576 entries)
+	prev [WindowSize8M]int32  // 32,768 KiB (8,388,608 entries)
+	fp32 [WindowSize8M]uint32 // 32,768 KiB (8,388,608 entries)
+}
+
+// Reset clears only the head array (~80 µs) bypassing zeroing of prev and fp32.
+func (sp *HenselScratchpad8M) Reset() {
+	clear(sp.head[:])
+}
+
+// HeadSlice returns a slice view of the bucket heads for oracle inspection.
+func (sp *HenselScratchpad8M) HeadSlice() []int32 {
+	return sp.head[:]
+}
+
+// PrevSlice returns a slice view of the collision chains for oracle inspection.
+func (sp *HenselScratchpad8M) PrevSlice() []int32 {
+	return sp.prev[:]
+}
+
+var (
+	// PoolHensel64K reuses 768 KiB scratchpads
+	PoolHensel64K = generic.NewPool(func() *HenselScratchpad {
+		return new(HenselScratchpad)
+	})
+
+	// PoolHensel1M reuses L3-resident ~9.2 MiB scratchpads
+	PoolHensel1M = generic.NewPool(func() *HenselScratchpad1M {
+		return new(HenselScratchpad1M)
+	})
+
+	// PoolHensel8M reuses full-coverage ~68.0 MiB scratchpads
+	PoolHensel8M = generic.NewPool(func() *HenselScratchpad8M {
+		return new(HenselScratchpad8M)
+	})
+)
+
 // HenselMatchFinder provides an ultrametric match searcher using Hensel's lifting.
 type HenselMatchFinder struct {
 	windowSize int
+	windowLog  int
 	sp         HenselScratchpad
+	sp1M       *HenselScratchpad1M
+	sp8M       *HenselScratchpad8M
 }
 
 // NewHenselMatchFinder allocates a new match finder with the specified window size.
 func NewHenselMatchFinder(windowSize int) *HenselMatchFinder {
-	if windowSize <= 0 || windowSize > HenselWindowSize {
+	if windowSize <= 0 {
 		windowSize = HenselWindowSize
 	}
-	return &HenselMatchFinder{
+	mf := &HenselMatchFinder{
 		windowSize: windowSize,
+	}
+	if windowSize <= HenselWindowSize {
+		mf.windowLog = WindowLog64K
+	} else if windowSize <= WindowSize1M {
+		mf.windowLog = WindowLog1M
+		mf.sp1M = new(HenselScratchpad1M)
+	} else {
+		mf.windowLog = WindowLog8M
+		mf.sp8M = new(HenselScratchpad8M)
+	}
+	return mf
+}
+
+// NewHenselMatchFinderWithWindowLog allocates a new match finder with the specified window log.
+func NewHenselMatchFinderWithWindowLog(windowLog int) *HenselMatchFinder {
+	switch windowLog {
+	case WindowLog1M:
+		return NewHenselMatchFinder(WindowSize1M)
+	case WindowLog8M:
+		return NewHenselMatchFinder(WindowSize8M)
+	default:
+		return NewHenselMatchFinder(HenselWindowSize)
 	}
 }
 
 // Reset clears the finder's hash tables.
 func (mf *HenselMatchFinder) Reset() {
-	mf.sp.Reset()
+	switch mf.windowLog {
+	case WindowLog1M:
+		if mf.sp1M != nil {
+			mf.sp1M.Reset()
+		}
+	case WindowLog8M:
+		if mf.sp8M != nil {
+			mf.sp8M.Reset()
+		}
+	default:
+		mf.sp.Reset()
+	}
 }
 
 // Insert registers a position into the Hensel search tables.
 func (mf *HenselMatchFinder) Insert(pos int, src []byte, uSize int) {
-	HenselInsert(&mf.sp, pos, src, uSize)
+	switch mf.windowLog {
+	case WindowLog1M:
+		if mf.sp1M != nil {
+			HenselInsert1M(mf.sp1M, pos, src, uSize)
+		}
+	case WindowLog8M:
+		if mf.sp8M != nil {
+			HenselInsert8M(mf.sp8M, pos, src, uSize)
+		}
+	default:
+		HenselInsert(&mf.sp, pos, src, uSize)
+	}
 }
 
 // FindMatchHensel executes ultrametric match search for the target at pos.
 func (mf *HenselMatchFinder) FindMatchHensel(src []byte, pos int, maxDepth int, minLen int) (bestOffset int, bestLen int) {
-	return HenselFindMatch(src, pos, len(src), maxDepth, minLen, &mf.sp)
+	switch mf.windowLog {
+	case WindowLog1M:
+		if mf.sp1M != nil {
+			return HenselFindMatch1M(src, pos, len(src), maxDepth, minLen, mf.sp1M)
+		}
+	case WindowLog8M:
+		if mf.sp8M != nil {
+			return HenselFindMatch8M(src, pos, len(src), maxDepth, minLen, mf.sp8M)
+		}
+	default:
+		return HenselFindMatch(src, pos, len(src), maxDepth, minLen, &mf.sp)
+	}
+	return 0, 0
 }
 
 // HenselLCP evaluates the longest common prefix between slices a and b
@@ -248,42 +378,66 @@ func HenselLCPPos(src []byte, p1, p2, maxLen int) int {
 	return mLen
 }
 
-// HenselInsert registers position p into the Hensel search tables.
-func HenselInsert(sp *HenselScratchpad, p int, src []byte, uSize int) {
-	if p+4 > uSize || sp == nil {
+// computeHenselHash calculates the multiplicative Fibonacci hash for a 4-byte prefix.
+//
+//go:nosplit
+func computeHenselHash(w4 uint32, headBits int, headMask int) int {
+	return int((w4 * HenselHashPrime) >> (32 - headBits)) & headMask
+}
+
+// HenselInsertGeneric indexes position p into the provided scratchpad slices.
+//
+//go:nosplit
+func HenselInsertGeneric(
+	head []int32,
+	prev []int32,
+	fp32 []uint32,
+	p int,
+	src []byte,
+	uSize int,
+	windowMask int,
+	headBits int,
+	headMask int,
+) {
+	if p+4 > uSize {
 		return
 	}
 	w4 := binary.LittleEndian.Uint32(src[p : p+4])
-	h := (w4 * HenselHashPrime) >> 16
-	h &= HenselHashMask
+	h := computeHenselHash(w4, headBits, headMask)
 
-	if int(sp.head[h]) == p+1 {
+	if int(head[h]) == p+1 {
 		return
 	}
 
-	slot := p & HenselWindowMask
-	sp.prev[slot] = sp.head[h]
-	sp.head[h] = int32(p + 1)
+	slot := p & windowMask
+	prev[slot] = head[h]
+	head[h] = int32(p + 1)
 
 	if p+8 <= uSize {
-		sp.fp32[slot] = binary.LittleEndian.Uint32(src[p+4 : p+8])
+		fp32[slot] = binary.LittleEndian.Uint32(src[p+4 : p+8])
 	} else {
-		sp.fp32[slot] = 0
+		fp32[slot] = 0
 	}
 }
 
-// HenselFindMatch performs ultrametric match search up to maxDepth.
-// Employs Theorem HL-2 (Ultrametric Disjoint Ball Pruning) to discard 85-93%
-// of candidates in 1 clock cycle without touching payload memory.
-func HenselFindMatch(
+// HenselFindMatchGeneric executes ultrametric match search up to maxDepth with Theorem HL-2 pruning.
+//
+//go:nosplit
+func HenselFindMatchGeneric(
 	src []byte,
 	pos int,
 	uSize int,
 	maxDepth int,
 	minLen int,
-	sp *HenselScratchpad,
+	windowSize int,
+	windowMask int,
+	headBits int,
+	headMask int,
+	head []int32,
+	prev []int32,
+	fp32 []uint32,
 ) (bestDist, bestLen int) {
-	if pos+4 > uSize || sp == nil {
+	if pos+4 > uSize {
 		return 0, 0
 	}
 	if minLen < 4 {
@@ -291,10 +445,9 @@ func HenselFindMatch(
 	}
 
 	w4 := binary.LittleEndian.Uint32(src[pos : pos+4])
-	h := (w4 * HenselHashPrime) >> 16
-	h &= HenselHashMask
+	h := computeHenselHash(w4, headBits, headMask)
 
-	cand := int(sp.head[h]) - 1
+	cand := int(head[h]) - 1
 	if cand < 0 {
 		return 0, 0
 	}
@@ -311,11 +464,11 @@ func HenselFindMatch(
 	maxSearchLen := min(uSize-pos, 65535)
 
 	for cand >= 0 && depth < maxDepth {
-		candSlot := cand & HenselWindowMask
+		candSlot := cand & windowMask
 
 		// If candidate is ahead of or at pos, step back to past candidates
 		if cand >= pos {
-			nextCand := int(sp.prev[candSlot]) - 1
+			nextCand := int(prev[candSlot]) - 1
 			if nextCand >= cand || nextCand < 0 {
 				break
 			}
@@ -324,20 +477,19 @@ func HenselFindMatch(
 		}
 
 		d := pos - cand
-		if d >= 65535 {
+		if d >= windowSize || d <= 0 {
 			break
 		}
 
 		// Theorem HL-2 (Ultrametric Disjoint Ball Pruning):
-		// If bestLen >= 4, candidate can only achieve LCP <= 4 + ctz32(diff)/8.
-		// If this upper bound is <= bestLen, candidate is guaranteed not to beat bestLen.
+		// Bitwise single-cycle XOR check before dereferencing payload memory.
 		if has8 && bestLen >= 4 {
-			diff := sp.fp32[candSlot] ^ targetFP32
+			diff := fp32[candSlot] ^ targetFP32
 			if diff != 0 {
 				maxLift := 4 + (bits.TrailingZeros32(diff) >> 3)
 				if maxLift <= bestLen {
-					// 1-cycle rejection without payload memory dereference
-					nextCand := int(sp.prev[candSlot]) - 1
+					// 1-cycle rejection without touching cache line for src[cand..]
+					nextCand := int(prev[candSlot]) - 1
 					if nextCand >= cand || nextCand < 0 {
 						break
 					}
@@ -348,7 +500,7 @@ func HenselFindMatch(
 			}
 		}
 
-		// Verify 4-byte prefix
+		// Candidate passed Theorem HL-2 pruning. Verify 4-byte prefix.
 		if binary.LittleEndian.Uint32(src[cand:cand+4]) == w4 {
 			mLen := HenselLCPPos(src, pos, cand, maxSearchLen)
 			if mLen > bestLen {
@@ -360,7 +512,7 @@ func HenselFindMatch(
 			}
 		}
 
-		nextCand := int(sp.prev[candSlot]) - 1
+		nextCand := int(prev[candSlot]) - 1
 		if nextCand >= cand || nextCand < 0 {
 			break
 		}
@@ -372,4 +524,85 @@ func HenselFindMatch(
 		return 0, 0
 	}
 	return bestDist, bestLen
+}
+
+// HenselInsert registers position p into the 64 KiB Hensel search tables.
+func HenselInsert(sp *HenselScratchpad, p int, src []byte, uSize int) {
+	if sp == nil {
+		return
+	}
+	HenselInsertGeneric(sp.head[:], sp.prev[:], sp.fp32[:], p, src, uSize, HenselWindowMask, HenselHashBits, HenselHashMask)
+}
+
+// HenselFindMatch performs ultrametric match search up to maxDepth with Theorem HL-2 pruning (64 KiB window).
+func HenselFindMatch(
+	src []byte,
+	pos int,
+	uSize int,
+	maxDepth int,
+	minLen int,
+	sp *HenselScratchpad,
+) (bestDist, bestLen int) {
+	if sp == nil {
+		return 0, 0
+	}
+	return HenselFindMatchGeneric(
+		src, pos, uSize, maxDepth, minLen,
+		HenselWindowSize, HenselWindowMask, HenselHashBits, HenselHashMask,
+		sp.head[:], sp.prev[:], sp.fp32[:],
+	)
+}
+
+// HenselInsert1M registers position p into the 1 MiB Hensel search tables.
+func HenselInsert1M(sp *HenselScratchpad1M, p int, src []byte, uSize int) {
+	if sp == nil {
+		return
+	}
+	HenselInsertGeneric(sp.head[:], sp.prev[:], sp.fp32[:], p, src, uSize, WindowMask1M, HashBits1M, HashMask1M)
+}
+
+// HenselFindMatch1M performs ultrametric match search up to maxDepth with Theorem HL-2 pruning (1 MiB window).
+func HenselFindMatch1M(
+	src []byte,
+	pos int,
+	uSize int,
+	maxDepth int,
+	minLen int,
+	sp *HenselScratchpad1M,
+) (bestDist, bestLen int) {
+	if sp == nil {
+		return 0, 0
+	}
+	return HenselFindMatchGeneric(
+		src, pos, uSize, maxDepth, minLen,
+		WindowSize1M, WindowMask1M, HashBits1M, HashMask1M,
+		sp.head[:], sp.prev[:], sp.fp32[:],
+	)
+}
+
+// HenselInsert8M registers position p into the 8 MiB Hensel search tables.
+func HenselInsert8M(sp *HenselScratchpad8M, p int, src []byte, uSize int) {
+	if sp == nil {
+		return
+	}
+	HenselInsertGeneric(sp.head[:], sp.prev[:], sp.fp32[:], p, src, uSize, WindowMask8M, HashBits8M, HashMask8M)
+}
+
+// HenselFindMatch8M performs ultrametric match search up to maxDepth with Theorem HL-2 pruning (8 MiB window).
+func HenselFindMatch8M(
+	src []byte,
+	pos int,
+	uSize int,
+	maxDepth int,
+	minLen int,
+	sp *HenselScratchpad8M,
+) (bestDist, bestLen int) {
+	if sp == nil {
+		return 0, 0
+	}
+	return HenselFindMatchGeneric(
+		src, pos, uSize, maxDepth, minLen,
+		WindowSize8M, WindowMask8M, HashBits8M, HashMask8M,
+		sp.head[:], sp.prev[:], sp.fp32[:],
+	)
 }

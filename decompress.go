@@ -20,26 +20,69 @@ var decLitPool = generic.NewPool(func() *[]byte {
 	return &b
 })
 
-// fastReadVarint decodes an unsigned varint with inline 1-byte and 2-byte fast paths.
-// In PRZM frames, offsets and match lengths <= 256K are guaranteed <= 3 bytes.
-func fastReadVarint(src []byte, ptr int) (int, int) {
+// decompressScratchpad holds all mutable scratch buffers required for zero-alloc frame decode.
+type decompressScratchpad struct {
+	table       CanonicalHuffmanTable
+	cmdBuf      []byte
+	offBuf      []byte
+	litBuf      []byte
+	normBuf     []byte
+	scanlineBuf []byte
+}
+
+var decScratchPool = generic.NewPool(func() *decompressScratchpad {
+	return &decompressScratchpad{
+		cmdBuf:      bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+		offBuf:      bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+		litBuf:      bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+		normBuf:     bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+		scanlineBuf: bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+	}
+})
+
+// fastReadVarint decodes an unsigned varint with inline 1-byte, 2-byte, 3-byte, and 4-byte fast paths.
+// In PRZM frames, offsets and match lengths <= 8 MiB are guaranteed <= 4 bytes.
+func fastReadVarint(src []byte, ptr int) (int, int, error) {
+	if ptr < 0 || ptr >= len(src) {
+		return 0, ptr, fmt.Errorf("%w: truncated varint stream", ErrCorruptedFrame)
+	}
 	b0 := src[ptr]
 	ptr++
 	if b0 < 0x80 {
-		return int(b0), ptr
+		return int(b0), ptr, nil
+	}
+	if ptr >= len(src) {
+		return 0, ptr, fmt.Errorf("%w: truncated varint stream", ErrCorruptedFrame)
 	}
 	b1 := src[ptr]
 	ptr++
 	if b1 < 0x80 {
-		return int(b0&0x7F) | (int(b1) << 7), ptr
+		return int(b0&0x7F) | (int(b1) << 7), ptr, nil
+	}
+	if ptr >= len(src) {
+		return 0, ptr, fmt.Errorf("%w: truncated varint stream", ErrCorruptedFrame)
 	}
 	b2 := src[ptr]
 	ptr++
 	if b2 < 0x80 {
-		return int(b0&0x7F) | (int(b1&0x7F) << 7) | (int(b2) << 14), ptr
+		return int(b0&0x7F) | (int(b1&0x7F) << 7) | (int(b2) << 14), ptr, nil
 	}
-	extra, n := binary.Uvarint(src[ptr-3:])
-	return int(extra), ptr - 3 + n
+	if ptr >= len(src) {
+		return 0, ptr, fmt.Errorf("%w: truncated varint stream", ErrCorruptedFrame)
+	}
+	b3 := src[ptr]
+	ptr++
+	if b3 < 0x80 {
+		return int(b0&0x7F) | (int(b1&0x7F) << 7) | (int(b2&0x7F) << 14) | (int(b3) << 21), ptr, nil
+	}
+	if ptr-4 < 0 || ptr-4 > len(src) {
+		return 0, ptr, fmt.Errorf("%w: invalid varint offset", ErrCorruptedFrame)
+	}
+	extra, n := binary.Uvarint(src[ptr-4:])
+	if n <= 0 {
+		return 0, ptr, fmt.Errorf("%w: corrupted varint encoding", ErrCorruptedFrame)
+	}
+	return int(extra), ptr - 4 + n, nil
 }
 
 // copyMatch copies mLen bytes from dst[srcIdx] to dst[dstPos] with zero bounds checks.
@@ -215,12 +258,23 @@ func DecompressTo(src, dst []byte) ([]byte, error) {
 
 func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, error) {
 	if len(src) == 0 {
+		if src == nil {
+			return nil, ErrCorruptedFrame
+		}
 		return []byte{}, nil
+	}
+	if len(src) < 4 {
+		return nil, ErrCorruptedFrame
 	}
 
 	if len(src) >= 4 {
+		magic := binary.LittleEndian.Uint32(src[0:4])
+		if magic == ArchivalPNGMagic {
+			return unpackArchivalPNG(src, dst)
+		}
+
 		// 32-bit magic formats (h-MDS, TDA, Spectral, Poincare, Clifford, GCTR, Heisenberg)
-		switch binary.LittleEndian.Uint32(src[0:4]) {
+		switch magic {
 		case HMDSMagic:
 			return DecompressHMDS(src, dst)
 		case TDAMagic:
@@ -280,17 +334,25 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 	}
 
 	allocSize := uSize
-	if (hdr.Flags & FlagBCJSplit) != 0 {
+	if (hdr.Flags&FlagBCJ) != 0 && (hdr.Flags&FlagBCJSplit) != 0 {
 		allocSize = 4 + 4*int(hdr.CallCount) + uSize
+	} else if hdr.NormMode != NormModeNone {
+		contractedLen := 0
+		if hdr.DataOffset+8 <= len(src) {
+			contractedLen = int(binary.LittleEndian.Uint16(src[hdr.DataOffset+3:hdr.DataOffset+5])) |
+				(int(src[hdr.DataOffset+6]) << 16) | (int(src[hdr.DataOffset+7]) << 24)
+		}
+		if contractedLen > 0 {
+			allocSize = contractedLen
+		}
 	}
 
 	// Safety padding (64 bytes) prevents vector load/store boundary faults
 	// Aligned to 64-byte L1 cacheline boundary to eliminate split-cacheline penalties
-	if dst == nil || cap(dst) < allocSize+64 {
-		dst = bufkit.AlignedBytes(allocSize+64, bufkit.CacheLineSize)
+	if dst == nil || cap(dst) < uSize+64 {
+		dst = bufkit.AlignedBytes(uSize+64, bufkit.CacheLineSize)
 	}
 	dst = dst[:uSize]
-	baseDst := unsafe.Pointer(&dst[0])
 
 	// Fast-path: Raw uncompressed payload
 	if (hdr.Flags & FlagUncompressed) != 0 {
@@ -316,32 +378,133 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 	sec2Offset := sec1Offset + sec1Size
 	sec3Offset := sec2Offset + hdr.CmdStreamSize
 	sec4Offset := sec3Offset + hdr.OffsetStreamSize
-
-	if sec4Offset > len(src) {
-		return nil, fmt.Errorf("%w: frame truncated before literal section", ErrCorruptedFrame)
+	if sec1Offset < 0 || sec1Size < 0 || hdr.CmdStreamSize < 0 || hdr.OffsetStreamSize < 0 || sec2Offset > len(src) || sec3Offset > len(src) || sec4Offset > len(src) {
+		return nil, fmt.Errorf("%w: corrupted section directory offsets (sec2=%d, sec3=%d, sec4=%d, len=%d)", ErrCorruptedFrame, sec2Offset, sec3Offset, sec4Offset, len(src))
 	}
 
+	var cmds []byte
+	var offs []byte
 	var lits []byte
+	var pad *decompressScratchpad
+
+	outBuf := dst
+	if (hdr.Flags&FlagBCJ) != 0 && (hdr.Flags&FlagBCJSplit) != 0 {
+		if cap(dst) < allocSize+64 {
+			dst = bufkit.AlignedBytes(allocSize+64, bufkit.CacheLineSize)
+		}
+		dst = dst[:allocSize]
+		outBuf = dst
+	} else if hdr.NormMode != NormModeNone {
+		if pad == nil {
+			pad = decScratchPool.Get()
+			defer decScratchPool.Put(pad)
+		}
+		if cap(pad.normBuf) < allocSize+64 {
+			pad.normBuf = bufkit.AlignedBytes(allocSize+64, bufkit.CacheLineSize)
+		}
+		outBuf = pad.normBuf[:allocSize]
+	}
+	baseDst := unsafe.Pointer(&outBuf[0])
+
+	// Resolve Section 2 (Commands)
+	if hdr.CmdStreamSize == 0 {
+		cmds = nil
+	} else {
+		if sec2Offset+5 > len(src) {
+			return nil, fmt.Errorf("%w: truncated section 2 header", ErrCorruptedFrame)
+		}
+		sec2Mode := src[sec2Offset]
+		sec2OrigLen := int(binary.LittleEndian.Uint32(src[sec2Offset+1 : sec2Offset+5]))
+		if sec2Mode == ModeFlat {
+			if sec2Offset+5+sec2OrigLen > sec2Offset+hdr.CmdStreamSize || sec2Offset+5+sec2OrigLen > len(src) {
+				return nil, fmt.Errorf("%w: truncated flat command stream", ErrCorruptedFrame)
+			}
+			cmds = src[sec2Offset+5 : sec2Offset+5+sec2OrigLen]
+		} else if sec2Mode == ModeHuffman4X {
+			if pad == nil {
+				pad = decScratchPool.Get()
+				defer decScratchPool.Put(pad)
+			}
+			if cap(pad.cmdBuf) < sec2OrigLen+64 {
+				pad.cmdBuf = bufkit.AlignedBytes(sec2OrigLen+64, bufkit.CacheLineSize)
+			}
+			n, err := UnpackStream(pad.cmdBuf[:sec2OrigLen], src[sec2Offset:sec2Offset+hdr.CmdStreamSize], &pad.table)
+			if err != nil {
+				return nil, err
+			}
+			cmds = pad.cmdBuf[:n]
+		} else {
+			return nil, fmt.Errorf("%w: unknown command stream mode %d", ErrCorruptedFrame, sec2Mode)
+		}
+	}
+
+	// Resolve Section 3 (Offsets)
+	if hdr.OffsetStreamSize == 0 {
+		offs = nil
+	} else {
+		if sec3Offset+5 > len(src) {
+			return nil, fmt.Errorf("%w: truncated section 3 header", ErrCorruptedFrame)
+		}
+		sec3Mode := src[sec3Offset]
+		sec3OrigLen := int(binary.LittleEndian.Uint32(src[sec3Offset+1 : sec3Offset+5]))
+		if sec3Mode == ModeFlat {
+			if sec3Offset+5+sec3OrigLen > sec3Offset+hdr.OffsetStreamSize || sec3Offset+5+sec3OrigLen > len(src) {
+				return nil, fmt.Errorf("%w: truncated flat offset stream", ErrCorruptedFrame)
+			}
+			offs = src[sec3Offset+5 : sec3Offset+5+sec3OrigLen]
+		} else if sec3Mode == ModeHuffman4X {
+			if pad == nil {
+				pad = decScratchPool.Get()
+				defer decScratchPool.Put(pad)
+			}
+			if cap(pad.offBuf) < sec3OrigLen+64 {
+				pad.offBuf = bufkit.AlignedBytes(sec3OrigLen+64, bufkit.CacheLineSize)
+			}
+			n, err := UnpackStream(pad.offBuf[:sec3OrigLen], src[sec3Offset:sec3Offset+hdr.OffsetStreamSize], &pad.table)
+			if err != nil {
+				return nil, err
+			}
+			offs = pad.offBuf[:n]
+		} else {
+			return nil, fmt.Errorf("%w: unknown offset stream mode %d", ErrCorruptedFrame, sec3Mode)
+		}
+	}
+
+	// Resolve Section 4 (Literals)
 	if (hdr.Flags & FlagNibble) != 0 {
-		bPtr := decLitPool.Get()
-		defer decLitPool.Put(bPtr)
-		unpacked, err := unpackLiterals(src[sec4Offset:], bPtr)
+		if pad == nil {
+			pad = decScratchPool.Get()
+			defer decScratchPool.Put(pad)
+		}
+		if sec4Offset > len(src) {
+			return nil, fmt.Errorf("%w: corrupted section 4 offset (%d > %d)", ErrCorruptedFrame, sec4Offset, len(src))
+		}
+		unpacked, err := unpackLiterals(src[sec4Offset:], &pad.litBuf)
 		if err != nil {
 			return nil, err
 		}
 		lits = unpacked
 	} else {
+		if sec4Offset > len(src) {
+			return nil, fmt.Errorf("%w: corrupted section 4 offset (%d > %d)", ErrCorruptedFrame, sec4Offset, len(src))
+		}
 		lits = src[sec4Offset:]
 	}
 
-	cmdPtr := sec2Offset
-	cmdEnd := sec2Offset + hdr.CmdStreamSize
-	offPtr := sec3Offset
+	cmdPtr := 0
+	cmdEnd := len(cmds)
+	offPtr := 0
 	litPtr := 0
 
-	// Initialize Ring-16 locality queue
+	// Initialize 3 CPU repeat offset registers
 	stride := max(int(hdr.Stride), 1)
-	q := [16]int{1, stride, 2 * stride, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384}
+	rep0 := 1
+	rep1 := 4
+	rep2 := 8
+	if (hdr.Flags&FlagStride) != 0 && hdr.Stride > 1 {
+		rep1 = stride
+		rep2 = 2 * stride
+	}
 
 	dstPos := 0
 
@@ -359,7 +522,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 	}
 
 	for dstPos < allocSize && cmdPtr < cmdEnd {
-		op := src[cmdPtr]
+		op := cmds[cmdPtr]
 		cmdPtr++
 
 		if op < 0x80 {
@@ -372,7 +535,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 				if litPtr+8 <= len(lits) {
 					*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Pointer(&lits[litPtr]))
 				} else if litPtr+litLen <= len(lits) {
-					copy(dst[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
+					copy(outBuf[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
 				} else {
 					return nil, fmt.Errorf("%w: literal stream truncated", ErrCorruptedFrame)
 				}
@@ -380,29 +543,27 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 				dstPos += litLen
 			}
 
-			d := q[k]
+			var d int
 			switch k {
 			case 0:
+				d = rep0
 			case 1:
-				q[1] = q[0]
-				q[0] = d
+				d = rep1
+				rep1 = rep0
+				rep0 = d
 			case 2:
-				q[2] = q[1]
-				q[1] = q[0]
-				q[0] = d
-			case 3:
-				q[3] = q[2]
-				q[2] = q[1]
-				q[1] = q[0]
-				q[0] = d
+				d = rep2
+				rep2 = rep1
+				rep1 = rep0
+				rep0 = d
 			default:
-				for j := k; j > 0; j-- {
-					q[j] = q[j-1]
-				}
-				q[0] = d
+				return nil, fmt.Errorf("%w: invalid repeat index %d", ErrCorruptedFrame, k)
 			}
 
 			srcIdx := dstPos - d
+			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+			}
 			if d >= 8 || d >= mLen {
 				*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Add(baseDst, srcIdx))
 			} else if d == 1 {
@@ -439,31 +600,42 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			mLen := baseLen + 4
 			if baseLen == 15 {
 				var extra int
-				extra, cmdPtr = fastReadVarint(src, cmdPtr)
+				var err error
+				extra, cmdPtr, err = fastReadVarint(cmds, cmdPtr)
+				if err != nil {
+					return nil, err
+				}
 				mLen = 19 + extra
 			}
 
 			if litLen > 0 {
-				if litPtr+8 <= len(lits) {
+				if litPtr+litLen > len(lits) || dstPos+litLen > len(outBuf) {
+					return nil, fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
+				}
+				if litPtr+8 <= len(lits) && dstPos+8 <= len(outBuf) {
 					*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Pointer(&lits[litPtr]))
-				} else if litPtr+litLen <= len(lits) {
-					copy(dst[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
 				} else {
-					return nil, fmt.Errorf("%w: literal stream truncated", ErrCorruptedFrame)
+					copy(outBuf[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
 				}
 				litPtr += litLen
 				dstPos += litLen
 			}
 
 			var d int
-			d, offPtr = fastReadVarint(src, offPtr)
-
-			for j := 15; j > 0; j-- {
-				q[j] = q[j-1]
+			var err error
+			d, offPtr, err = fastReadVarint(offs, offPtr)
+			if err != nil {
+				return nil, err
 			}
-			q[0] = d
+
+			rep2 = rep1
+			rep1 = rep0
+			rep0 = d
 
 			srcIdx := dstPos - d
+			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+			}
 			copyMatch(baseDst, dstPos, srcIdx, mLen, d)
 			dstPos += mLen
 			continue
@@ -472,123 +644,138 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 		// Specialized commands (0xC0 .. 0xFF)
 		switch {
 		case op >= 0xC0 && op <= 0xCF:
-			// Long Repeat Match (k 0..15) with Fused Literals
+			// Long Repeat Match (k 0..2) with Fused Literals
 			k := int(op & 0x0F)
-			token := src[cmdPtr]
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated command stream", ErrCorruptedFrame)
+			}
+			token := cmds[cmdPtr]
 			cmdPtr++
 			litLen := int((token >> 4) & 0x0F)
 			baseLen := int(token & 0x0F)
 			mLen := baseLen + 4
 			if baseLen == 15 {
 				var extra int
-				extra, cmdPtr = fastReadVarint(src, cmdPtr)
+				var err error
+				extra, cmdPtr, err = fastReadVarint(cmds, cmdPtr)
+				if err != nil {
+					return nil, err
+				}
 				mLen = 19 + extra
 			}
 
 			if litLen > 0 {
-				if litPtr+litLen > len(lits) {
-					return nil, fmt.Errorf("%w: literal stream truncated", ErrCorruptedFrame)
+				if litPtr+litLen > len(lits) || dstPos+litLen > len(outBuf) {
+					return nil, fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
 				}
-				if litLen <= 8 && litPtr+8 <= len(lits) {
+				if litLen <= 8 && litPtr+8 <= len(lits) && dstPos+8 <= len(outBuf) {
 					*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Pointer(&lits[litPtr]))
-				} else if litLen <= 16 && litPtr+16 <= len(lits) {
+				} else if litLen <= 16 && litPtr+16 <= len(lits) && dstPos+16 <= len(outBuf) {
 					*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Pointer(&lits[litPtr]))
 					*(*uint64)(unsafe.Add(baseDst, dstPos+8)) = *(*uint64)(unsafe.Pointer(&lits[litPtr+8]))
 				} else {
-					copy(dst[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
+					copy(outBuf[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
 				}
 				litPtr += litLen
 				dstPos += litLen
 			}
 
-			d := q[k]
+			var d int
 			switch k {
 			case 0:
+				d = rep0
 			case 1:
-				q[1] = q[0]
-				q[0] = d
+				d = rep1
+				rep1 = rep0
+				rep0 = d
 			case 2:
-				q[2] = q[1]
-				q[1] = q[0]
-				q[0] = d
-			case 3:
-				q[3] = q[2]
-				q[2] = q[1]
-				q[1] = q[0]
-				q[0] = d
+				d = rep2
+				rep2 = rep1
+				rep1 = rep0
+				rep0 = d
 			default:
-				for j := k; j > 0; j-- {
-					q[j] = q[j-1]
-				}
-				q[0] = d
+				return nil, fmt.Errorf("%w: invalid long repeat index %d", ErrCorruptedFrame, k)
 			}
 
 			srcIdx := dstPos - d
+			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+			}
 			copyMatch(baseDst, dstPos, srcIdx, mLen, d)
 			dstPos += mLen
 
 		case op >= 0xD0 && op <= 0xD7:
 			// Stride Match (m 1..8)
 			m := int(op&0x07) + 1
-			token := src[cmdPtr]
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated command stream", ErrCorruptedFrame)
+			}
+			token := cmds[cmdPtr]
 			cmdPtr++
 			litLen := int((token >> 4) & 0x0F)
 			mLen := int(token&0x0F) + 4
 
 			if litLen > 0 {
-				if litPtr+litLen > len(lits) {
-					return nil, fmt.Errorf("%w: literal stream truncated", ErrCorruptedFrame)
+				if litPtr+litLen > len(lits) || dstPos+litLen > len(outBuf) {
+					return nil, fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
 				}
-				copy(dst[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
+				copy(outBuf[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
 				litPtr += litLen
 				dstPos += litLen
 			}
 
 			d := m * stride
-			for j := 15; j > 0; j-- {
-				q[j] = q[j-1]
-			}
-			q[0] = d
+			rep2 = rep1
+			rep1 = rep0
+			rep0 = d
 
 			srcIdx := dstPos - d
+			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+			}
 			copyMatch(baseDst, dstPos, srcIdx, mLen, d)
 			dstPos += mLen
 
 		case op >= 0xE0 && op <= 0xE7:
 			// Delta-Mask with Locality Index k
 			k := int(op & 0x07)
-			baseLen := int(src[cmdPtr])
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated command stream", ErrCorruptedFrame)
+			}
+			baseLen := int(cmds[cmdPtr])
 			cmdPtr++
 			mLen := baseLen + 4
 			if baseLen == 255 {
 				var extra int
-				extra, cmdPtr = fastReadVarint(src, cmdPtr)
+				var err error
+				extra, cmdPtr, err = fastReadVarint(cmds, cmdPtr)
+				if err != nil {
+					return nil, err
+				}
 				mLen = 259 + extra
 			}
 
-			d := q[k]
+			var d int
 			switch k {
 			case 0:
+				d = rep0
 			case 1:
-				q[1] = q[0]
-				q[0] = d
+				d = rep1
+				rep1 = rep0
+				rep0 = d
 			case 2:
-				q[2] = q[1]
-				q[1] = q[0]
-				q[0] = d
-			case 3:
-				q[3] = q[2]
-				q[2] = q[1]
-				q[1] = q[0]
-				q[0] = d
+				d = rep2
+				rep2 = rep1
+				rep1 = rep0
+				rep0 = d
 			default:
-				for j := k; j > 0; j-- {
-					q[j] = q[j-1]
-				}
-				q[0] = d
+				return nil, fmt.Errorf("%w: invalid delta locality index %d", ErrCorruptedFrame, k)
 			}
 
 			srcIdx := dstPos - d
+			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+			}
 			copyMatch(baseDst, dstPos, srcIdx, mLen, d)
 
 			if litPtr >= len(lits) {
@@ -651,24 +838,37 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 
 		case op == 0xE8:
 			// Delta-Mask with Explicit Offset
-			baseLen := int(src[cmdPtr])
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated command stream", ErrCorruptedFrame)
+			}
+			baseLen := int(cmds[cmdPtr])
 			cmdPtr++
 			mLen := baseLen + 4
 			if baseLen == 255 {
 				var extra int
-				extra, cmdPtr = fastReadVarint(src, cmdPtr)
+				var err error
+				extra, cmdPtr, err = fastReadVarint(cmds, cmdPtr)
+				if err != nil {
+					return nil, err
+				}
 				mLen = 259 + extra
 			}
 
 			var d int
-			d, offPtr = fastReadVarint(src, offPtr)
-
-			for j := 15; j > 0; j-- {
-				q[j] = q[j-1]
+			var err error
+			d, offPtr, err = fastReadVarint(offs, offPtr)
+			if err != nil {
+				return nil, err
 			}
-			q[0] = d
+
+			rep2 = rep1
+			rep1 = rep0
+			rep0 = d
 
 			srcIdx := dstPos - d
+			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+			}
 			copyMatch(baseDst, dstPos, srcIdx, mLen, d)
 
 			if litPtr >= len(lits) {
@@ -732,20 +932,28 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 		case op == 0xF0:
 			// Pure Literal Run
 			var runLen int
-			runLen, cmdPtr = fastReadVarint(src, cmdPtr)
-			if litPtr+runLen > len(lits) {
-				return nil, fmt.Errorf("%w: literal stream truncated", ErrCorruptedFrame)
+			var err error
+			runLen, cmdPtr, err = fastReadVarint(cmds, cmdPtr)
+			if err != nil {
+				return nil, err
 			}
-			copy(dst[dstPos:dstPos+runLen], lits[litPtr:litPtr+runLen])
+			if litPtr+runLen > len(lits) || dstPos+runLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
+			}
+			copy(outBuf[dstPos:dstPos+runLen], lits[litPtr:litPtr+runLen])
 			litPtr += runLen
 			dstPos += runLen
 
 		case op == 0xF1:
 			// RLE Run
 			var rleLen int
-			rleLen, cmdPtr = fastReadVarint(src, cmdPtr)
-			if litPtr >= len(lits) {
-				return nil, fmt.Errorf("%w: literal stream truncated", ErrCorruptedFrame)
+			var err error
+			rleLen, cmdPtr, err = fastReadVarint(cmds, cmdPtr)
+			if err != nil {
+				return nil, err
+			}
+			if litPtr >= len(lits) || dstPos+rleLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
 			}
 			rleByte := lits[litPtr]
 			litPtr++
@@ -777,7 +985,10 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 				return nil, fmt.Errorf("%w: invalid dictionary token ID %d", ErrCorruptedFrame, tokIdx)
 			}
 			tok := activeDict[tokIdx]
-			copy(dst[dstPos:], tok)
+			if dstPos+len(tok) > len(outBuf) {
+				return nil, fmt.Errorf("%w: dictionary token overflow", ErrCorruptedFrame)
+			}
+			copy(outBuf[dstPos:], tok)
 			dstPos += len(tok)
 
 		case op == 0xF2:
@@ -788,28 +999,50 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			if cmdPtr >= cmdEnd {
 				return nil, fmt.Errorf("%w: truncated dictionary token opcode", ErrCorruptedFrame)
 			}
-			tokIdx := int(src[cmdPtr])
+			tokIdx := int(cmds[cmdPtr])
 			cmdPtr++
 			if tokIdx >= len(activeDict) {
 				return nil, fmt.Errorf("%w: invalid dictionary token ID %d", ErrCorruptedFrame, tokIdx)
 			}
 			tok := activeDict[tokIdx]
-			copy(dst[dstPos:], tok)
+			if dstPos+len(tok) > len(outBuf) {
+				return nil, fmt.Errorf("%w: dictionary token overflow", ErrCorruptedFrame)
+			}
+			copy(outBuf[dstPos:], tok)
 			dstPos += len(tok)
 
 		case op >= 0xF3 && op <= 0xFA:
 			// Direct 1-byte Literal Run (1..8 literals)
 			runLen := int(op - 0xF2)
-			if litPtr+runLen > len(lits) {
-				return nil, fmt.Errorf("%w: literal stream truncated", ErrCorruptedFrame)
+			if litPtr+runLen > len(lits) || dstPos+runLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
 			}
-			if litPtr+8 <= len(lits) && dstPos+8 <= len(dst) {
+			if litPtr+8 <= len(lits) && dstPos+8 <= len(outBuf) {
 				*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Pointer(&lits[litPtr]))
 			} else {
-				copy(dst[dstPos:dstPos+runLen], lits[litPtr:litPtr+runLen])
+				copy(outBuf[dstPos:dstPos+runLen], lits[litPtr:litPtr+runLen])
 			}
 			litPtr += runLen
 			dstPos += runLen
+
+		case op == OpCopyBlock:
+			if cmdPtr+4 > cmdEnd {
+				return nil, fmt.Errorf("%w: truncated OpCopyBlock payload", ErrCorruptedFrame)
+			}
+			srcBlockIdx := binary.LittleEndian.Uint32(cmds[cmdPtr : cmdPtr+4])
+			cmdPtr += 4
+			if srcBlockIdx >= uint32(MaxBlockSize/DedupBlockSize) {
+				return nil, fmt.Errorf("%w: invalid dedup block index %d", ErrCorruptedFrame, srcBlockIdx)
+			}
+			ref := int(srcBlockIdx) * DedupBlockSize
+			if ref < 0 || ref+DedupBlockSize > dstPos {
+				return nil, fmt.Errorf("%w: forward or self-referential dedup block reference (ref=%d, dstPos=%d)", ErrCorruptedFrame, ref, dstPos)
+			}
+			if dstPos+DedupBlockSize > len(outBuf) {
+				return nil, fmt.Errorf("%w: dedup block exceeds buffer capacity", ErrCorruptedFrame)
+			}
+			copy(outBuf[dstPos:dstPos+DedupBlockSize], outBuf[ref:ref+DedupBlockSize])
+			dstPos += DedupBlockSize
 		}
 	}
 
@@ -817,10 +1050,48 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 		return nil, fmt.Errorf("%w: incomplete decoding: got %d of %d bytes", ErrCorruptedFrame, dstPos, allocSize)
 	}
 
-	if (hdr.Flags & FlagBCJSplit) != 0 {
-		bPtr := decLitPool.Get()
-		defer decLitPool.Put(bPtr)
-		unsplitX86(dst, uSize, int(hdr.CallCount), *bPtr)
+	if hdr.NormMode != NormModeNone {
+		switch hdr.NormMode {
+		case NormModeHex, NormModeHexUpper:
+			if uSize != allocSize*2 {
+				return nil, fmt.Errorf("%w: hex expanded size mismatch (%d != %d)", ErrCorruptedFrame, uSize, allocSize*2)
+			}
+			ExpandHexTo(dst[:uSize], outBuf[:allocSize], hdr.NormMode == NormModeHexUpper)
+		case NormModeBase64, NormModeBase64URL:
+			if allocSize%3 != 0 || uSize != (allocSize/3)*4 {
+				return nil, fmt.Errorf("%w: base64 expanded size mismatch (%d != %d)", ErrCorruptedFrame, uSize, (allocSize/3)*4)
+			}
+			ExpandBase64To(dst[:uSize], outBuf[:allocSize], 0, hdr.NormMode == NormModeBase64URL)
+		case NormModeBase64Pad1, NormModeBase64URLP1:
+			if allocSize%3 != 2 || uSize != ((allocSize+1)/3)*4 {
+				return nil, fmt.Errorf("%w: base64 pad1 expanded size mismatch", ErrCorruptedFrame)
+			}
+			ExpandBase64To(dst[:uSize], outBuf[:allocSize], 1, hdr.NormMode == NormModeBase64URLP1)
+		case NormModeBase64Pad2, NormModeBase64URLP2:
+			if allocSize%3 != 1 || uSize != ((allocSize+2)/3)*4 {
+				return nil, fmt.Errorf("%w: base64 pad2 expanded size mismatch", ErrCorruptedFrame)
+			}
+			ExpandBase64To(dst[:uSize], outBuf[:allocSize], 2, hdr.NormMode == NormModeBase64URLP2)
+		case NormModeSpans:
+			n, err := ExpandNormSpansTo(dst[:uSize], outBuf[:allocSize])
+			if err != nil {
+				return nil, err
+			}
+			if n != uSize {
+				return nil, fmt.Errorf("%w: expanded size mismatch %d vs %d", ErrCorruptedNormStream, n, uSize)
+			}
+		default:
+			return nil, fmt.Errorf("%w: unknown norm mode %d", ErrCorruptedFrame, hdr.NormMode)
+		}
+		return dst[:uSize], nil
+	}
+
+	if (hdr.Flags&FlagBCJ) != 0 && (hdr.Flags&FlagBCJSplit) != 0 {
+		if pad == nil {
+			pad = decScratchPool.Get()
+			defer decScratchPool.Put(pad)
+		}
+		unsplitX86(dst, uSize, int(hdr.CallCount), pad.litBuf)
 		return dst[:uSize], nil
 	}
 

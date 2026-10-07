@@ -4,8 +4,6 @@ Independent S-Box ANF & Degree Oracle for AES-128
 Milestone 1 Empirical Challenger Verification Script
 """
 
-import sys
-
 def gf_mul(a, b):
     """Multiplication in GF(2^8) modulo x^8 + x^4 + x^3 + x + 1 (0x11B)"""
     p = 0
@@ -62,7 +60,7 @@ def fast_mobius_transform(tt):
     return anf
 
 def popcount(x):
-    return bin(x).count('1')
+    return (x).bit_count()
 
 def analyze_anf(anf):
     max_deg = -1
@@ -73,11 +71,10 @@ def analyze_anf(anf):
             deg = popcount(u)
             hist[deg] += 1
             active += 1
-            if deg > max_deg:
-                max_deg = deg
+            max_deg = max(max_deg, deg)
     top_zero = (anf[255] == 0)
     return {
-        'degree': max_deg if max_deg >= 0 else 0,
+        'degree': max(max_deg, 0),
         'active': active,
         'top_zero': top_zero,
         'hist': hist

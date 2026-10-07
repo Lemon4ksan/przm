@@ -31,6 +31,7 @@ typedef int przm_status_t;
 #define PRZM_HEADER_SIZE          8
 #define PRZM_MAX_BLOCK_SIZE       (16 * 1024 * 1024) /* 16 MiB */
 #define PRZM_SAFETY_PADDING       64                 /* Minimum trailing bytes in dst */
+#define PRZM_DEDUP_BLOCK_SIZE     65536              /* 64 KiB block granularity for cross-block deduplication */
 
 /* Magic 32-bit signatures (Little-Endian) */
 #define PRZM_MAGIC_STANDARD       0x4D5A5250 /* 'P','R','Z','M' */
@@ -52,10 +53,15 @@ typedef int przm_status_t;
 #define PRZM_MOBIUS_HEADER_SIZE   12
 #define PRZM_MAGIC_MARGOLUS       0x4752414D /* 'M','A','R','G' */
 #define PRZM_MARGOLUS_HEADER_SIZE 16
+#define PRZM_MAGIC_ARCHIVAL_PNG   0x504E4741 /* 'P','N','G','A' */
+
+/* Compression Modes / Levels */
+#define PRZM_MODE_ARCHIVAL        5
 
 /* Opcode assignments */
 #define PRZM_OP_MARGOLUS          0x0F
 #define PRZM_OP_MOBIUS            0x11
+#define PRZM_OP_COPY_BLOCK        0xFD               /* Aligned 64 KiB block replication (Milestone 5) */
 
 /* Fast Möbius Transform modes and flags */
 #define PRZM_FMT_MODE_RAW         0x00
@@ -116,9 +122,41 @@ typedef struct {
 #define PRZM_FLAG_UNCOMPRESSED    0x04
 #define PRZM_FLAG_EXT_OFFSET      0x08
 #define PRZM_FLAG_DICT_REF        0x10
-#define PRZM_FLAG_BCJ_SPLIT       0x20
+#define PRZM_FLAG_NORM            0x20 /* Bit 5: Base64/Hex Normalization applied (when FlagBCJ == 0) */
+#define PRZM_FLAG_BCJ_SPLIT       0x20 /* Bit 5: x86 BCJ displacement splitting applied (when FlagBCJ != 0) */
 #define PRZM_FLAG_BCJ             0x40
 #define PRZM_FLAG_NIBBLE          0x80
+
+/* Normalization Modes (Section 1 byte 2) */
+#define PRZM_NORM_NONE            0
+#define PRZM_NORM_HEX             1 /* Whole-block lowercase hex */
+#define PRZM_NORM_BASE64          2 /* Whole-block standard Base64 unpadded */
+#define PRZM_NORM_SPANS           3 /* Span-based mixed normalization */
+#define PRZM_NORM_HEX_UPPER       4 /* Whole-block uppercase hex */
+#define PRZM_NORM_BASE64_PAD1     5 /* Whole-block standard Base64 with 1 '=' */
+#define PRZM_NORM_BASE64_PAD2     6 /* Whole-block standard Base64 with 2 '==' */
+#define PRZM_NORM_BASE64_URL      7 /* Whole-block URL-safe Base64 unpadded */
+#define PRZM_NORM_BASE64_URL_P1   8 /* Whole-block URL-safe Base64 with 1 '=' */
+#define PRZM_NORM_BASE64_URL_P2   9 /* Whole-block URL-safe Base64 with 2 '==' */
+
+/* Normalization Span Types (for PRZM_NORM_SPANS) */
+#define PRZM_SPAN_HEX_LOWER       1
+#define PRZM_SPAN_HEX_UPPER       2
+#define PRZM_SPAN_BASE64_STD      3
+#define PRZM_SPAN_BASE64_PAD1     4
+#define PRZM_SPAN_BASE64_PAD2     5
+#define PRZM_SPAN_BASE64_URL      6
+#define PRZM_SPAN_BASE64_URL_P1   7
+#define PRZM_SPAN_BASE64_URL_P2   8
+
+/* Entropy Stream Modes (Section 2 & 3) */
+#define PRZM_ENTROPY_MODE_FLAT        0
+#define PRZM_ENTROPY_MODE_HUFFMAN_4X  1
+
+/* WindowLog levels (PRZM-SPEC-0.5 Milestone 2 Window Scaling) */
+#define PRZM_WINDOW_LOG_64K           16
+#define PRZM_WINDOW_LOG_1M            20
+#define PRZM_WINDOW_LOG_8M            23
 
 /**
  * przm_get_uncompressed_size
@@ -247,6 +285,13 @@ int przm_heisenberg_unfoliate_inplace(uint8_t* dst, size_t len, uint8_t stride);
  * @return Number of uncompressed bytes, or negative PRZM_ERR_* code.
  */
 int64_t przm_cellular_sheaf_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap);
+
+/**
+ * Normalization expansion functions.
+ */
+void przm_expand_hex(uint8_t* dst, const uint8_t* src, size_t src_len, int upper);
+void przm_expand_base64(uint8_t* dst, const uint8_t* src, size_t src_len, int pad_count, int url_safe);
+int przm_expand_spans(uint8_t* dst, size_t dst_len, const uint8_t* src, size_t src_len);
 
 #ifdef __cplusplus
 }

@@ -23,10 +23,15 @@
 #endif
 
 /* Thread-local scratchpad size for intermediate planes and literal buffers */
-#define PRZM_TLS_SCRATCH_SIZE (4 * 1024 * 1024) /* 4 MiB scratchpads */
+#define PRZM_TLS_SCRATCH_SIZE (8 * 1024 * 1024) /* 8 MiB scratchpads */
+#define PRZM_TLS_SPLIT_SIZE   (4 * 1024 * 1024) /* 4 MiB BCJ split scratchpad */
 
 static PRZM_TLS uint8_t tls_lits_scratch[PRZM_TLS_SCRATCH_SIZE];
-static PRZM_TLS uint8_t tls_split_scratch[PRZM_TLS_SCRATCH_SIZE];
+static PRZM_TLS uint8_t tls_split_scratch[PRZM_TLS_SPLIT_SIZE];
+static PRZM_TLS uint8_t tls_cmd_scratch[PRZM_TLS_SCRATCH_SIZE];
+static PRZM_TLS uint8_t tls_off_scratch[PRZM_TLS_SCRATCH_SIZE];
+static PRZM_TLS uint8_t tls_norm_scratch[PRZM_TLS_SCRATCH_SIZE];
+static PRZM_TLS uint8_t tls_archival_scratch[PRZM_TLS_SCRATCH_SIZE];
 
 /* ============================================================================
  * 1. Byte-Level Helpers & Unaligned Integer Access
@@ -85,8 +90,14 @@ PRZM_INLINE int fast_read_varint(const uint8_t* src, size_t src_len, size_t* ptr
         *out_val = (int)(b0 & 0x7F) | ((int)(b1 & 0x7F) << 7) | ((int)b2 << 14);
         return PRZM_OK;
     }
-    uint64_t val = (b0 & 0x7F) | ((uint64_t)(b1 & 0x7F) << 7) | ((uint64_t)(b2 & 0x7F) << 14);
-    int shift = 21;
+    if (*ptr >= src_len) return PRZM_ERR_CORRUPTED_FRAME;
+    uint8_t b3 = src[(*ptr)++];
+    if (b3 < 0x80) {
+        *out_val = (int)(b0 & 0x7F) | ((int)(b1 & 0x7F) << 7) | ((int)(b2 & 0x7F) << 14) | ((int)b3 << 21);
+        return PRZM_OK;
+    }
+    uint64_t val = (b0 & 0x7F) | ((uint64_t)(b1 & 0x7F) << 7) | ((uint64_t)(b2 & 0x7F) << 14) | ((uint64_t)(b3 & 0x7F) << 21);
+    int shift = 28;
     while (*ptr < src_len) {
         uint8_t b = src[(*ptr)++];
         if (shift > 28) return PRZM_ERR_CORRUPTED_FRAME;
@@ -1629,6 +1640,10 @@ int64_t przm_get_uncompressed_size(const uint8_t* src, size_t src_len) {
     uint32_t magic = read_u32_le(src);
 
     /* 32-bit Specialized signatures */
+    if (magic == PRZM_MAGIC_ARCHIVAL_PNG) {
+        if (src_len < 12) return PRZM_ERR_CORRUPTED_FRAME;
+        return (int64_t)read_u32_le(src + 4);
+    }
     if (magic == PRZM_MAGIC_MOBIUS) {
         if (src_len < PRZM_MOBIUS_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
         return (int64_t)read_u32_le(src + 4);
@@ -1684,12 +1699,401 @@ int64_t przm_get_uncompressed_size(const uint8_t* src, size_t src_len) {
 }
 
 /* ============================================================================
+ * 13.5. Canonical Huffman 4-Stream Interleaved Decoder Engine
+ * ============================================================================ */
+
+#define PRZM_MAX_HUFF_BITS            11
+#define PRZM_HUFF_TABLE_SIZE          (1 << PRZM_MAX_HUFF_BITS) /* 2048 entries * 2 bytes = 4 KiB */
+#define PRZM_HEADER_SIZE_HUFFMAN      (1 + 4 + 128 + 16)        /* 149 bytes */
+
+typedef uint16_t przm_huff_entry_t;
+
+PRZM_INLINE przm_huff_entry_t make_huff_entry(uint8_t sym, uint8_t code_len) {
+    return (przm_huff_entry_t)((uint16_t)sym | ((uint16_t)code_len << 8));
+}
+
+PRZM_INLINE uint8_t huff_entry_symbol(przm_huff_entry_t e) {
+    return (uint8_t)(e & 0xFF);
+}
+
+PRZM_INLINE uint8_t huff_entry_codelen(przm_huff_entry_t e) {
+    return (uint8_t)(e >> 8);
+}
+
+typedef struct {
+    przm_huff_entry_t table[PRZM_HUFF_TABLE_SIZE];
+} przm_canonical_huff_table_t;
+
+static PRZM_TLS przm_canonical_huff_table_t tls_huff_table;
+
+static bool huff_build_from_lengths(przm_canonical_huff_table_t* h, const uint8_t lengths[256]) {
+    memset(h->table, 0, sizeof(h->table));
+
+    int bl_count[PRZM_MAX_HUFF_BITS + 1] = {0};
+    for (int i = 0; i < 256; i++) {
+        uint8_t l = lengths[i];
+        if (l > PRZM_MAX_HUFF_BITS) return false;
+        bl_count[l]++;
+    }
+    bl_count[0] = 0;
+
+    uint16_t next_code[PRZM_MAX_HUFF_BITS + 1] = {0};
+    uint16_t code = 0;
+    for (int b = 1; b <= PRZM_MAX_HUFF_BITS; b++) {
+        code = (uint16_t)((code + (uint16_t)bl_count[b - 1]) << 1);
+        next_code[b] = code;
+    }
+
+    for (int sym = 0; sym < 256; sym++) {
+        uint8_t l = lengths[sym];
+        if (l == 0) continue;
+        uint16_t c = next_code[l];
+        next_code[l]++;
+
+        przm_huff_entry_t entry = make_huff_entry((uint8_t)sym, l);
+        int shift = PRZM_MAX_HUFF_BITS - l;
+        int num_entries = 1 << shift;
+        int base_idx = (int)(c << shift);
+
+        if (base_idx + num_entries > PRZM_HUFF_TABLE_SIZE) {
+            return false;
+        }
+
+        for (int i = 0; i < num_entries; i++) {
+            h->table[base_idx + i] = entry;
+        }
+    }
+    return true;
+}
+
+typedef struct {
+    const uint8_t* src;
+    size_t         src_len;
+    size_t         ptr;
+    uint64_t       bit_container;
+    int            bits_remaining;
+    bool           underflow;
+} przm_huff_bit_reader_t;
+
+PRZM_INLINE void huff_reader_refill(przm_huff_bit_reader_t* r) {
+    while (r->bits_remaining <= 32 && r->ptr < r->src_len) {
+        r->bit_container = (r->bit_container << 8) | (uint64_t)r->src[r->ptr++];
+        r->bits_remaining += 8;
+    }
+}
+
+PRZM_INLINE void huff_reader_init(przm_huff_bit_reader_t* r, const uint8_t* src, size_t src_len) {
+    r->src = src;
+    r->src_len = src_len;
+    r->ptr = 0;
+    r->bit_container = 0;
+    r->bits_remaining = 0;
+    r->underflow = false;
+    huff_reader_refill(r);
+}
+
+PRZM_INLINE uint16_t huff_reader_peek(przm_huff_bit_reader_t* r, int nb_bits) {
+    if (r->bits_remaining < nb_bits) {
+        huff_reader_refill(r);
+    }
+    if (r->bits_remaining <= 0) {
+        r->underflow = true;
+    }
+    if (r->bits_remaining < nb_bits) {
+        int shift = nb_bits - r->bits_remaining;
+        if (shift >= 64 || shift < 0) return 0;
+        return (uint16_t)((r->bit_container << shift) & ((1U << nb_bits) - 1U));
+    }
+    int shift = r->bits_remaining - nb_bits;
+    return (uint16_t)((r->bit_container >> shift) & ((1U << nb_bits) - 1U));
+}
+
+PRZM_INLINE void huff_reader_consume(przm_huff_bit_reader_t* r, int nb_bits) {
+    r->bits_remaining -= nb_bits;
+    if (r->bits_remaining < 0) {
+        r->underflow = true;
+    }
+}
+
+static int64_t huffman4x_decode(const uint8_t* src, size_t src_len,
+                                uint8_t* dst, size_t dst_cap,
+                                przm_canonical_huff_table_t* dec_table) {
+    if (src == NULL || src_len < 5) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+    uint32_t orig_len = read_u32_le(src + 1);
+    if (orig_len == 0) {
+        return 0;
+    }
+    if (dst_cap < (size_t)orig_len) {
+        return PRZM_ERR_BUFFER_TOO_SMALL;
+    }
+    if (src_len < PRZM_HEADER_SIZE_HUFFMAN) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    /* 1. Unpack lengths */
+    uint8_t lengths[256];
+    for (size_t i = 0; i < 128; i++) {
+        uint8_t b = src[5 + i];
+        lengths[i * 2]     = b & 0x0F;
+        lengths[i * 2 + 1] = (b >> 4) & 0x0F;
+    }
+
+    /* 2. Build 4 KiB direct decode table */
+    if (!huff_build_from_lengths(dec_table, lengths)) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    /* 3. Resolve 4 stream offsets */
+    size_t sz0 = (size_t)read_u32_le(src + 133);
+    size_t sz1 = (size_t)read_u32_le(src + 137);
+    size_t sz2 = (size_t)read_u32_le(src + 141);
+    size_t sz3 = (size_t)read_u32_le(src + 145);
+
+    size_t total_payload = sz0 + sz1 + sz2 + sz3;
+    if (src_len < PRZM_HEADER_SIZE_HUFFMAN + total_payload) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    size_t p0 = PRZM_HEADER_SIZE_HUFFMAN;
+    size_t p1 = p0 + sz0;
+    size_t p2 = p1 + sz1;
+    size_t p3 = p2 + sz2;
+    size_t p_end = p3 + sz3;
+
+    if (p_end > src_len) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    size_t chunk_size = (orig_len + 3) / 4;
+    size_t c0_count = chunk_size < (size_t)orig_len ? chunk_size : (size_t)orig_len;
+    size_t rem1 = (size_t)orig_len > chunk_size ? (size_t)orig_len - chunk_size : 0;
+    size_t c1_count = chunk_size < rem1 ? chunk_size : rem1;
+    size_t rem2 = (size_t)orig_len > 2 * chunk_size ? (size_t)orig_len - 2 * chunk_size : 0;
+    size_t c2_count = chunk_size < rem2 ? chunk_size : rem2;
+    size_t c3_count = (size_t)orig_len > 3 * chunk_size ? (size_t)orig_len - 3 * chunk_size : 0;
+
+    uint8_t* dst0 = dst;
+    uint8_t* dst1 = dst + c0_count;
+    uint8_t* dst2 = dst + c0_count + c1_count;
+    uint8_t* dst3 = dst + c0_count + c1_count + c2_count;
+
+    przm_huff_bit_reader_t r0, r1, r2, r3;
+    huff_reader_init(&r0, src + p0, sz0);
+    huff_reader_init(&r1, src + p1, sz1);
+    huff_reader_init(&r2, src + p2, sz2);
+    huff_reader_init(&r3, src + p3, sz3);
+
+    /* 4. Superscalar 4-way unrolled decode loop */
+    size_t i0 = 0, i1 = 0, i2 = 0, i3 = 0;
+    while (i0 < c0_count && i1 < c1_count && i2 < c2_count && i3 < c3_count) {
+        przm_huff_entry_t e0 = dec_table->table[huff_reader_peek(&r0, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl0 = huff_entry_codelen(e0);
+        if (cl0 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst0[i0++] = huff_entry_symbol(e0);
+        huff_reader_consume(&r0, (int)cl0);
+
+        przm_huff_entry_t e1 = dec_table->table[huff_reader_peek(&r1, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl1 = huff_entry_codelen(e1);
+        if (cl1 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst1[i1++] = huff_entry_symbol(e1);
+        huff_reader_consume(&r1, (int)cl1);
+
+        przm_huff_entry_t e2 = dec_table->table[huff_reader_peek(&r2, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl2 = huff_entry_codelen(e2);
+        if (cl2 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst2[i2++] = huff_entry_symbol(e2);
+        huff_reader_consume(&r2, (int)cl2);
+
+        przm_huff_entry_t e3 = dec_table->table[huff_reader_peek(&r3, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl3 = huff_entry_codelen(e3);
+        if (cl3 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst3[i3++] = huff_entry_symbol(e3);
+        huff_reader_consume(&r3, (int)cl3);
+    }
+
+    while (i0 < c0_count) {
+        przm_huff_entry_t e0 = dec_table->table[huff_reader_peek(&r0, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl0 = huff_entry_codelen(e0);
+        if (cl0 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst0[i0++] = huff_entry_symbol(e0);
+        huff_reader_consume(&r0, (int)cl0);
+    }
+    while (i1 < c1_count) {
+        przm_huff_entry_t e1 = dec_table->table[huff_reader_peek(&r1, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl1 = huff_entry_codelen(e1);
+        if (cl1 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst1[i1++] = huff_entry_symbol(e1);
+        huff_reader_consume(&r1, (int)cl1);
+    }
+    while (i2 < c2_count) {
+        przm_huff_entry_t e2 = dec_table->table[huff_reader_peek(&r2, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl2 = huff_entry_codelen(e2);
+        if (cl2 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst2[i2++] = huff_entry_symbol(e2);
+        huff_reader_consume(&r2, (int)cl2);
+    }
+    while (i3 < c3_count) {
+        przm_huff_entry_t e3 = dec_table->table[huff_reader_peek(&r3, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl3 = huff_entry_codelen(e3);
+        if (cl3 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst3[i3++] = huff_entry_symbol(e3);
+        huff_reader_consume(&r3, (int)cl3);
+    }
+
+    if (r0.underflow || r1.underflow || r2.underflow || r3.underflow) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    return (int64_t)orig_len;
+}
+
+/* ============================================================================
  * 14. Standard Fused Frame Decoder Engine ('PRZM', 0x4D5A5250)
  * ============================================================================ */
 
 PRZM_INLINE bool przm_check_cap(size_t alloc_size, size_t dst_pos, size_t len) {
-    size_t limit = alloc_size + PRZM_SAFETY_PADDING;
-    return (dst_pos <= limit) && (len <= limit - dst_pos);
+    return (dst_pos <= alloc_size) && (len <= alloc_size - dst_pos);
+}
+
+static const char* const przm_hex_lut_lower = "0123456789abcdef";
+static const char* const przm_hex_lut_upper = "0123456789ABCDEF";
+
+void przm_expand_hex(uint8_t* dst, const uint8_t* src, size_t src_len, int upper) {
+    const char* lut = upper ? przm_hex_lut_upper : przm_hex_lut_lower;
+    for (size_t i = 0; i < src_len; i++) {
+        uint8_t b = src[i];
+        dst[2 * i]     = (uint8_t)lut[b >> 4];
+        dst[2 * i + 1] = (uint8_t)lut[b & 0x0F];
+    }
+}
+
+static const char* const przm_b64_lut_std = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static const char* const przm_b64_lut_url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+void przm_expand_base64(uint8_t* dst, const uint8_t* src, size_t src_len, int pad_count, int url_safe) {
+    const char* lut = url_safe ? przm_b64_lut_url : przm_b64_lut_std;
+    size_t full_triplets = src_len / 3;
+    size_t rem = src_len % 3;
+    size_t dst_idx = 0;
+
+    for (size_t t = 0; t < full_triplets; t++) {
+        size_t s_idx = t * 3;
+        uint32_t u = ((uint32_t)src[s_idx] << 16) | ((uint32_t)src[s_idx + 1] << 8) | (uint32_t)src[s_idx + 2];
+        dst[dst_idx]     = (uint8_t)lut[(u >> 18) & 0x3F];
+        dst[dst_idx + 1] = (uint8_t)lut[(u >> 12) & 0x3F];
+        dst[dst_idx + 2] = (uint8_t)lut[(u >> 6) & 0x3F];
+        dst[dst_idx + 3] = (uint8_t)lut[u & 0x3F];
+        dst_idx += 4;
+    }
+
+    if (rem == 2) {
+        size_t s_idx = full_triplets * 3;
+        uint32_t u = ((uint32_t)src[s_idx] << 16) | ((uint32_t)src[s_idx + 1] << 8);
+        dst[dst_idx]     = (uint8_t)lut[(u >> 18) & 0x3F];
+        dst[dst_idx + 1] = (uint8_t)lut[(u >> 12) & 0x3F];
+        dst[dst_idx + 2] = (uint8_t)lut[(u >> 6) & 0x3F];
+        dst[dst_idx + 3] = '=';
+    } else if (rem == 1) {
+        size_t s_idx = full_triplets * 3;
+        uint32_t u = (uint32_t)src[s_idx] << 16;
+        dst[dst_idx]     = (uint8_t)lut[(u >> 18) & 0x3F];
+        dst[dst_idx + 1] = (uint8_t)lut[(u >> 12) & 0x3F];
+        dst[dst_idx + 2] = '=';
+        dst[dst_idx + 3] = '=';
+    }
+}
+
+int przm_expand_spans(uint8_t* dst, size_t dst_len, const uint8_t* src, size_t src_len) {
+    if (src_len < 2) return PRZM_ERR_CORRUPTED_FRAME;
+    uint16_t num_spans = read_u16_le(src);
+    size_t table_size = 2 + 13 * (size_t)num_spans;
+    if (src_len < table_size) return PRZM_ERR_CORRUPTED_FRAME;
+
+    size_t dst_pos = 0;
+    size_t data_read_pos = table_size;
+
+    for (uint16_t i = 0; i < num_spans; i++) {
+        size_t desc_offset = 2 + 13 * (size_t)i;
+        uint8_t span_type = src[desc_offset];
+        size_t contracted_offset = (size_t)read_u32_le(src + desc_offset + 1);
+        size_t contracted_len    = (size_t)read_u32_le(src + desc_offset + 5);
+        size_t orig_len          = (size_t)read_u32_le(src + desc_offset + 9);
+
+        if (contracted_offset < data_read_pos || contracted_offset + contracted_len > src_len) {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+
+        /* Copy unmodified literals preceding this span */
+        size_t lit_len = contracted_offset - data_read_pos;
+        if (lit_len > 0) {
+            if (dst_pos + lit_len > dst_len) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(dst + dst_pos, src + data_read_pos, lit_len);
+            dst_pos += lit_len;
+        }
+
+        if (dst_pos + orig_len > dst_len) return PRZM_ERR_CORRUPTED_FRAME;
+        const uint8_t* span_data = src + contracted_offset;
+
+        size_t expected_orig_len = 0;
+        if (span_type == PRZM_SPAN_HEX_LOWER || span_type == PRZM_SPAN_HEX_UPPER) {
+            expected_orig_len = contracted_len * 2;
+        } else if (span_type == PRZM_SPAN_BASE64_STD || span_type == PRZM_SPAN_BASE64_URL) {
+            if (contracted_len % 3 != 0) return PRZM_ERR_CORRUPTED_FRAME;
+            expected_orig_len = (contracted_len / 3) * 4;
+        } else if (span_type == PRZM_SPAN_BASE64_PAD1 || span_type == PRZM_SPAN_BASE64_URL_P1) {
+            if (contracted_len % 3 != 2) return PRZM_ERR_CORRUPTED_FRAME;
+            expected_orig_len = ((contracted_len + 1) / 3) * 4;
+        } else if (span_type == PRZM_SPAN_BASE64_PAD2 || span_type == PRZM_SPAN_BASE64_URL_P2) {
+            if (contracted_len % 3 != 1) return PRZM_ERR_CORRUPTED_FRAME;
+            expected_orig_len = ((contracted_len + 2) / 3) * 4;
+        } else {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+        if (orig_len != expected_orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+        switch (span_type) {
+        case PRZM_SPAN_HEX_LOWER:
+            przm_expand_hex(dst + dst_pos, span_data, contracted_len, 0);
+            break;
+        case PRZM_SPAN_HEX_UPPER:
+            przm_expand_hex(dst + dst_pos, span_data, contracted_len, 1);
+            break;
+        case PRZM_SPAN_BASE64_STD:
+            przm_expand_base64(dst + dst_pos, span_data, contracted_len, 0, 0);
+            break;
+        case PRZM_SPAN_BASE64_PAD1:
+            przm_expand_base64(dst + dst_pos, span_data, contracted_len, 1, 0);
+            break;
+        case PRZM_SPAN_BASE64_PAD2:
+            przm_expand_base64(dst + dst_pos, span_data, contracted_len, 2, 0);
+            break;
+        case PRZM_SPAN_BASE64_URL:
+            przm_expand_base64(dst + dst_pos, span_data, contracted_len, 0, 1);
+            break;
+        case PRZM_SPAN_BASE64_URL_P1:
+            przm_expand_base64(dst + dst_pos, span_data, contracted_len, 1, 1);
+            break;
+        case PRZM_SPAN_BASE64_URL_P2:
+            przm_expand_base64(dst + dst_pos, span_data, contracted_len, 2, 1);
+            break;
+        }
+
+        dst_pos += orig_len;
+        data_read_pos = contracted_offset + contracted_len;
+    }
+
+    /* Copy trailing literals */
+    if (data_read_pos < src_len) {
+        size_t rem = src_len - data_read_pos;
+        if (dst_pos + rem > dst_len) return PRZM_ERR_CORRUPTED_FRAME;
+        memcpy(dst + dst_pos, src + data_read_pos, rem);
+        dst_pos += rem;
+    }
+
+    if (dst_pos != dst_len) return PRZM_ERR_CORRUPTED_FRAME;
+    return PRZM_OK;
 }
 
 static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
@@ -1724,10 +2128,27 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
         dict_id = read_u32_le(src + offset);
         offset += 4;
     }
-    if ((flags & PRZM_FLAG_BCJ_SPLIT) != 0) {
-        if (offset + 4 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
-        call_count = read_u32_le(src + offset);
-        offset += 4;
+    bool has_norm = false;
+    uint8_t norm_mode = 0;
+    uint32_t contracted_len = 0;
+
+    if ((flags & 0x20) != 0) {
+        if ((flags & PRZM_FLAG_BCJ) == 0) {
+            size_t sec_dir_len = ((flags & PRZM_FLAG_EXT_OFFSET) != 0) ? 6 : 4;
+            size_t test_sec1 = offset + sec_dir_len;
+            if (test_sec1 + 8 <= src_len && src[test_sec1 + 2] != 0 && src[test_sec1 + 2] <= PRZM_NORM_BASE64_URL_P2) {
+                has_norm = true;
+                norm_mode = src[test_sec1 + 2];
+                contracted_len = (uint32_t)read_u16_le(src + test_sec1 + 3) |
+                                 ((uint32_t)src[test_sec1 + 6] << 16) |
+                                 ((uint32_t)src[test_sec1 + 7] << 24);
+            }
+        }
+        if (!has_norm) {
+            if (offset + 4 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+            call_count = read_u32_le(src + offset);
+            offset += 4;
+        }
     }
 
     /* Section Directory */
@@ -1747,6 +2168,14 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
     size_t sec1_offset = offset;
     size_t sec1_size = 0;
     if (sec1_offset + 8 <= src_len) {
+        if (has_norm) {
+            norm_mode = src[sec1_offset + 2];
+            contracted_len = (uint32_t)read_u16_le(src + sec1_offset + 3) |
+                             ((uint32_t)src[sec1_offset + 6] << 16) |
+                             ((uint32_t)src[sec1_offset + 7] << 24);
+        } else {
+            norm_mode = PRZM_NORM_NONE;
+        }
         uint8_t exception_count = src[sec1_offset + 5];
         sec1_size = 8 + 2 * (size_t)exception_count;
     }
@@ -1790,16 +2219,88 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
         lits_len = sec4_size;
     }
 
-    /* Initialize Ring-16 locality queue */
-    int q[16] = {1, stride, 2 * stride, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
+    /* Decode Section 2 (Commands) */
+    const uint8_t* cmds = NULL;
+    size_t cmds_len = 0;
 
-    size_t cmd_ptr = sec2_offset;
-    size_t cmd_end = sec2_offset + cmd_size;
-    size_t off_ptr = sec3_offset;
+    if (cmd_size == 0) {
+        cmds = NULL;
+        cmds_len = 0;
+    } else {
+        if (sec2_offset + 5 > sec2_offset + cmd_size || sec2_offset + 5 > src_len) {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+        uint8_t sec2_mode = src[sec2_offset];
+        uint32_t sec2_orig_len = read_u32_le(src + sec2_offset + 1);
+        if (sec2_orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+
+        if (sec2_mode == PRZM_ENTROPY_MODE_FLAT) {
+            if (sec2_offset + 5 + (size_t)sec2_orig_len > sec2_offset + cmd_size ||
+                sec2_offset + 5 + (size_t)sec2_orig_len > src_len) {
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
+            cmds = src + sec2_offset + 5;
+            cmds_len = (size_t)sec2_orig_len;
+        } else if (sec2_mode == PRZM_ENTROPY_MODE_HUFFMAN_4X) {
+            if (sec2_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            int64_t dec_n = huffman4x_decode(src + sec2_offset, cmd_size, tls_cmd_scratch, sizeof(tls_cmd_scratch), &tls_huff_table);
+            if (dec_n < 0) return (int)dec_n;
+            cmds = tls_cmd_scratch;
+            cmds_len = (size_t)dec_n;
+        } else {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+    }
+
+    /* Decode Section 3 (Offsets) */
+    const uint8_t* offs = NULL;
+    size_t offs_len = 0;
+
+    if (off_size == 0) {
+        offs = NULL;
+        offs_len = 0;
+    } else {
+        if (sec3_offset + 5 > sec3_offset + off_size || sec3_offset + 5 > src_len) {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+        uint8_t sec3_mode = src[sec3_offset];
+        uint32_t sec3_orig_len = read_u32_le(src + sec3_offset + 1);
+        if (sec3_orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+
+        if (sec3_mode == PRZM_ENTROPY_MODE_FLAT) {
+            if (sec3_offset + 5 + (size_t)sec3_orig_len > sec3_offset + off_size ||
+                sec3_offset + 5 + (size_t)sec3_orig_len > src_len) {
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
+            offs = src + sec3_offset + 5;
+            offs_len = (size_t)sec3_orig_len;
+        } else if (sec3_mode == PRZM_ENTROPY_MODE_HUFFMAN_4X) {
+            if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            int64_t dec_n = huffman4x_decode(src + sec3_offset, off_size, tls_off_scratch, sizeof(tls_off_scratch), &tls_huff_table);
+            if (dec_n < 0) return (int)dec_n;
+            offs = tls_off_scratch;
+            offs_len = (size_t)dec_n;
+        } else {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+    }
+
+    /* Initialize 3 CPU repeat offset registers */
+    int rep0 = 1;
+    int rep1 = 4;
+    int rep2 = 8;
+    if ((flags & PRZM_FLAG_STRIDE) != 0 && stride > 1) {
+        rep1 = stride;
+        rep2 = 2 * stride;
+    }
+
+    size_t cmd_ptr = 0;
+    size_t cmd_end = cmds_len;
+    size_t off_ptr = 0;
     size_t lit_ptr = 0;
     size_t dst_pos = 0;
 
-    bool is_split = (flags & PRZM_FLAG_BCJ_SPLIT) != 0;
+    bool is_split = !has_norm && ((flags & 0x20) != 0);
     size_t alloc_size = u_size;
     uint8_t* decode_dst = dst;
 
@@ -1815,13 +2316,19 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             }
             decode_dst = tls_split_scratch;
         }
+    } else if (norm_mode != PRZM_NORM_NONE) {
+        alloc_size = (size_t)contracted_len;
+        if (alloc_size > sizeof(tls_norm_scratch) - PRZM_SAFETY_PADDING) {
+            return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        }
+        decode_dst = tls_norm_scratch;
     } else {
         if (dst_cap < u_size + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
     }
 
     /* Command Stream Execution Loop */
     while (dst_pos < alloc_size && cmd_ptr < cmd_end) {
-        uint8_t op = src[cmd_ptr++];
+        uint8_t op = cmds[cmd_ptr++];
 
         if (op < 0x80) {
             /* Fast-Path 1: Fused Repeat Token (0 LLL MM KK) */
@@ -1837,9 +2344,21 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
                 dst_pos += lit_len;
             }
 
-            int d = q[k];
-            for (int j = k; j > 0; j--) q[j] = q[j - 1];
-            q[0] = d;
+            int d = 0;
+            if (k == 0) {
+                d = rep0;
+            } else if (k == 1) {
+                d = rep1;
+                rep1 = rep0;
+                rep0 = d;
+            } else if (k == 2) {
+                d = rep2;
+                rep2 = rep1;
+                rep1 = rep0;
+                rep0 = d;
+            } else {
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
 
             if (dst_pos < (size_t)d) return PRZM_ERR_OFFSET_OOB;
             if (!przm_check_cap(alloc_size, dst_pos, m_len)) return PRZM_ERR_CORRUPTED_FRAME;
@@ -1855,7 +2374,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             size_t m_len = base_len + 4;
             if (base_len == 15) {
                 int extra = 0;
-                int err = fast_read_varint(src, cmd_end, &cmd_ptr, &extra);
+                int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &extra);
                 if (err != PRZM_OK || extra < 0) return PRZM_ERR_CORRUPTED_FRAME;
                 m_len = 19 + (size_t)extra;
             }
@@ -1869,11 +2388,12 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             }
 
             int d = 0;
-            int err = fast_read_varint(src, sec4_offset, &off_ptr, &d);
+            int err = fast_read_varint(offs, offs_len, &off_ptr, &d);
             if (err != PRZM_OK || d <= 0) return PRZM_ERR_CORRUPTED_FRAME;
 
-            for (int j = 15; j > 0; j--) q[j] = q[j - 1];
-            q[0] = d;
+            rep2 = rep1;
+            rep1 = rep0;
+            rep0 = d;
 
             if (dst_pos < (size_t)d) return PRZM_ERR_OFFSET_OOB;
             if (!przm_check_cap(alloc_size, dst_pos, m_len)) return PRZM_ERR_CORRUPTED_FRAME;
@@ -1887,13 +2407,13 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             /* Long Repeat Match */
             int k = (int)(op & 0x0F);
             if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
-            uint8_t token = src[cmd_ptr++];
+            uint8_t token = cmds[cmd_ptr++];
             size_t lit_len = token >> 4;
             size_t base_len = token & 0x0F;
             size_t m_len = base_len + 4;
             if (base_len == 15) {
                 int extra = 0;
-                int err = fast_read_varint(src, cmd_end, &cmd_ptr, &extra);
+                int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &extra);
                 if (err != PRZM_OK || extra < 0) return PRZM_ERR_CORRUPTED_FRAME;
                 m_len = 19 + (size_t)extra;
             }
@@ -1906,9 +2426,21 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
                 dst_pos += lit_len;
             }
 
-            int d = q[k];
-            for (int j = k; j > 0; j--) q[j] = q[j - 1];
-            q[0] = d;
+            int d = 0;
+            if (k == 0) {
+                d = rep0;
+            } else if (k == 1) {
+                d = rep1;
+                rep1 = rep0;
+                rep0 = d;
+            } else if (k == 2) {
+                d = rep2;
+                rep2 = rep1;
+                rep1 = rep0;
+                rep0 = d;
+            } else {
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
 
             if (dst_pos < (size_t)d) return PRZM_ERR_OFFSET_OOB;
             if (!przm_check_cap(alloc_size, dst_pos, m_len)) return PRZM_ERR_CORRUPTED_FRAME;
@@ -1921,7 +2453,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             /* Stride Match (m 1..8) */
             int m = (int)(op & 0x07) + 1;
             if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
-            uint8_t token = src[cmd_ptr++];
+            uint8_t token = cmds[cmd_ptr++];
             size_t lit_len = (size_t)(token >> 4);
             size_t m_len = (size_t)(token & 0x0F) + 4;
 
@@ -1934,8 +2466,9 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             }
 
             int d = m * stride;
-            for (int j = 15; j > 0; j--) q[j] = q[j - 1];
-            q[0] = d;
+            rep2 = rep1;
+            rep1 = rep0;
+            rep0 = d;
 
             if (dst_pos < (size_t)d) return PRZM_ERR_OFFSET_OOB;
             if (!przm_check_cap(alloc_size, dst_pos, m_len)) return PRZM_ERR_CORRUPTED_FRAME;
@@ -1959,16 +2492,28 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
         if (op >= 0xE0 && op <= 0xE7) {
             /* Delta-Mask Match (Locality) */
             int k = (int)(op & 0x07);
-            int d = q[k];
-            for (int j = k; j > 0; j--) q[j] = q[j - 1];
-            q[0] = d;
+            int d = 0;
+            if (k == 0) {
+                d = rep0;
+            } else if (k == 1) {
+                d = rep1;
+                rep1 = rep0;
+                rep0 = d;
+            } else if (k == 2) {
+                d = rep2;
+                rep2 = rep1;
+                rep1 = rep0;
+                rep0 = d;
+            } else {
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
 
             if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
-            size_t base_byte = src[cmd_ptr++];
+            size_t base_byte = cmds[cmd_ptr++];
             size_t m_len = base_byte + 4;
             if (base_byte == 255) {
                 int extra = 0;
-                int err = fast_read_varint(src, cmd_end, &cmd_ptr, &extra);
+                int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &extra);
                 if (err != PRZM_OK || extra < 0) return PRZM_ERR_CORRUPTED_FRAME;
                 m_len = 259 + (size_t)extra;
             }
@@ -2002,22 +2547,23 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
 
         if (op == 0xE8) {
             /* Delta-Mask Match (Explicit) */
-            int d = 0;
-            int err = fast_read_varint(src, sec4_offset, &off_ptr, &d);
-            if (err != PRZM_OK || d <= 0) return PRZM_ERR_CORRUPTED_FRAME;
-
-            for (int j = 15; j > 0; j--) q[j] = q[j - 1];
-            q[0] = d;
-
             if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
-            size_t base_byte = src[cmd_ptr++];
+            size_t base_byte = cmds[cmd_ptr++];
             size_t m_len = base_byte + 4;
             if (base_byte == 255) {
                 int extra = 0;
-                err = fast_read_varint(src, cmd_end, &cmd_ptr, &extra);
+                int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &extra);
                 if (err != PRZM_OK || extra < 0) return PRZM_ERR_CORRUPTED_FRAME;
                 m_len = 259 + (size_t)extra;
             }
+
+            int d = 0;
+            int err = fast_read_varint(offs, offs_len, &off_ptr, &d);
+            if (err != PRZM_OK || d <= 0) return PRZM_ERR_CORRUPTED_FRAME;
+
+            rep2 = rep1;
+            rep1 = rep0;
+            rep0 = d;
 
             if (dst_pos < (size_t)d) return PRZM_ERR_OFFSET_OOB;
             if (!przm_check_cap(alloc_size, dst_pos, m_len)) return PRZM_ERR_CORRUPTED_FRAME;
@@ -2048,7 +2594,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
         if (op == 0xF0) {
             /* Pure Literal Run */
             int run_len = 0;
-            int err = fast_read_varint(src, cmd_end, &cmd_ptr, &run_len);
+            int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &run_len);
             if (err != PRZM_OK || run_len < 0) return PRZM_ERR_CORRUPTED_FRAME;
             if (lit_ptr + (size_t)run_len > lits_len) return PRZM_ERR_CORRUPTED_FRAME;
             if (!przm_check_cap(alloc_size, dst_pos, (size_t)run_len)) return PRZM_ERR_CORRUPTED_FRAME;
@@ -2061,7 +2607,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
         if (op == 0xF1) {
             /* Pure RLE Run */
             int rle_len = 0;
-            int err = fast_read_varint(src, cmd_end, &cmd_ptr, &rle_len);
+            int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &rle_len);
             if (err != PRZM_OK || rle_len < 0) return PRZM_ERR_CORRUPTED_FRAME;
             if (lit_ptr >= lits_len) return PRZM_ERR_CORRUPTED_FRAME;
             if (!przm_check_cap(alloc_size, dst_pos, (size_t)rle_len)) return PRZM_ERR_CORRUPTED_FRAME;
@@ -2074,7 +2620,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
         if (op == 0xF2) {
             /* Extended Schema Token */
             if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
-            uint8_t tok_id = src[cmd_ptr++];
+            uint8_t tok_id = cmds[cmd_ptr++];
             size_t t_len = 0;
             const char* str = get_schema_token(dict_id, tok_id, ext_dict, &t_len);
             if (!str || t_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
@@ -2094,9 +2640,69 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             dst_pos += lit_len;
             continue;
         }
+
+        if (op == PRZM_OP_COPY_BLOCK) {
+            if (cmd_ptr + 4 > cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint32_t src_block_idx = read_u32_le(cmds + cmd_ptr);
+            cmd_ptr += 4;
+            if (src_block_idx >= (uint32_t)(dst_pos / PRZM_DEDUP_BLOCK_SIZE)) return PRZM_ERR_CORRUPTED_FRAME;
+            size_t ref = (size_t)src_block_idx * PRZM_DEDUP_BLOCK_SIZE;
+            if (ref + PRZM_DEDUP_BLOCK_SIZE > dst_pos) return PRZM_ERR_CORRUPTED_FRAME;
+            if (dst_pos + PRZM_DEDUP_BLOCK_SIZE > alloc_size || !przm_check_cap(alloc_size, dst_pos, PRZM_DEDUP_BLOCK_SIZE)) {
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
+            memcpy(decode_dst + dst_pos, decode_dst + ref, PRZM_DEDUP_BLOCK_SIZE);
+            dst_pos += PRZM_DEDUP_BLOCK_SIZE;
+            continue;
+        }
+
+        return PRZM_ERR_CORRUPTED_FRAME;
     }
 
-    if (dst_pos < alloc_size) return PRZM_ERR_CORRUPTED_FRAME;
+    if (dst_pos != alloc_size) return PRZM_ERR_CORRUPTED_FRAME;
+
+    if (norm_mode != PRZM_NORM_NONE) {
+        size_t expected_u_size = 0;
+        if (norm_mode == PRZM_NORM_HEX || norm_mode == PRZM_NORM_HEX_UPPER) {
+            expected_u_size = (size_t)contracted_len * 2;
+        } else if (norm_mode == PRZM_NORM_BASE64 || norm_mode == PRZM_NORM_BASE64_URL) {
+            if (contracted_len % 3 != 0) return PRZM_ERR_CORRUPTED_FRAME;
+            expected_u_size = ((size_t)contracted_len / 3) * 4;
+        } else if (norm_mode == PRZM_NORM_BASE64_PAD1 || norm_mode == PRZM_NORM_BASE64_URL_P1) {
+            if (contracted_len % 3 != 2) return PRZM_ERR_CORRUPTED_FRAME;
+            expected_u_size = (((size_t)contracted_len + 1) / 3) * 4;
+        } else if (norm_mode == PRZM_NORM_BASE64_PAD2 || norm_mode == PRZM_NORM_BASE64_URL_P2) {
+            if (contracted_len % 3 != 1) return PRZM_ERR_CORRUPTED_FRAME;
+            expected_u_size = (((size_t)contracted_len + 2) / 3) * 4;
+        }
+        if (norm_mode != PRZM_NORM_SPANS && u_size != expected_u_size) {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+
+        if (norm_mode == PRZM_NORM_HEX) {
+            przm_expand_hex(dst, tls_norm_scratch, contracted_len, 0);
+        } else if (norm_mode == PRZM_NORM_HEX_UPPER) {
+            przm_expand_hex(dst, tls_norm_scratch, contracted_len, 1);
+        } else if (norm_mode == PRZM_NORM_BASE64) {
+            przm_expand_base64(dst, tls_norm_scratch, contracted_len, 0, 0);
+        } else if (norm_mode == PRZM_NORM_BASE64_PAD1) {
+            przm_expand_base64(dst, tls_norm_scratch, contracted_len, 1, 0);
+        } else if (norm_mode == PRZM_NORM_BASE64_PAD2) {
+            przm_expand_base64(dst, tls_norm_scratch, contracted_len, 2, 0);
+        } else if (norm_mode == PRZM_NORM_BASE64_URL) {
+            przm_expand_base64(dst, tls_norm_scratch, contracted_len, 0, 1);
+        } else if (norm_mode == PRZM_NORM_BASE64_URL_P1) {
+            przm_expand_base64(dst, tls_norm_scratch, contracted_len, 1, 1);
+        } else if (norm_mode == PRZM_NORM_BASE64_URL_P2) {
+            przm_expand_base64(dst, tls_norm_scratch, contracted_len, 2, 1);
+        } else if (norm_mode == PRZM_NORM_SPANS) {
+            int err = przm_expand_spans(dst, u_size, tls_norm_scratch, contracted_len);
+            if (err != PRZM_OK) return err;
+        } else {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+        return (int64_t)u_size;
+    }
 
     /* Apply Post-Decompression Filters */
     if (is_split) {
@@ -2140,6 +2746,103 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
 }
 
 /* ============================================================================
+ * 14.5. Archival Mode PNG Deflate Container Decompression
+ * ============================================================================ */
+
+static int64_t przm_archival_png_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap) {
+    if (src_len < 12) return PRZM_ERR_CORRUPTED_FRAME;
+
+    uint32_t orig_len_u32 = read_u32_le(src + 4);
+    if (orig_len_u32 > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+    size_t orig_len = (size_t)orig_len_u32;
+
+    if (dst_cap < orig_len + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
+
+    size_t meta_size = (size_t)read_u32_le(src + 8);
+    if (12 + meta_size > src_len || meta_size < 8) return PRZM_ERR_CORRUPTED_FRAME;
+
+    const uint8_t* meta_buf = src + 12;
+    if (meta_buf[0] != 0x50) return PRZM_ERR_CORRUPTED_FRAME;
+
+    uint16_t prefix_len = read_u16_le(meta_buf + 2);
+    uint16_t postfix_len = read_u16_le(meta_buf + 4);
+    uint16_t idat_count = read_u16_le(meta_buf + 6);
+
+    size_t expected_meta = 8 + (size_t)idat_count * 8 + (size_t)prefix_len + (size_t)postfix_len;
+    if (meta_size != expected_meta) return PRZM_ERR_CORRUPTED_FRAME;
+
+    /* Decompress inner scanlines with 0 heap allocations */
+    const uint8_t* inner_src = src + 12 + meta_size;
+    size_t inner_src_len = src_len - (12 + meta_size);
+
+    int64_t inner_len = przm_decompress(inner_src, inner_src_len, tls_archival_scratch, sizeof(tls_archival_scratch));
+    if (inner_len < 0) return inner_len;
+
+    /* Reconstruct PNG container into dst */
+    size_t dst_pos = 0;
+    size_t desc_pos = 8;
+    size_t prefix_pos = 8 + (size_t)idat_count * 8;
+    size_t postfix_pos = prefix_pos + (size_t)prefix_len;
+
+    /* 1. Prefix (PNG magic + IHDR + ancillary chunks) */
+    if (prefix_len > 0) {
+        if (dst_pos + prefix_len > orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        memcpy(dst + dst_pos, meta_buf + prefix_pos, prefix_len);
+        dst_pos += prefix_len;
+    }
+
+    /* 2. IDAT Chunks */
+    size_t inner_pos = 0;
+    for (size_t i = 0; i < (size_t)idat_count; i++) {
+        uint32_t chunk_len = read_u32_le(meta_buf + desc_pos);
+        desc_pos += 8;
+
+        if (inner_pos + chunk_len > (size_t)inner_len || dst_pos + 12 + chunk_len > orig_len) {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+
+        /* Chunk length (4 bytes Big-Endian) */
+        dst[dst_pos]     = (uint8_t)(chunk_len >> 24);
+        dst[dst_pos + 1] = (uint8_t)(chunk_len >> 16);
+        dst[dst_pos + 2] = (uint8_t)(chunk_len >> 8);
+        dst[dst_pos + 3] = (uint8_t)chunk_len;
+        dst_pos += 4;
+
+        /* Chunk type "IDAT" */
+        dst[dst_pos]     = 'I';
+        dst[dst_pos + 1] = 'D';
+        dst[dst_pos + 2] = 'A';
+        dst[dst_pos + 3] = 'T';
+        dst_pos += 4;
+
+        /* Payload */
+        memcpy(dst + dst_pos, tls_archival_scratch + inner_pos, chunk_len);
+        dst_pos += chunk_len;
+        inner_pos += chunk_len;
+
+        /* Chunk CRC (4 bytes Big-Endian, copied directly from descriptor) */
+        dst[dst_pos]     = meta_buf[desc_pos - 4];
+        dst[dst_pos + 1] = meta_buf[desc_pos - 3];
+        dst[dst_pos + 2] = meta_buf[desc_pos - 2];
+        dst[dst_pos + 3] = meta_buf[desc_pos - 1];
+        dst_pos += 4;
+    }
+
+    if (inner_pos != (size_t)inner_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+    /* 3. Postfix (ancillary chunks + IEND) */
+    if (postfix_len > 0) {
+        if (dst_pos + postfix_len > orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        memcpy(dst + dst_pos, meta_buf + postfix_pos, postfix_len);
+        dst_pos += postfix_len;
+    }
+
+    if (dst_pos != orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+    return (int64_t)orig_len;
+}
+
+/* ============================================================================
  * 15. Public API Implementation: przm_decompress
  * ============================================================================ */
 
@@ -2148,6 +2851,11 @@ int64_t przm_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t
     if (src == NULL || dst == NULL || src_len < 4) return PRZM_ERR_CORRUPTED_FRAME;
 
     uint32_t magic = read_u32_le(src);
+
+    /* 1.10. Archival Mode PNG Container ('PNGA', 0x504E4741) */
+    if (magic == PRZM_MAGIC_ARCHIVAL_PNG) {
+        return przm_archival_png_decompress(src, src_len, dst, dst_cap);
+    }
 
     /* 1.8. Fast Möbius Transform Frame ('MOBI', 0x49424F4D) */
     if (magic == PRZM_MAGIC_MOBIUS) {

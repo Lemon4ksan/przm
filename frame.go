@@ -13,9 +13,10 @@ import (
 
 // Frame constants and magic signatures.
 const (
-	MagicPRZM    uint32 = 0x4D5A5250 // ASCII 'P', 'R', 'Z', 'M' (Little-Endian)
-	HeaderSize   int    = 8
-	MaxBlockSize int    = 16 * 1024 * 1024 // 16 MiB max frame size
+	MagicPRZM      uint32 = 0x4D5A5250 // ASCII 'P', 'R', 'Z', 'M' (Little-Endian)
+	HeaderSize     int    = 8
+	MaxBlockSize   int    = 16 * 1024 * 1024 // 16 MiB max frame size
+	DedupBlockSize        = 65536           // 64 KiB block granularity for cross-block deduplication
 )
 
 // Frame configuration bitmasks (PRZM-SPEC-0.5 Section 3.2).
@@ -25,7 +26,8 @@ const (
 	FlagUncompressed uint8 = 0x04 // Bit 2: Raw uncompressed payload
 	FlagExtOffset    uint8 = 0x08 // Bit 3: 24/32-bit offsets and section lengths
 	FlagDictRef      uint8 = 0x10 // Bit 4: External dictionary reference present
-	FlagBCJSplit     uint8 = 0x20 // Bit 5: x86 BCJ displacement splitting applied
+	FlagNorm         uint8 = 0x20 // Bit 5: Base64/Hex Normalization applied (when FlagBCJ == 0)
+	FlagBCJSplit     uint8 = 0x20 // Bit 5: x86 BCJ displacement splitting applied (when FlagBCJ != 0)
 	FlagBCJ          uint8 = 0x40 // Bit 6: x86_64 BCJ relative address filter applied
 	FlagNibble       uint8 = 0x80 // Bit 7: Section 4 encoded via SIMD Nibble-Plane Splitting or V-ANS
 )
@@ -63,6 +65,7 @@ const (
 	OpcodePrefixRLE        uint8 = 0xF1
 	OpcodePrefixDictToken  uint8 = 0xF2 // 0xF2 <tokenID>: 2-byte schema token from active DictID
 	OpcodePrefixLitShort   uint8 = 0xF3 // 0xF3 .. 0xFA: 1-byte direct literal run for 1..8 literals
+	OpCopyBlock            uint8 = 0xFD // 0xFD: Aligned 64 KiB block replication (Milestone 5)
 )
 
 // Extended match opcode flags (Category 10).
@@ -83,6 +86,24 @@ var (
 	ErrInvalidDict       = errors.New("przm: invalid dictionary format")
 )
 
+// WindowLog levels (PRZM-SPEC-0.5 Milestone 2 Window Scaling)
+const (
+	WindowLog64K = 16 // 64 KiB window (legacy default)
+	WindowLog1M  = 20 // 1 MiB window (L3 cache resident)
+	WindowLog8M  = 23 // 8 MiB window (full coverage)
+)
+
+// Compression Modes / Levels
+const (
+	ModeArchival = 5
+)
+
+// Specialized Container Signatures
+const (
+	ArchivalPNGMagic uint32 = 0x504E4741 // 'P','N','G','A' (Archival PNG container)
+)
+
+
 // FrameHeader holds parsed frame metadata.
 type FrameHeader struct {
 	Flags            uint8
@@ -93,6 +114,8 @@ type FrameHeader struct {
 	CmdStreamSize    int    // Section 2 size in bytes
 	OffsetStreamSize int    // Section 3 size in bytes
 	DataOffset       int    // Byte offset in frame where Section 1 starts
+	WindowLog        uint8  // Effective window size log2 (16 for 64K, 20 for 1M, 23 for 8M)
+	NormMode         uint8  // Normalization mode from Section 1 byte 2 (0=None, 1=Hex, 2=Base64, 3=Spans, ...)
 }
 
 // ParseFrameHeader parses the 8-byte frame header, frame parameters, and section directory.
@@ -143,7 +166,7 @@ func ParseFrameHeader(src []byte) (FrameHeader, error) {
 		offset += 4
 	}
 
-	if (flags & FlagBCJSplit) != 0 {
+	if (flags&FlagBCJ) != 0 && (flags&FlagBCJSplit) != 0 {
 		if offset+4 > len(src) {
 			return FrameHeader{}, fmt.Errorf("%w: missing call count parameter", ErrCorruptedFrame)
 		}
@@ -170,5 +193,28 @@ func ParseFrameHeader(src []byte) (FrameHeader, error) {
 	}
 
 	hdr.DataOffset = offset
+
+	// Parse WindowLog and NormMode from Section 1 if present
+	if (flags&FlagUncompressed) == 0 && offset+8 <= len(src) {
+		hdr.NormMode = src[offset+2]
+		wlog := src[offset+1]
+		if wlog >= 16 && wlog <= 24 {
+			hdr.WindowLog = wlog
+		} else {
+			// Legacy frame fallback: infer window from uncompressedSize and FlagExtOffset
+			if (flags & FlagExtOffset) != 0 {
+				if uncompressedSize > 1024*1024 {
+					hdr.WindowLog = WindowLog8M // 23
+				} else {
+					hdr.WindowLog = WindowLog1M // 20
+				}
+			} else {
+				hdr.WindowLog = WindowLog64K // 16
+			}
+		}
+	} else {
+		hdr.WindowLog = WindowLog64K // 16
+	}
+
 	return hdr, nil
 }

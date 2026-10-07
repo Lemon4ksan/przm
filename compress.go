@@ -39,6 +39,8 @@ type scratchpad struct {
 	nibbleBuf    []byte
 	nibbleLowBuf []byte
 	splitBuf     []byte
+	normBuf      []byte
+	dedup        DedupTable
 }
 
 var padPool = generic.NewPool(func() *scratchpad {
@@ -51,6 +53,7 @@ var padPool = generic.NewPool(func() *scratchpad {
 		nibbleBuf:    bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
 		nibbleLowBuf: bufkit.AlignedBytes(initPadSize/2, bufkit.CacheLineSize)[:0],
 		splitBuf:     bufkit.AlignedBytes(initPadSize*2, bufkit.CacheLineSize)[:0],
+		normBuf:      bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
 	}
 })
 
@@ -375,12 +378,44 @@ func isCandidateTDA(src []byte) bool {
 	return zeroCount >= (sampleLen*15)/100 || repWords >= 2
 }
 
+// CompressOptions configures fine-grained PRZM compression parameters.
+type CompressOptions struct {
+	Level              int         // 1..5
+	WindowLog          int         // 16 (64K), 20 (1M), 23 (8M), or 0 (auto)
+	Dict               *Dictionary // Optional external dictionary
+	ArchivalMode       bool        // Explicit toggle for --mode=archival
+	StandardStreamOnly bool        // Ensure canonical PRZM stream format (MagicPRZM = 0x4D5A5250)
+}
+
+// CompressWithOptions encodes src using caller-defined options.
+func CompressWithOptions(src []byte, opts CompressOptions) ([]byte, error) {
+	return compressInternalWithOptions(src, opts)
+}
+
+// CompressWithWindow encodes src using explicit level and windowLog.
+func CompressWithWindow(src []byte, level int, windowLog int) ([]byte, error) {
+	return CompressWithOptions(src, CompressOptions{Level: level, WindowLog: windowLog})
+}
+
 // Compress encodes src into PRZM format according to PRZM-SPEC-0.5.
 func Compress(src []byte, level int) ([]byte, error) {
-	return compressInternal(src, level, nil)
+	return CompressWithOptions(src, CompressOptions{Level: level})
 }
 
 func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, error) {
+	return CompressWithOptions(src, CompressOptions{Level: level, Dict: customDict})
+}
+
+func compressInternalWithOptions(src []byte, opts CompressOptions) ([]byte, error) {
+	level := opts.Level
+	if opts.ArchivalMode {
+		level = ModeArchival
+	}
+	if level <= 0 {
+		level = 3
+	}
+	customDict := opts.Dict
+
 	uSize := len(src)
 	if uSize == 0 {
 		hdr := [HeaderSize]byte{}
@@ -393,12 +428,48 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		return nil, ErrExceedsMaxBlock
 	}
 
+	if level >= ModeArchival && isPNG(src) {
+		if pngArchOut, err := CompressArchivalPNG(src, level); err == nil && len(pngArchOut) > 0 {
+			return pngArchOut, nil
+		}
+	}
+
+	windowLog := opts.WindowLog
+	if windowLog == 0 {
+		if uSize <= 64*1024 {
+			windowLog = WindowLog64K
+		} else if uSize > 1024*1024 || level >= 3 {
+			windowLog = WindowLog8M
+		} else {
+			windowLog = WindowLog1M
+		}
+	}
+	if windowLog < WindowLog64K {
+		windowLog = WindowLog64K
+	} else if windowLog > WindowLog8M {
+		windowLog = WindowLog8M
+	}
+	windowSize := 1 << windowLog
+
 	pad := padPool.Get()
 	defer padPool.Put(pad)
 
 	clear(pad.head)
+	var sp1M *HenselScratchpad1M
+	var sp8M *HenselScratchpad8M
 	if level >= 3 {
-		pad.hensel.Reset()
+		switch windowLog {
+		case WindowLog8M:
+			sp8M = PoolHensel8M.Get()
+			defer PoolHensel8M.Put(sp8M)
+			sp8M.Reset()
+		case WindowLog1M:
+			sp1M = PoolHensel1M.Get()
+			defer PoolHensel1M.Put(sp1M)
+			sp1M.Reset()
+		default:
+			pad.hensel.Reset()
+		}
 	}
 	pad.cmdBuf = ensureBufCap(pad.cmdBuf, uSize)
 	pad.offsetBuf = ensureBufCap(pad.offsetBuf, uSize/2)
@@ -409,17 +480,13 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 	highEntropy := isHighEntropy(origSrc)
 	isX86 := detectX86(src)
 
-	// PRZM v0.2: For level >= 2, evaluate PWS (CAST + 5-Layer H-DAG AVX-Wave)
-	var pwsCandidate []byte
-	if !isX86 && !highEntropy && level >= 2 && uSize >= 512 {
-		if pwsOut, err := PWSEncode(origSrc); err == nil && len(pwsOut) < origUSize {
-			if level == 2 {
-				return pwsOut, nil
-			}
-			pwsCandidate = pwsOut
-		}
+	// Content Router: Sub-microsecond decision tree (<290 ns budget, 0 dynamic allocations)
+	route := RouteContent(origSrc)
+	if route == RoutePEBinary {
+		isX86 = true
 	}
 
+	var pwsCandidate []byte
 	var vmCandidate []byte
 	var tdaCandidate []byte
 	var hypCandidate []byte
@@ -438,133 +505,92 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 	var mobiusCandidate []byte
 	var margolusCandidate []byte
 
-	// PRZM v0.5 Phase 17: Evaluate Monoidal Dependent-Type Sheaf Stratification for Protobuf/TLV (Theorem 38)
-	isProtobuf := DetectProtobufTLV(origSrc)
-	if isProtobuf && !highEntropy && level >= 2 && uSize >= 64 {
-		if depOut := CompressDependentSheaf(origSrc); len(depOut) > 0 && len(depOut) < origUSize {
-			depCandidate = depOut
-		}
+	// Fast bypass: only evaluate heavy mathematical transforms if router classified as SparseZero or SmoothDelta
+	allowTransforms := (route == RouteSparseZero || route == RouteSmoothDelta) && !highEntropy && level >= 2
+	if opts.StandardStreamOnly {
+		allowTransforms = false
 	}
 
-	// PRZM v0.5 Phase 16: Evaluate Ultra-Long Horizon Macro-Trellis (Theorem 37)
-	if !highEntropy && level >= 2 && uSize >= 64*1024 {
-		if macroOut := CompressMacroTrellis(origSrc); len(macroOut) > 0 && len(macroOut) < origUSize {
-			macroCandidate = macroOut
-		}
-	}
-
-	// PRZM v0.5 Phase 15: Evaluate Universal Instruction Branch Collimation for ARM64 (Theorem 36)
-	isARM64 := DetectARM64(origSrc)
-	if isARM64 && !highEntropy && level >= 2 && uSize >= 64 {
-		if arm64Out := CompressARM64(origSrc); len(arm64Out) > 0 && len(arm64Out) < origUSize {
-			arm64Candidate = arm64Out
-		}
-	}
-
-	// PRZM v0.5 Phase 14: Evaluate Étale Sheaf & Tropical Rep-Queue Trellis (Theorems 34, 35)
-	if !highEntropy && level >= 2 && uSize >= 128 {
-		if sheafOut := CompressSheafTrellis(origSrc); len(sheafOut) > 0 && len(sheafOut) < origUSize {
-			sheafCandidate = sheafOut
-		}
-	}
-
-	// If payload is x86, ARM64, or Protobuf/TLV, bypass AST, TDA, GCTR, and 4-channel tensor transforms.
-	if !isX86 && !isARM64 && !isProtobuf && !highEntropy {
-		// PRZM v0.4: For level >= 3, evaluate 2-Adic Mahler Ultrametric Spectral Transform (Theorems 32, 33)
-		if level >= 3 && uSize >= 256 {
-			if mahlerOut := CompressMahler(origSrc); len(mahlerOut) > 0 && len(mahlerOut) < origUSize {
-				mahlerCandidate = mahlerOut
+	// Specialized Protobuf/ARM64 filters
+	if !opts.StandardStreamOnly && !highEntropy && level >= 2 && uSize >= 64 {
+		if isProtobuf := DetectProtobufTLV(origSrc); isProtobuf {
+			if depOut := CompressDependentSheaf(origSrc); len(depOut) > 0 && len(depOut) < origUSize {
+				depCandidate = depOut
 			}
 		}
-
-		// PRZM v0.4: For level >= 3, evaluate Symplectic Phase-Space Foliation & Twistor Collimation (Theorems 30, 31)
-		if level >= 3 && uSize >= 256 && hasChannelCorrelation4(origSrc) {
-			if sympOut := CompressSymplectic(origSrc); len(sympOut) > 0 && len(sympOut) < origUSize {
-				symplecticCandidate = sympOut
+		if isARM64 := DetectARM64(origSrc); isARM64 {
+			if arm64Out := CompressARM64(origSrc); len(arm64Out) > 0 && len(arm64Out) < origUSize {
+				arm64Candidate = arm64Out
 			}
 		}
+	}
 
-		// PRZM v0.3: For level >= 4, evaluate Galois Superoptimized JIT & Trace Annihilation (Theorems 27, 28, 30)
-		if level >= 4 && uSize >= 512 {
-			if gctrOut := CompressGCTR(origSrc); len(gctrOut) > 0 && len(gctrOut) < origUSize {
-				gctrCandidate = gctrOut
+	if allowTransforms && !isX86 {
+		// RouteSparseZero allows sparse/topological transforms:
+		if route == RouteSparseZero {
+			if level >= 3 && uSize >= 256 && isCandidateTDA(origSrc) {
+				if tdaOut := CompressTDA(origSrc); len(tdaOut) > 0 && len(tdaOut) < origUSize {
+					tdaCandidate = tdaOut
+				}
 			}
-		}
-
-		// PRZM v0.2: For level >= 3, evaluate Zero-Schema JIT-Vector VM (SGSS + PRZM-VM ISA)
-		if level >= 3 && uSize >= 512 {
-			if schema, err := SynthesizeStructure(origSrc); err == nil && schema.Stride >= 2 && schema.Confidence >= 0.15 {
-				if vmOut, err := VMEncode(origSrc, schema); err == nil && len(vmOut) < origUSize {
-					vmCandidate = vmOut
+			if level >= 2 && uSize >= 32 {
+				if csOut, err := CompressCellularSheaf(origSrc, level); err == nil && len(csOut) > 0 && len(csOut) < origUSize {
+					cellularSheafCandidate = csOut
 				}
 			}
 		}
 
-		// PRZM v0.3: For level >= 3, evaluate TDA Ripser over F2 (Persistent Homology Barcodes)
-		if level >= 3 && uSize >= 256 && isCandidateTDA(origSrc) {
-			if tdaOut := CompressTDA(origSrc); len(tdaOut) > 0 && len(tdaOut) < origUSize {
-				tdaCandidate = tdaOut
+		// RouteSmoothDelta allows continuous physical signal transforms:
+		if route == RouteSmoothDelta {
+			if level >= 3 && uSize >= 256 {
+				if mahlerOut := CompressMahler(origSrc); len(mahlerOut) > 0 && len(mahlerOut) < origUSize {
+					mahlerCandidate = mahlerOut
+				}
 			}
-		}
-
-		// PRZM v0.3: For level >= 3, evaluate Discrete Poincaré Hyperbolic AST
-		if level >= 3 && uSize >= 256 && isCandidateAST(origSrc) {
-			if hypOut, err := EncodeHyperbolicAST(origSrc); err == nil && len(hypOut) < origUSize {
-				hypCandidate = hypOut
+			if level >= 3 && uSize >= 256 && hasChannelCorrelation4(origSrc) {
+				if sympOut := CompressSymplectic(origSrc); len(sympOut) > 0 && len(sympOut) < origUSize {
+					symplecticCandidate = sympOut
+				}
 			}
-		}
-
-		// PRZM v0.3: For level >= 4, evaluate Quantum-Operator Unitary Spectral Reduction over F_{2^8}
-		if level >= 4 && uSize >= 512 && hasChannelCorrelation4(origSrc) {
-			if specOut := CompressSpectralUnitary(origSrc); len(specOut) > 0 && len(specOut) < origUSize {
-				spectralCandidate = specOut
+			if level >= 4 && uSize >= 512 {
+				if gctrOut := CompressGCTR(origSrc); len(gctrOut) > 0 && len(gctrOut) < origUSize {
+					gctrCandidate = gctrOut
+				}
 			}
-		}
-
-		// PRZM v0.3: For level >= 4, evaluate Analytical h-MDS in Minkowski Space M^4
-		if level >= 4 && uSize >= 512 && hasChannelCorrelation4(origSrc) {
-			if hmdsOut := CompressHMDS(origSrc); len(hmdsOut) > 0 && len(hmdsOut) < origUSize {
-				hmdsCandidate = hmdsOut
+			if level >= 4 && uSize >= 512 && hasChannelCorrelation4(origSrc) {
+				if specOut := CompressSpectralUnitary(origSrc); len(specOut) > 0 && len(specOut) < origUSize {
+					spectralCandidate = specOut
+				}
 			}
-		}
-
-		// PRZM v0.5 Milestone 2: Evaluate 4D IsoQuant Quaternionic Collimation (Theorems 22, 23)
-		// Targets multi-channel (RGBA), tabular-4, shader (SPIR-V), and 4D binary streams.
-		if level >= 3 && uSize >= 64 && (hasChannelCorrelation4(origSrc) || isCandidateShaderOrVec4(origSrc)) {
-			if isoOut, err := CompressIsoQuant(origSrc); err == nil && len(isoOut) > 0 && len(isoOut) < origUSize {
-				isoquantCandidate = isoOut
+			if level >= 4 && uSize >= 512 && hasChannelCorrelation4(origSrc) {
+				if hmdsOut := CompressHMDS(origSrc); len(hmdsOut) > 0 && len(hmdsOut) < origUSize {
+					hmdsCandidate = hmdsOut
+				}
 			}
-		}
-
-		// PRZM Milestone 2: Evaluate Discrete Heisenberg Group H_3(F_{2^8}) Foliation (Theorems 39, 40)
-		// Targets non-linearly coupled 3D/4D tensors, RGB/RGBA streams, and multi-channel data.
-		if level >= 2 && uSize >= 48 && !isX86 && !isARM64 && !isProtobuf && !highEntropy {
-			if hOut, err := CompressHeisenberg(origSrc, level); err == nil && len(hOut) > 0 && len(hOut) < origUSize {
-				heisenbergCandidate = hOut
+			if level >= 3 && uSize >= 64 && (hasChannelCorrelation4(origSrc) || isCandidateShaderOrVec4(origSrc)) {
+				if isoOut, err := CompressIsoQuant(origSrc); err == nil && len(isoOut) > 0 && len(isoOut) < origUSize {
+					isoquantCandidate = isoOut
+				}
 			}
-		}
-
-		// PRZM Milestone 3: Evaluate Cellular Sheaves with Discrete Hodge Laplacians (Theorems 39, 40)
-		// Detects multi-dimensional connectivity, homology voids, and collapses 2D fields into boundary representations.
-		if level >= 2 && uSize >= 32 && !isX86 && !isARM64 && !highEntropy {
-			if csOut, err := CompressCellularSheaf(origSrc, level); err == nil && len(csOut) > 0 && len(csOut) < origUSize {
-				cellularSheafCandidate = csOut
+			if level >= 2 && uSize >= 48 {
+				if hOut, err := CompressHeisenberg(origSrc, level); err == nil && len(hOut) > 0 && len(hOut) < origUSize {
+					heisenbergCandidate = hOut
+				}
 			}
-		}
-
-		// PRZM Milestone 3: Evaluate Fast Möbius Transform (F_2 FMT / Boolean ANF Involution)
-		// Targets executable code, bit-planes, bitmasks, and Boolean truth tables with algebraic structure.
-		if level >= 2 && uSize >= 64 && !highEntropy {
-			if mOut, err := CompressMobius(origSrc, level); err == nil && len(mOut) > 0 && len(mOut) < origUSize {
-				mobiusCandidate = mOut
+			if level >= 2 && uSize >= 32 {
+				if csOut, err := CompressCellularSheaf(origSrc, level); err == nil && len(csOut) > 0 && len(csOut) < origUSize {
+					cellularSheafCandidate = csOut
+				}
 			}
-		}
-
-		// PRZM Milestone 3: Evaluate Margolus Reversible Cellular Automata (RCA)
-		// Targets turbulent and pre-compressed containers, textures, and sensory streams.
-		if level >= 2 && uSize >= 32 && !isX86 && !isARM64 && !highEntropy {
-			if margOut, err := CompressMargolus(origSrc, level); err == nil && len(margOut) > 0 && len(margOut) < origUSize {
-				margolusCandidate = margOut
+			if level >= 2 && uSize >= 64 {
+				if mOut, err := CompressMobius(origSrc, level); err == nil && len(mOut) > 0 && len(mOut) < origUSize {
+					mobiusCandidate = mOut
+				}
+			}
+			if level >= 2 && uSize >= 32 {
+				if margOut, err := CompressMargolus(origSrc, level); err == nil && len(margOut) > 0 && len(margOut) < origUSize {
+					margolusCandidate = margOut
+				}
 			}
 		}
 	}
@@ -586,6 +612,75 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 			uSize = len(splitSrc)
 			callCount = count
 			flags |= FlagBCJSplit
+		}
+	}
+
+	normMode := NormModeNone
+	normContractedLen := 0
+
+	if !isX86 && route != RouteContainerBypass && !highEntropy && uSize >= minNormSpanLen {
+		if isHex, upper := IsWholeBlockHex(src); isHex {
+			cLen := len(src) / 2
+			if len(src)-cLen >= minNetSavings {
+				if cap(pad.normBuf) < cLen {
+					pad.normBuf = make([]byte, cLen)
+				} else {
+					pad.normBuf = pad.normBuf[:cLen]
+				}
+				ContractHex(src, pad.normBuf)
+				src = pad.normBuf
+				uSize = cLen
+				normContractedLen = cLen
+				if upper {
+					normMode = NormModeHexUpper
+				} else {
+					normMode = NormModeHex
+				}
+				flags |= FlagNorm
+			}
+		} else if isB64, padCount, urlSafe := IsWholeBlockBase64(src); isB64 {
+			cLen := (len(src)/4)*3 - padCount
+			if len(src)-cLen >= minNetSavings {
+				if cap(pad.normBuf) < cLen {
+					pad.normBuf = make([]byte, cLen)
+				} else {
+					pad.normBuf = pad.normBuf[:cLen]
+				}
+				ContractBase64(src, pad.normBuf, padCount, urlSafe)
+				src = pad.normBuf
+				uSize = cLen
+				normContractedLen = cLen
+				if !urlSafe {
+					switch padCount {
+					case 0:
+						normMode = NormModeBase64
+					case 1:
+						normMode = NormModeBase64Pad1
+					case 2:
+						normMode = NormModeBase64Pad2
+					}
+				} else {
+					switch padCount {
+					case 0:
+						normMode = NormModeBase64URL
+					case 1:
+						normMode = NormModeBase64URLP1
+					case 2:
+						normMode = NormModeBase64URLP2
+					}
+				}
+				flags |= FlagNorm
+			}
+		} else {
+			plan := DetectNormSpans(src)
+			if plan.NetSavings >= minNetSavings && len(plan.Spans) > 0 {
+				pad.normBuf = EncodeNormSpans(src, plan, pad.normBuf)
+				src = pad.normBuf
+				uSize = len(pad.normBuf)
+				normContractedLen = uSize
+				normMode = NormModeSpans
+				flags |= FlagNorm
+			}
 		}
 	}
 
@@ -611,7 +706,7 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		}
 	}
 
-	if uSize > 65535 {
+	if uSize > 65535 || windowLog > WindowLog64K {
 		flags |= FlagExtOffset
 	}
 
@@ -622,7 +717,10 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		if d < 16384 {
 			return 2
 		}
-		return 3
+		if d < 2097152 {
+			return 3
+		}
+		return 4
 	}
 
 	writeOffset := func(d int) {
@@ -637,8 +735,14 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		}
 	}
 
-	// Initialize Ring-16 locality queue
-	q := [16]int{1, stride, 2 * stride, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384}
+	// Initialize 3 CPU repeat offset registers
+	rep0 := 1
+	rep1 := 4
+	rep2 := 8
+	if hasStride && stride > 1 {
+		rep1 = stride
+		rep2 = 2 * stride
+	}
 
 	flushLiterals := func(lits []byte) {
 		nLits := len(lits)
@@ -694,15 +798,16 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		}
 
 		ringK := -1
-		for k := range 16 {
-			if q[k] == d {
-				ringK = k
-				break
-			}
+		if rep0 == d {
+			ringK = 0
+		} else if rep1 == d {
+			ringK = 1
+		} else if rep2 == d {
+			ringK = 2
 		}
 
 		if ringK >= 0 {
-			if ringK <= 3 && mLen <= 7 {
+			if ringK <= 2 && mLen <= 7 {
 				return matchCandidate{
 					mType:    1,
 					length:   mLen,
@@ -744,16 +849,20 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		}
 	}
 
-	findBest := func(pos int) matchCandidate {
-		if pos+minMatch > uSize {
+	var approxIdx *ApproxSubChunkIndex
+
+	findBest := func(pos, bEnd int) matchCandidate {
+		if pos+minMatch > bEnd {
 			return matchCandidate{}
 		}
+
+		maxBlockLen := min(bEnd-pos, 65535)
 
 		best := matchCandidate{}
 
 		if activeMatcher != nil {
 			tokIdx, tokLen := activeMatcher.match(src, pos)
-			if tokLen >= 5 {
+			if tokLen >= 5 && tokLen <= maxBlockLen {
 				var cost int
 				var mType int
 				if tokIdx < 8 {
@@ -777,7 +886,7 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		}
 
 		checkDelta := func(d int, ringK int) {
-			if d < 14 || pos < d || pos+8 > uSize || pos-d+8 > uSize {
+			if d < 14 || pos < d || pos+8 > bEnd || pos-d+8 > uSize {
 				return
 			}
 			diff8 := binary.LittleEndian.Uint64(src[pos:pos+8]) ^ binary.LittleEndian.Uint64(src[pos-d:pos-d+8])
@@ -789,8 +898,8 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 				}
 			}
 			checkLimit := min(1024, d)
-			if pos+checkLimit > uSize {
-				checkLimit = uSize - pos
+			if pos+checkLimit > bEnd {
+				checkLimit = bEnd - pos
 			}
 			if checkLimit < 14 {
 				return
@@ -828,11 +937,12 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 			}
 
 			if ringK < 0 {
-				for k := range 8 {
-					if q[k] == d {
-						ringK = k
-						break
-					}
+				if rep0 == d {
+					ringK = 0
+				} else if rep1 == d {
+					ringK = 1
+				} else if rep2 == d {
+					ringK = 2
 				}
 			}
 
@@ -885,9 +995,9 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		if p0 > 0 {
 			prevPos := int(p0 - 1)
 			d := pos - prevPos
-			if d > 0 && d < 65535 {
+			if d > 0 && d < windowSize {
 				d0 = d
-				cand := evalCandidate(pos, d, 65535)
+				cand := evalCandidate(pos, d, maxBlockLen)
 				if cand.score > best.score {
 					best = cand
 				}
@@ -899,8 +1009,8 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		if p1 > 0 {
 			prevPos := int(p1 - 1)
 			d := pos - prevPos
-			if d > 0 && d < 65535 && d != d0 {
-				cand := evalCandidate(pos, d, 65535)
+			if d > 0 && d < windowSize && d != d0 {
+				cand := evalCandidate(pos, d, maxBlockLen)
 				if cand.score > best.score {
 					best = cand
 				}
@@ -916,9 +1026,21 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 			if level >= 4 {
 				maxDepth = 64
 			}
-			hDist, hLen := HenselFindMatch(src, pos, uSize, maxDepth, minMatch, &pad.hensel)
+			var hDist, hLen int
+			switch windowLog {
+			case WindowLog8M:
+				if sp8M != nil {
+					hDist, hLen = HenselFindMatch8M(src, pos, uSize, maxDepth, minMatch, sp8M)
+				}
+			case WindowLog1M:
+				if sp1M != nil {
+					hDist, hLen = HenselFindMatch1M(src, pos, uSize, maxDepth, minMatch, sp1M)
+				}
+			default:
+				hDist, hLen = HenselFindMatch(src, pos, uSize, maxDepth, minMatch, &pad.hensel)
+			}
 			if hDist > 0 && hLen >= minMatch {
-				cand := evalCandidate(pos, hDist, 65535)
+				cand := evalCandidate(pos, hDist, maxBlockLen)
 				if cand.score > best.score {
 					best = cand
 				}
@@ -939,18 +1061,19 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 			}
 		}
 
-		// 2. Check Ring locality queue (top-4 in fast mode, top-16 in normal/ultra mode)
-		ringLimit := 16
-		if level <= 2 {
-			ringLimit = 4
-		}
-		for k := range ringLimit {
-			d := q[k]
-			if d == d0 {
-				continue
+		// 2. Check 3 repeat offset registers (rep0, rep1, rep2)
+		if rep0 != d0 {
+			if cand := evalCandidate(pos, rep0, maxBlockLen); cand.score > best.score {
+				best = cand
 			}
-			cand := evalCandidate(pos, d, 65535)
-			if cand.score > best.score {
+		}
+		if rep1 != d0 && rep1 != rep0 {
+			if cand := evalCandidate(pos, rep1, maxBlockLen); cand.score > best.score {
+				best = cand
+			}
+		}
+		if rep2 != d0 && rep2 != rep1 && rep2 != rep0 {
+			if cand := evalCandidate(pos, rep2, maxBlockLen); cand.score > best.score {
 				best = cand
 			}
 		}
@@ -964,8 +1087,8 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		if hasStride && best.length < 8 {
 			for m := 3; m <= 8; m++ {
 				d := m * stride
-				if pos >= d && pos+4 <= uSize && binary.LittleEndian.Uint32(src[pos:pos+4]) == binary.LittleEndian.Uint32(src[pos-d:pos-d+4]) {
-					mLen := extendMatch(pos, d, 19)
+				if pos >= d && pos+4 <= bEnd && binary.LittleEndian.Uint32(src[pos:pos+4]) == binary.LittleEndian.Uint32(src[pos-d:pos-d+4]) {
+					mLen := extendMatch(pos, d, min(maxBlockLen, 19))
 					if mLen >= minMatch {
 						cost := 2
 						score := mLen - cost
@@ -984,10 +1107,31 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 			}
 		}
 
-		// 4. Fast-filtered Delta-mask fallback check on q[0]
+		// 4. Fast-filtered Delta-mask fallback check on rep0
 		if level >= 3 && best.length < 8 {
-			if q[0] >= 48 && pos >= q[0] {
-				checkDelta(q[0], 0)
+			if rep0 >= 48 && pos >= rep0 {
+				checkDelta(rep0, 0)
+			}
+		}
+
+		if level >= ModeArchival && approxIdx != nil && best.length < 16 {
+			cand := approxIdx.FindMatch(src, pos, bEnd, rep0, rep1, rep2, windowSize, calcOffCost)
+			if cand.Found && cand.Score > best.score {
+				mType := 5
+				if cand.RingK >= 0 {
+					mType = 6
+				}
+				best = matchCandidate{
+					mType:      mType,
+					length:     cand.Length,
+					distance:   cand.Distance,
+					ringK:      cand.RingK,
+					cost:       cand.Cost,
+					score:      cand.Score,
+					mismatches: cand.Mismatches,
+					diffOffs:   cand.DiffOffs,
+					diffXORs:   cand.DiffXORs,
+				}
 			}
 		}
 
@@ -1000,48 +1144,73 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 			h &= hashTableMask
 			pad.head[h*2+1] = pad.head[h*2]
 			pad.head[h*2] = int32(p + 1)
+			if level >= ModeArchival && approxIdx != nil {
+				approxIdx.Insert(src, p)
+			}
 			if level >= 3 {
-				HenselInsert(&pad.hensel, p, src, uSize)
+				switch windowLog {
+				case WindowLog8M:
+					if sp8M != nil {
+						HenselInsert8M(sp8M, p, src, uSize)
+					}
+				case WindowLog1M:
+					if sp1M != nil {
+						HenselInsert1M(sp1M, p, src, uSize)
+					}
+				default:
+					HenselInsert(&pad.hensel, p, src, uSize)
+				}
 			}
 		}
 	}
 
-	pos := 0
-	litStart := 0
-	misses := 0
-
-	for pos+minMatch <= uSize {
-		// 1. RLE Check (run of identical bytes >= 12)
-		if pos+12 <= uSize && src[pos] == src[pos+1] && src[pos] == src[pos+2] && src[pos] == src[pos+3] {
-			rleByte := src[pos]
-			rleLen := 4
-			for pos+rleLen < uSize && src[pos+rleLen] == rleByte && rleLen < 65535 {
-				rleLen++
-			}
-			if rleLen >= 12 {
-				if pos > litStart {
-					flushLiterals(src[litStart:pos])
-				}
-				pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixRLE)
-				var varBuf [8]byte
-				n := binary.PutUvarint(varBuf[:], uint64(rleLen))
-				pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
-				pad.literalBuf = append(pad.literalBuf, rleByte)
-
-				insertHash(pos)
-				pos += rleLen
-				litStart = pos
-				continue
-			}
+	compressBlockGreedy := func(bStart, bSize int) {
+		if level >= ModeArchival {
+			approxIdx = approxPool.Get()
+			defer func() {
+				approxPool.Put(approxIdx)
+				approxIdx = nil
+			}()
+			approxIdx.Reset()
 		}
 
-		best := findBest(pos)
+		pos := bStart
+		bEnd := bStart + bSize
+		litStart := bStart
+		misses := 0
 
-		if best.score >= 1 && best.length >= minMatch {
-			// Deterministic lazy lookahead evaluation at pos+1 to select higher-scoring match candidates
-			if level >= 3 && best.length <= 6 && pos+1+minMatch <= uSize {
-				insertHash(pos)
-				nextBest := findBest(pos + 1)
+		for pos+minMatch <= bEnd {
+			// 1. RLE Check (run of identical bytes >= 12)
+			if pos+12 <= bEnd && src[pos] == src[pos+1] && src[pos] == src[pos+2] && src[pos] == src[pos+3] {
+				rleByte := src[pos]
+				rleLen := 4
+				for pos+rleLen < bEnd && src[pos+rleLen] == rleByte && rleLen < 65535 {
+					rleLen++
+				}
+				if rleLen >= 12 {
+					if pos > litStart {
+						flushLiterals(src[litStart:pos])
+					}
+					pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixRLE)
+					var varBuf [8]byte
+					n := binary.PutUvarint(varBuf[:], uint64(rleLen))
+					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
+					pad.literalBuf = append(pad.literalBuf, rleByte)
+
+					insertHash(pos)
+					pos += rleLen
+					litStart = pos
+					continue
+				}
+			}
+
+			best := findBest(pos, bEnd)
+
+			if best.score >= 1 && best.length >= minMatch {
+				// Deterministic lazy lookahead evaluation at pos+1 to select higher-scoring match candidates
+				if level >= 3 && best.length <= 6 && pos+1+minMatch <= bEnd {
+					insertHash(pos)
+					nextBest := findBest(pos+1, bEnd)
 				// Lookahead comparison between match candidate at pos and pos+1
 				preferNext := false
 				if nextBest.length > best.length+1 {
@@ -1067,7 +1236,7 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 				for pos > litStart && pos-best.distance > 0 && src[pos-1] == src[pos-best.distance-1] && best.length < 65530 {
 					pos--
 					best.length++
-					if best.mType == 1 && (best.length > 7 || best.ringK > 3) {
+					if best.mType == 1 && (best.length > 7 || best.ringK > 2) {
 						best.mType = 3
 					}
 					if best.mType == 2 && best.length > 19 {
@@ -1081,7 +1250,7 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 			litLen := pos - litStart
 
 			switch best.mType {
-			case 1: // Fused Repeat (k <= 3, length 4..7)
+			case 1: // Fused Repeat (k <= 2, length 4..7)
 				if litLen > 7 {
 					flushLiterals(src[litStart : pos-7])
 					litStart = pos - 7
@@ -1092,10 +1261,16 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 				if litLen > 0 {
 					pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
 				}
-				for j := best.ringK; j > 0; j-- {
-					q[j] = q[j-1]
+				switch best.ringK {
+				case 0:
+				case 1:
+					rep1 = rep0
+					rep0 = best.distance
+				case 2:
+					rep2 = rep1
+					rep1 = rep0
+					rep0 = best.distance
 				}
-				q[0] = best.distance
 
 			case 2: // Stride (m 1..8, length 4..19)
 				if litLen > 15 {
@@ -1109,12 +1284,11 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 				if litLen > 0 {
 					pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
 				}
-				for j := 15; j > 0; j-- {
-					q[j] = q[j-1]
-				}
-				q[0] = best.distance
+				rep2 = rep1
+				rep1 = rep0
+				rep0 = best.distance
 
-			case 3: // Long Repeat (k 0..15, length 4..N) with Fused Literals
+			case 3: // Long Repeat (k 0..2, length 4..N) with Fused Literals
 				if litLen > 15 {
 					flushLiterals(src[litStart : pos-15])
 					litStart = pos - 15
@@ -1135,10 +1309,16 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 				if litLen > 0 {
 					pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
 				}
-				for j := best.ringK; j > 0; j-- {
-					q[j] = q[j-1]
+				switch best.ringK {
+				case 0:
+				case 1:
+					rep1 = rep0
+					rep0 = best.distance
+				case 2:
+					rep2 = rep1
+					rep1 = rep0
+					rep0 = best.distance
 				}
-				q[0] = best.distance
 
 			case 4: // Fused Extended Match (length 4..N, explicit offset)
 				if litLen > 3 {
@@ -1161,10 +1341,9 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 					pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
 				}
 				writeOffset(best.distance)
-				for j := 15; j > 0; j-- {
-					q[j] = q[j-1]
-				}
-				q[0] = best.distance
+				rep2 = rep1
+				rep1 = rep0
+				rep0 = best.distance
 
 			case 5: // DeltaMaskExplicit
 				if litLen > 0 {
@@ -1193,10 +1372,9 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 					}
 					pad.literalBuf = append(pad.literalBuf, best.diffXORs[m])
 				}
-				for j := 15; j > 0; j-- {
-					q[j] = q[j-1]
-				}
-				q[0] = best.distance
+				rep2 = rep1
+				rep1 = rep0
+				rep0 = best.distance
 
 			case 6: // DeltaMaskRing8
 				if litLen > 0 {
@@ -1225,10 +1403,16 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 					}
 					pad.literalBuf = append(pad.literalBuf, best.diffXORs[m])
 				}
-				for j := best.ringK; j > 0; j-- {
-					q[j] = q[j-1]
+				switch best.ringK {
+				case 0:
+				case 1:
+					rep1 = rep0
+					rep0 = best.distance
+				case 2:
+					rep2 = rep1
+					rep1 = rep0
+					rep0 = best.distance
 				}
-				q[0] = best.distance
 
 			case 7: // OpcodePrefixShortDict (0xD8 .. 0xDF)
 				if litLen > 0 {
@@ -1263,9 +1447,76 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		pos += step
 	}
 
-	// Flush remaining literals
-	if litStart < uSize {
-		flushLiterals(src[litStart:])
+		// Flush remaining literals for this block
+		if litStart < bEnd {
+			flushLiterals(src[litStart:bEnd])
+		}
+	}
+
+	if uSize >= 131072 {
+		pad.dedup.Reset()
+		var dpPad *dpScratchpad
+		if level >= 3 && level < ModeArchival && customDict == nil && dictID == 0 {
+			dpPad = dpScratchPool.Get()
+			defer dpScratchPool.Put(dpPad)
+			clear(dpPad.table3[:])
+		}
+
+		bStart := 0
+		blockIdx := uint32(0)
+		for bStart < uSize {
+			bSize := min(uSize-bStart, DedupBlockSize)
+			if bSize == DedupBlockSize && blockIdx > 0 {
+				h := Hash64KBlock(src[bStart : bStart+DedupBlockSize])
+				if matchedIdx, found := pad.dedup.Probe(h, src, bStart); found {
+					pad.cmdBuf = append(pad.cmdBuf, OpCopyBlock,
+						byte(matchedIdx), byte(matchedIdx>>8),
+						byte(matchedIdx>>16), byte(matchedIdx>>24))
+					bStart += DedupBlockSize
+					blockIdx++
+					continue
+				}
+				if dpPad != nil {
+					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M)
+				} else {
+					compressBlockGreedy(bStart, bSize)
+				}
+				pad.dedup.Insert(h, blockIdx)
+			} else if bSize == DedupBlockSize && blockIdx == 0 {
+				if dpPad != nil {
+					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M)
+				} else {
+					compressBlockGreedy(bStart, bSize)
+				}
+				h := Hash64KBlock(src[bStart : bStart+DedupBlockSize])
+				pad.dedup.Insert(h, 0)
+			} else {
+				// Tail block (< 65536 bytes) compressed via standard LZ77
+				if dpPad != nil {
+					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M)
+				} else {
+					compressBlockGreedy(bStart, bSize)
+				}
+			}
+			bStart += bSize
+			blockIdx++
+		}
+	} else {
+		// Under 128 KiB: bypass deduplication entirely
+		if level >= 3 && level < ModeArchival && customDict == nil && dictID == 0 {
+			dpPad := dpScratchPool.Get()
+			defer dpScratchPool.Put(dpPad)
+			clear(dpPad.table3[:])
+
+			bStart := 0
+			for bStart < uSize {
+				bSize := min(uSize-bStart, BlockSize64K)
+				compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M)
+				bStart += bSize
+			}
+		} else {
+			compressBlockGreedy(0, uSize)
+		}
 	}
 
 	// Try V-ANS and SIMD Nibble-Plane packing on literalBuf
@@ -1274,7 +1525,7 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 	if len(pad.literalBuf) >= 32 {
 		var vansOut []byte
 		var vansBeatsRaw bool
-		if level >= 2 {
+		if !opts.StandardStreamOnly && level >= 2 {
 			if out, err := VANSEncode4x(pad.literalBuf); err == nil && len(out) < int(float64(len(pad.literalBuf))*0.95) {
 				vansOut = out
 				vansBeatsRaw = true
@@ -1292,6 +1543,20 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		}
 	}
 
+	// Pack Section 2 (Commands) and Section 3 (Offsets) via 4-Stream Canonical Huffman
+	cmdSection, err := PackStream(pad.cmdBuf, ModeHuffman4X)
+	if err != nil {
+		return nil, err
+	}
+	offSection, err := PackStream(pad.offsetBuf, ModeHuffman4X)
+	if err != nil {
+		return nil, err
+	}
+
+	if uSize > 65535 || len(cmdSection) > 65535 || len(offSection) > 65535 || windowLog > WindowLog64K {
+		flags |= FlagExtOffset
+	}
+
 	// Calculate Frame Layout & Size
 	frameParamsSize := 0
 	if hasStride {
@@ -1300,25 +1565,25 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 	if (flags & FlagDictRef) != 0 {
 		frameParamsSize += 4
 	}
-	if (flags & FlagBCJSplit) != 0 {
+	if (flags&FlagBCJ) != 0 && (flags&FlagBCJSplit) != 0 {
 		frameParamsSize += 4
 	}
 
 	secDirSize := generic.Ternary((flags&FlagExtOffset) != 0, 6, 4)
 
 	sec1Size := 8 // 8-byte distribution params (ModelType = 0 uniform/raw)
-	totalCompressedSize := HeaderSize + frameParamsSize + secDirSize + sec1Size + len(pad.cmdBuf) + len(pad.offsetBuf) + len(litSection)
+	totalCompressedSize := HeaderSize + frameParamsSize + secDirSize + sec1Size + len(cmdSection) + len(offSection) + len(litSection)
 
 	// Pareto selection between candidates
 	bestCandidate := MinNonEmpty(pwsCandidate, vmCandidate, tdaCandidate, hypCandidate, spectralCandidate, hmdsCandidate, gctrCandidate, symplecticCandidate, mahlerCandidate, sheafCandidate, arm64Candidate, macroCandidate, depCandidate, isoquantCandidate, heisenbergCandidate, cellularSheafCandidate, mobiusCandidate, margolusCandidate)
 
-	if len(bestCandidate) > 0 && len(bestCandidate) < totalCompressedSize {
+	if !opts.StandardStreamOnly && len(bestCandidate) > 0 && len(bestCandidate) < totalCompressedSize {
 		return bestCandidate, nil
 	}
 
 	// Fallback to uncompressed if compressed payload exceeds raw data
 	if totalCompressedSize >= origUSize {
-		if len(bestCandidate) > 0 && len(bestCandidate) < origUSize {
+		if !opts.StandardStreamOnly && len(bestCandidate) > 0 && len(bestCandidate) < origUSize {
 			return bestCandidate, nil
 		}
 		rawFrame := make([]byte, HeaderSize+origUSize)
@@ -1348,19 +1613,19 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 		binary.LittleEndian.PutUint32(out[wOffset:wOffset+4], dictID)
 		wOffset += 4
 	}
-	if (flags & FlagBCJSplit) != 0 {
+	if (flags&FlagBCJ) != 0 && (flags&FlagBCJSplit) != 0 {
 		binary.LittleEndian.PutUint32(out[wOffset:wOffset+4], uint32(callCount))
 		wOffset += 4
 	}
 
 	// Section Directory
 	if (flags & FlagExtOffset) == 0 {
-		binary.LittleEndian.PutUint16(out[wOffset:wOffset+2], uint16(len(pad.cmdBuf)))
-		binary.LittleEndian.PutUint16(out[wOffset+2:wOffset+4], uint16(len(pad.offsetBuf)))
+		binary.LittleEndian.PutUint16(out[wOffset:wOffset+2], uint16(len(cmdSection)))
+		binary.LittleEndian.PutUint16(out[wOffset+2:wOffset+4], uint16(len(offSection)))
 		wOffset += 4
 	} else {
-		cmdLen := len(pad.cmdBuf)
-		offLen := len(pad.offsetBuf)
+		cmdLen := len(cmdSection)
+		offLen := len(offSection)
 		out[wOffset] = byte(cmdLen)
 		out[wOffset+1] = byte(cmdLen >> 8)
 		out[wOffset+2] = byte(cmdLen >> 16)
@@ -1374,15 +1639,22 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 	for i := range sec1Size {
 		out[wOffset+i] = 0
 	}
+	out[wOffset+1] = byte(windowLog)
+	if normMode != NormModeNone {
+		out[wOffset+2] = byte(normMode)
+		binary.LittleEndian.PutUint16(out[wOffset+3:wOffset+5], uint16(normContractedLen))
+		out[wOffset+6] = byte(normContractedLen >> 16)
+		out[wOffset+7] = byte(normContractedLen >> 24)
+	}
 	wOffset += sec1Size
 
 	// Section 2: Command Stream
-	copy(out[wOffset:wOffset+len(pad.cmdBuf)], pad.cmdBuf)
-	wOffset += len(pad.cmdBuf)
+	copy(out[wOffset:wOffset+len(cmdSection)], cmdSection)
+	wOffset += len(cmdSection)
 
 	// Section 3: Offset Channel
-	copy(out[wOffset:wOffset+len(pad.offsetBuf)], pad.offsetBuf)
-	wOffset += len(pad.offsetBuf)
+	copy(out[wOffset:wOffset+len(offSection)], offSection)
+	wOffset += len(offSection)
 
 	// Section 4: Literal, Mask, and RLE Channel
 	copy(out[wOffset:wOffset+len(litSection)], litSection)
