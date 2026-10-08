@@ -288,4 +288,83 @@ func TestPureCDecompressorInterop(t *testing.T) {
 			t.Fatalf("Direct Heisenberg Stride 4 interop mismatch: got %d bytes, want %d bytes", len(decompressed), len(raw))
 		}
 	})
+
+	// Test Go-generated multi-chunk PRZS stream containers decoded by Pure C reference decompressor
+	t.Run("MultiChunkPRZSStream", func(t *testing.T) {
+		streamCases := []struct {
+			name       string
+			chunkSizes []int
+			level      int
+		}{
+			{
+				name:       "2_Chunks_Text",
+				chunkSizes: []int{8192, 16384},
+				level:      1,
+			},
+			{
+				name:       "4_Chunks_Mixed",
+				chunkSizes: []int{10000, 25000, 15000, 30000},
+				level:      2,
+			},
+			{
+				name:       "8_Chunks_Binary",
+				chunkSizes: []int{4096, 8192, 12288, 16384, 20480, 24576, 28672, 32768},
+				level:      3,
+			},
+		}
+
+		for _, sc := range streamCases {
+			t.Run(sc.name, func(t *testing.T) {
+				var fullOriginal []byte
+				var chunks [][]byte
+
+				for idx, sz := range sc.chunkSizes {
+					chunkData := make([]byte, sz)
+					for i := range chunkData {
+						chunkData[i] = byte((i*31 + idx*97 + 7) & 0xFF)
+					}
+					fullOriginal = append(fullOriginal, chunkData...)
+
+					compChunk, err := przm.Compress(chunkData, sc.level)
+					if err != nil {
+						t.Fatalf("failed to compress chunk %d: %v", idx, err)
+					}
+					chunks = append(chunks, compChunk)
+				}
+
+				przsContainer := przm.BuildStreamContainer(chunks, uint64(len(fullOriginal)))
+
+				inPrzs := filepath.Join(tmpDir, fmt.Sprintf("%s.przs", sc.name))
+				outBin := filepath.Join(tmpDir, fmt.Sprintf("%s.out", sc.name))
+
+				if err := os.WriteFile(inPrzs, przsContainer, 0644); err != nil {
+					t.Fatalf("failed to write PRZS file: %v", err)
+				}
+
+				cmd := exec.Command(cBinPath, inPrzs, outBin)
+				output, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("Pure C decompressor failed on PRZS multi-chunk stream (exit status %v):\nOutput:\n%s", err, string(output))
+				}
+
+				decompressed, err := os.ReadFile(outBin)
+				if err != nil {
+					t.Fatalf("failed to read C decompressed file: %v", err)
+				}
+
+				if !bytes.Equal(decompressed, fullOriginal) {
+					t.Fatalf("Decompressed data mismatch (got %d bytes, want %d bytes)", len(decompressed), len(fullOriginal))
+				}
+
+				// Cross-check Go decompressor produces the identical bitstream
+				goDec, err := przm.Decompress(przsContainer)
+				if err != nil {
+					t.Fatalf("Go Decompress failed: %v", err)
+				}
+				if !bytes.Equal(goDec, fullOriginal) {
+					t.Fatalf("Go Decompress mismatch")
+				}
+			})
+		}
+	})
 }

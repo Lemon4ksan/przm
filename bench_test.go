@@ -111,3 +111,39 @@ func BenchmarkPRZM_MachineCode(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkHuffman(b *testing.B) {
+	data := bench.GenerateJSON(64 * 1024)
+
+	b.Run("Encode64K", func(b *testing.B) {
+		b.SetBytes(int64(len(data)))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := przm.EncodeHuffman4X(data)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	packed, err := przm.EncodeHuffman4X(data)
+	if err != nil {
+		b.Fatal(err)
+	}
+	dst := make([]byte, len(data))
+	var table przm.CanonicalHuffmanTable
+
+	b.Run("Decode64K", func(b *testing.B) {
+		b.SetBytes(int64(len(data)))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := przm.DecodeHuffman4X(dst, packed, &table)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+

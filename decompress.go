@@ -245,6 +245,78 @@ func unpackNibblePlanes(src []byte, bPtr *[]byte) ([]byte, error) {
 	return dstBuf, nil
 }
 
+// GetUncompressedSize returns the uncompressed payload size of any PRZM frame or PRZS stream in O(1) time.
+func GetUncompressedSize(src []byte) (int64, error) {
+	if len(src) < 4 {
+		return 0, ErrCorruptedFrame
+	}
+	magic := binary.LittleEndian.Uint32(src[0:4])
+	if magic == MagicPRZS {
+		if len(src) < StreamHeaderSize {
+			return 0, ErrCorruptedFrame
+		}
+		return int64(binary.LittleEndian.Uint64(src[5:13])), nil
+	}
+	sz, err := getFrameUncompressedSize(src)
+	if err != nil {
+		return 0, err
+	}
+	return int64(sz), nil
+}
+
+// getFrameUncompressedSize parses the uncompressed size from a chunk frame without allocations.
+func getFrameUncompressedSize(src []byte) (int, error) {
+	if len(src) < 4 {
+		return 0, ErrCorruptedFrame
+	}
+	magic := binary.LittleEndian.Uint32(src[0:4])
+	switch magic {
+	case MagicPRZM:
+		if len(src) < HeaderSize {
+			return 0, ErrCorruptedFrame
+		}
+		uSize := int(uint32(src[5]) | (uint32(src[6]) << 8) | (uint32(src[7]) << 16))
+		if uSize > MaxBlockSize {
+			return 0, ErrExceedsMaxBlock
+		}
+		return uSize, nil
+	case MagicPRZS:
+		if len(src) < StreamHeaderSize {
+			return 0, ErrCorruptedFrame
+		}
+		uSize := binary.LittleEndian.Uint64(src[5:13])
+		return int(uSize), nil
+	case ArchivalPNGMagic:
+		if len(src) < 12 {
+			return 0, ErrCorruptedFrame
+		}
+		return int(binary.LittleEndian.Uint32(src[4:8])), nil
+	case MobiusMagic, MargolusMagic, HeisenbergMagic, CellularSheafMagic:
+		if len(src) < 8 {
+			return 0, ErrCorruptedFrame
+		}
+		return int(binary.LittleEndian.Uint32(src[4:8])), nil
+	case SymplecticMagic, ARM64Magic, SheafMagic, MahlerMagic, IsoQuantMagic:
+		if len(src) < 12 {
+			return 0, ErrCorruptedFrame
+		}
+		return int(binary.LittleEndian.Uint32(src[8:12])), nil
+	case GCTRMagic:
+		if len(src) < 10 {
+			return 0, ErrCorruptedFrame
+		}
+		return int(binary.LittleEndian.Uint32(src[6:10])), nil
+	default:
+		// Versioned 3-byte ISA headers
+		if len(src) >= 8 && ((src[0] == pwsMagic0 && src[1] == pwsMagic1 && src[2] == pwsVer1) ||
+			(src[0] == vmMagic0 && src[1] == vmMagic1 && src[2] == vmVer1) ||
+			(src[0] == ggtcMagic0 && src[1] == ggtcMagic1 && src[2] == ggtcVer1)) {
+			return int(binary.LittleEndian.Uint32(src[4:8])), nil
+		}
+		return 0, ErrInvalidMagic
+	}
+}
+
 // Decompress decodes a PRZM-compressed byte slice back to original uncompressed bytes.
 func Decompress(src []byte) ([]byte, error) {
 	return DecompressTo(src, nil)
@@ -269,6 +341,58 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 
 	if len(src) >= 4 {
 		magic := binary.LittleEndian.Uint32(src[0:4])
+		if magic == MagicPRZS {
+			if len(src) < StreamHeaderSize {
+				return nil, ErrCorruptedFrame
+			}
+			totalUSize := binary.LittleEndian.Uint64(src[5:13])
+			chunkCount := binary.LittleEndian.Uint32(src[13:17])
+
+			if int64(totalUSize) < 0 || totalUSize > uint64(chunkCount)*uint64(MaxBlockSize) {
+				return nil, ErrCorruptedFrame
+			}
+
+			if dst == nil || cap(dst) < int(totalUSize)+64 {
+				dst = bufkit.AlignedBytes(int(totalUSize)+64, bufkit.CacheLineSize)
+			}
+			dst = dst[:totalUSize]
+
+			offset := StreamHeaderSize
+			dstPos := 0
+
+			for i := uint32(0); i < chunkCount; i++ {
+				if offset+4 > len(src) {
+					return nil, ErrCorruptedFrame
+				}
+				chunkCompSize := int(binary.LittleEndian.Uint32(src[offset : offset+4]))
+				offset += 4
+				if chunkCompSize <= 0 || offset+chunkCompSize > len(src) {
+					return nil, ErrCorruptedFrame
+				}
+				chunkSrc := src[offset : offset+chunkCompSize]
+				offset += chunkCompSize
+
+				chunkUSize, err := getFrameUncompressedSize(chunkSrc)
+				if err != nil {
+					return nil, err
+				}
+				if dstPos+chunkUSize > int(totalUSize) {
+					return nil, ErrCorruptedFrame
+				}
+
+				_, err = decompressWithDictTo(chunkSrc, dst[dstPos:dstPos+chunkUSize], customDict)
+				if err != nil {
+					return nil, err
+				}
+				dstPos += chunkUSize
+			}
+
+			if dstPos != int(totalUSize) {
+				return nil, ErrCorruptedFrame
+			}
+			return dst[:totalUSize], nil
+		}
+
 		if magic == ArchivalPNGMagic {
 			return unpackArchivalPNG(src, dst)
 		}

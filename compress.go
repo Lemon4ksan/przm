@@ -7,6 +7,9 @@ package przm
 import (
 	"encoding/binary"
 	"math/bits"
+	"runtime"
+	"sync"
+	"sync/atomic"
 
 	"github.com/lemon4ksan/foundation/bufkit"
 	"github.com/lemon4ksan/foundation/codec/filter/bcj"
@@ -385,16 +388,131 @@ type CompressOptions struct {
 	Dict               *Dictionary // Optional external dictionary
 	ArchivalMode       bool        // Explicit toggle for --mode=archival
 	StandardStreamOnly bool        // Ensure canonical PRZM stream format (MagicPRZM = 0x4D5A5250)
+	Threads            int         // 0 = auto (runtime.GOMAXPROCS(0)), 1 = single-threaded, >1 = explicit worker count
+	ChunkSize          int         // 0 = auto (default 2 MiB), >0 = explicit chunk uncompressed byte size
+}
+
+const DefaultChunkSize = 2 * 1024 * 1024 // 2 MiB
+
+func resolveConcurrencyOptions(opts CompressOptions) (threads int, chunkSize int) {
+	threads = opts.Threads
+	if threads <= 0 {
+		threads = runtime.GOMAXPROCS(0)
+	}
+	if threads < 1 {
+		threads = 1
+	}
+	chunkSize = opts.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = DefaultChunkSize
+	}
+	return threads, chunkSize
+}
+
+func shouldUseMultiChunk(srcLen int, opts CompressOptions) bool {
+	if opts.StandardStreamOnly {
+		return false
+	}
+	threads, chunkSize := resolveConcurrencyOptions(opts)
+	if srcLen > MaxBlockSize {
+		return true
+	}
+	if srcLen > chunkSize && threads > 1 {
+		return true
+	}
+	return false
+}
+
+func compressMultiChunk(src []byte, opts CompressOptions) ([]byte, error) {
+	threads, chunkSize := resolveConcurrencyOptions(opts)
+	if chunkSize > MaxBlockSize {
+		return nil, ErrExceedsMaxBlock
+	}
+
+	uSize := len(src)
+	chunkCount := (uSize + chunkSize - 1) / chunkSize
+	if chunkCount <= 0 {
+		chunkCount = 1
+	}
+
+	chunkOpts := opts
+	chunkOpts.Threads = 1
+	chunkOpts.ChunkSize = 0
+	chunkOpts.StandardStreamOnly = true
+
+	results := make([][]byte, chunkCount)
+
+	numWorkers := min(chunkCount, threads)
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
+	if numWorkers <= 1 {
+		for idx := 0; idx < chunkCount; idx++ {
+			start := idx * chunkSize
+			end := min(start+chunkSize, uSize)
+			comp, err := compressSingleFrame(src[start:end], chunkOpts)
+			if err != nil {
+				return nil, err
+			}
+			results[idx] = comp
+		}
+		return BuildStreamContainer(results, uint64(uSize)), nil
+	}
+
+	var nextChunk atomic.Int32
+	var firstErr atomic.Pointer[error]
+	var wg sync.WaitGroup
+
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				if firstErr.Load() != nil {
+					return
+				}
+				idx := int(nextChunk.Add(1) - 1)
+				if idx >= chunkCount {
+					return
+				}
+
+				start := idx * chunkSize
+				end := min(start+chunkSize, uSize)
+
+				comp, err := compressSingleFrame(src[start:end], chunkOpts)
+				if err != nil {
+					errCopy := err
+					firstErr.CompareAndSwap(nil, &errCopy)
+					return
+				}
+				results[idx] = comp
+			}
+		}()
+	}
+	wg.Wait()
+
+	if errPtr := firstErr.Load(); errPtr != nil {
+		return nil, *errPtr
+	}
+
+	return BuildStreamContainer(results, uint64(uSize)), nil
 }
 
 // CompressWithOptions encodes src using caller-defined options.
 func CompressWithOptions(src []byte, opts CompressOptions) ([]byte, error) {
-	return compressInternalWithOptions(src, opts)
+	if opts.ChunkSize > MaxBlockSize {
+		return nil, ErrExceedsMaxBlock
+	}
+	if shouldUseMultiChunk(len(src), opts) {
+		return compressMultiChunk(src, opts)
+	}
+	return compressSingleFrame(src, opts)
 }
 
 // CompressWithWindow encodes src using explicit level and windowLog.
 func CompressWithWindow(src []byte, level int, windowLog int) ([]byte, error) {
-	return CompressWithOptions(src, CompressOptions{Level: level, WindowLog: windowLog})
+	return CompressWithOptions(src, CompressOptions{Level: level, WindowLog: windowLog, StandardStreamOnly: true})
 }
 
 // Compress encodes src into PRZM format according to PRZM-SPEC-0.5.
@@ -406,7 +524,7 @@ func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, er
 	return CompressWithOptions(src, CompressOptions{Level: level, Dict: customDict})
 }
 
-func compressInternalWithOptions(src []byte, opts CompressOptions) ([]byte, error) {
+func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	level := opts.Level
 	if opts.ArchivalMode {
 		level = ModeArchival
@@ -607,11 +725,13 @@ func compressInternalWithOptions(src []byte, opts CompressOptions) ([]byte, erro
 		src = pad.transBuf
 		flags |= FlagBCJ
 
-		if splitSrc, count := splitX86(src, uSize, pad.splitBuf); count >= 8 {
-			src = splitSrc
-			uSize = len(splitSrc)
-			callCount = count
-			flags |= FlagBCJSplit
+		if !opts.StandardStreamOnly {
+			if splitSrc, count := splitX86(src, uSize, pad.splitBuf); count >= 8 {
+				src = splitSrc
+				uSize = len(splitSrc)
+				callCount = count
+				flags |= FlagBCJSplit
+			}
 		}
 	}
 

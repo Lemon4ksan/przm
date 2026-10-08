@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 // Mode identifiers for Entropy-Pack
@@ -100,33 +101,53 @@ func (h *CanonicalHuffmanTable) BuildFromLengths(lengths [256]uint8) bool {
 	return true
 }
 
-// HuffBitWriter collects variable-length bit codes.
+// HuffBitWriter collects variable-length bit codes into a pre-allocated buffer.
 type HuffBitWriter struct {
-	buf  []byte
-	bits uint64
-	n    int // number of bits currently in `bits`
+	buf   []byte // Pre-allocated destination buffer (capacity >= 32KB)
+	pos   int    // Current byte offset in buf
+	bits  uint64 // MSB-aligned bit accumulator
+	nBits int    // Count of unwritten bits in bits (0..31)
 }
 
+// Reset re-initializes the writer to write into the provided pre-allocated buffer.
+func (w *HuffBitWriter) Reset(buf []byte) {
+	w.buf = buf
+	w.pos = 0
+	w.bits = 0
+	w.nBits = 0
+}
+
+// Write emits a variable-length Huffman code (length <= 11) into the bitstream.
+// CRITICAL: Bitstream word emission is strictly BigEndian (MSB-first).
+// Because MaxHuffBits = 11 and w.nBits <= 31 initially, w.nBits + length <= 42.
+// Therefore, w.nBits >= 32 can be true at most ONCE per call: replace 'for' with 'if'.
 func (w *HuffBitWriter) Write(code uint16, length uint8) {
-	w.bits |= uint64(code) << (64 - w.n - int(length))
-	w.n += int(length)
-	for w.n >= 32 {
-		var b [4]byte
-		binary.BigEndian.PutUint32(b[:], uint32(w.bits>>32))
-		w.buf = append(w.buf, b[:]...)
+	w.bits |= uint64(code) << (64 - w.nBits - int(length))
+	w.nBits += int(length)
+	if w.nBits >= 32 {
+		binary.BigEndian.PutUint32(w.buf[w.pos:w.pos+4], uint32(w.bits>>32))
+		w.pos += 4
 		w.bits <<= 32
-		w.n -= 32
+		w.nBits -= 32
 	}
 }
 
+// Flush flushes any remaining bits (0..31) as big-endian bytes with zero-padding on the LSBs.
 func (w *HuffBitWriter) Flush() []byte {
-	for w.n > 0 {
-		w.buf = append(w.buf, byte(w.bits>>(64-8)))
+	for w.nBits > 0 {
+		w.buf[w.pos] = byte(w.bits >> 56)
+		w.pos++
 		w.bits <<= 8
-		w.n -= 8
+		w.nBits -= 8
 	}
-	w.n = 0
+	w.nBits = 0
+	w.buf = w.buf[:w.pos]
 	return w.buf
+}
+
+// Written returns the slice of bytes written so far.
+func (w *HuffBitWriter) Written() []byte {
+	return w.buf[:w.pos]
 }
 
 // HuffBitReader provides fast branchless bit extraction.
@@ -182,10 +203,38 @@ func (r *HuffBitReader) Consume(nbBits int) {
 // -----------------------------------------------------------------------------
 
 type huffNode struct {
-	sym    int16
-	weight int32
-	left   int16
-	right  int16
+	left  int16
+	right int16
+}
+
+type heapElem struct {
+	weight uint32
+	id     int16
+}
+
+func heapLess(a, b heapElem) bool {
+	return a.weight < b.weight || (a.weight == b.weight && a.id < b.id)
+}
+
+func heapSiftDown(h []heapElem, i int) {
+	n := len(h)
+	for {
+		smallest := i
+		left := 2*i + 1
+		right := 2*i + 2
+
+		if left < n && heapLess(h[left], h[smallest]) {
+			smallest = left
+		}
+		if right < n && heapLess(h[right], h[smallest]) {
+			smallest = right
+		}
+		if smallest == i {
+			break
+		}
+		h[i], h[smallest] = h[smallest], h[i]
+		i = smallest
+	}
 }
 
 // ComputeHuffmanLengths computes canonical bit-lengths bounded to MaxHuffBits (11).
@@ -195,105 +244,98 @@ func ComputeHuffmanLengths(src []byte) ([256]uint8, int) {
 		freqs[b]++
 	}
 
-	active := 0
-	for _, f := range freqs {
-		if f > 0 {
-			active++
+	var lengths [256]uint8
+
+	var nodes [512]huffNode
+	var heap [256]heapElem
+	var leafSym [256]uint8
+
+	numSymbols := 0
+	for s := 0; s < 256; s++ {
+		if freqs[s] > 0 {
+			id := int16(numSymbols)
+			leafSym[numSymbols] = uint8(s)
+			heap[numSymbols] = heapElem{weight: uint32(freqs[s]), id: id}
+			nodes[id] = huffNode{left: -1, right: -1}
+			numSymbols++
 		}
 	}
 
-	var lengths [256]uint8
-	if active == 0 {
+	if numSymbols == 0 {
 		return lengths, 0
 	}
-	if active == 1 {
-		for s, f := range freqs {
-			if f > 0 {
-				lengths[s] = 1
-				break
-			}
-		}
+	if numSymbols == 1 {
+		lengths[leafSym[0]] = 1
 		return lengths, 1
 	}
 
-	// Priority queue to build Huffman tree
-	nodes := make([]huffNode, 0, 512)
-	type heapElem struct {
-		id     int16
-		weight int32
+	// Floyd's O(N) in-place min-heap construction
+	for i := (numSymbols / 2) - 1; i >= 0; i-- {
+		heapSiftDown(heap[:numSymbols], i)
 	}
-	h := make([]heapElem, 0, active)
 
-	for s := 0; s < 256; s++ {
-		if freqs[s] > 0 {
-			id := int16(len(nodes))
-			nodes = append(nodes, huffNode{sym: int16(s), weight: freqs[s], left: -1, right: -1})
-			h = append(h, heapElem{id: id, weight: freqs[s]})
+	heapSize := numSymbols
+	nextID := int16(numSymbols)
+
+	for heapSize > 1 {
+		// Extract first minimum
+		e1 := heap[0]
+		heapSize--
+		heap[0] = heap[heapSize]
+		heapSiftDown(heap[:heapSize], 0)
+
+		// Extract second minimum
+		e2 := heap[0]
+
+		// Record merged node
+		nodes[nextID] = huffNode{left: e1.id, right: e2.id}
+
+		// Replace root with merged node and restore min-heap invariant
+		heap[0] = heapElem{weight: e1.weight + e2.weight, id: nextID}
+		heapSiftDown(heap[:heapSize], 0)
+
+		nextID++
+	}
+
+	rootID := heap[0].id
+	var depths [512]uint16
+
+	// Iterative linear depth propagation from rootID down to 0
+	for i := rootID; i >= 0; i-- {
+		d := depths[i]
+		l, r := nodes[i].left, nodes[i].right
+		if l >= 0 {
+			depths[l] = d + 1
+		}
+		if r >= 0 {
+			depths[r] = d + 1
 		}
 	}
 
-	popMin := func() heapElem {
-		minIdx := 0
-		for i := 1; i < len(h); i++ {
-			if h[i].weight < h[minIdx].weight {
-				minIdx = i
-			}
+	// Compute leaf lengths and initial Kraft-McMillan sum
+	kraftSum := 0
+	for i := 0; i < numSymbols; i++ {
+		s := leafSym[i]
+		l := uint8(depths[i])
+		if l > MaxHuffBits {
+			l = MaxHuffBits
 		}
-		res := h[minIdx]
-		h = append(h[:minIdx], h[minIdx+1:]...)
-		return res
+		if l == 0 {
+			l = 1
+		}
+		lengths[s] = l
+		kraftSum += 1 << (MaxHuffBits - l)
 	}
 
-	for len(h) > 1 {
-		e1 := popMin()
-		e2 := popMin()
-		id := int16(len(nodes))
-		w := e1.weight + e2.weight
-		nodes = append(nodes, huffNode{sym: -1, weight: w, left: e1.id, right: e2.id})
-		h = append(h, heapElem{id: id, weight: w})
-	}
-
-	root := h[0].id
-	var walk func(id int16, depth uint8)
-	walk = func(id int16, depth uint8) {
-		if id < 0 {
-			return
-		}
-		node := &nodes[id]
-		if node.sym >= 0 {
-			l := depth
-			if l > MaxHuffBits {
-				l = MaxHuffBits
-			}
-			if l == 0 {
-				l = 1
-			}
-			lengths[node.sym] = l
-			return
-		}
-		walk(node.left, depth+1)
-		walk(node.right, depth+1)
-	}
-	walk(root, 0)
-
-	// Enforce Kraft-McMillan inequality: sum 2^(MaxHuffBits - l) <= HuffTableSize (2048)
-	kraftSum := func() int {
-		sum := 0
-		for s := 0; s < 256; s++ {
-			if lengths[s] > 0 {
-				sum += 1 << (MaxHuffBits - lengths[s])
-			}
-		}
-		return sum
-	}
-
-	for kraftSum() > HuffTableSize {
+	// Incremental Kraft-McMillan inequality enforcement
+	for kraftSum > HuffTableSize {
 		bestSym := -1
-		minW := int32(1<<30 - 1)
-		for s := 0; s < 256; s++ {
-			if lengths[s] > 0 && lengths[s] < MaxHuffBits {
-				if freqs[s] < minW {
-					minW = freqs[s]
+		minW := uint32(0xFFFFFFFF)
+		for i := 0; i < numSymbols; i++ {
+			s := int(leafSym[i])
+			if lengths[s] < MaxHuffBits {
+				if uint32(freqs[s]) < minW {
+					minW = uint32(freqs[s])
 					bestSym = s
 				}
 			}
@@ -301,10 +343,20 @@ func ComputeHuffmanLengths(src []byte) ([256]uint8, int) {
 		if bestSym < 0 {
 			break
 		}
+		kraftSum -= 1 << (MaxHuffBits - lengths[bestSym] - 1)
 		lengths[bestSym]++
 	}
 
-	return lengths, active
+	return lengths, numSymbols
+}
+
+// Pre-allocated scratchpad pool for 4-stream interleaved Huffman encoding.
+type huffStreamScratchpad struct {
+	streams [4][32768 + 64]byte
+}
+
+var huffScratchPool = sync.Pool{
+	New: func() any { return new(huffStreamScratchpad) },
 }
 
 // EncodeHuffman4X packs a byte stream into 4 independent interleaved bit-streams.
@@ -336,12 +388,15 @@ func EncodeHuffman4X(src []byte) ([]byte, error) {
 		code = (code + uint16(blCount[b-1])) << 1
 		nextCode[b] = code
 	}
-	var codes [256]uint16
+
+	// Table fusion: pack (code << 8) | length for branchless single-lookup symbol encoding
+	var fused [256]uint32
 	for s := 0; s < 256; s++ {
 		l := lengths[s]
 		if l > 0 {
-			codes[s] = nextCode[l]
+			c := nextCode[l]
 			nextCode[l]++
+			fused[s] = (uint32(c) << 8) | uint32(l)
 		}
 	}
 
@@ -360,47 +415,55 @@ func EncodeHuffman4X(src []byte) ([]byte, error) {
 		src[c3:c4],
 	}
 
+	pad := huffScratchPool.Get().(*huffStreamScratchpad)
+	maxChunkBytes := ((chunkSize*MaxHuffBits + 31) / 8) + 8
+
 	var writers [4]HuffBitWriter
 	for i := 0; i < 4; i++ {
+		if maxChunkBytes <= len(pad.streams[i]) {
+			writers[i].Reset(pad.streams[i][:])
+		} else {
+			writers[i].Reset(make([]byte, maxChunkBytes))
+		}
 		for _, sym := range chunks[i] {
-			writers[i].Write(codes[sym], lengths[sym])
+			entry := fused[sym]
+			writers[i].Write(uint16(entry>>8), uint8(entry))
 		}
 		writers[i].Flush()
 	}
 
-	// Format layout:
-	// Byte 0: ModeHuffman4X
-	// Bytes 1..4: OrigLen (uint32)
-	// Bytes 5..132: Compact 256-symbol lengths (4 bits each = 128 bytes)
-	// Bytes 133..148: Stream sizes (4 * uint32 = 16 bytes for streams 0, 1, 2, 3)
-	// Bytes 149+: Stream 0, Stream 1, Stream 2, Stream 3 payloads
-	headerSize := HeaderSizeHuffman
-	totalSize := headerSize + len(writers[0].buf) + len(writers[1].buf) + len(writers[2].buf) + len(writers[3].buf)
+	s0 := writers[0].Written()
+	s1 := writers[1].Written()
+	s2 := writers[2].Written()
+	s3 := writers[3].Written()
 
-	out := make([]byte, 0, totalSize)
-	out = append(out, ModeHuffman4X)
-	var lenBuf [4]byte
-	binary.LittleEndian.PutUint32(lenBuf[:], uint32(n))
-	out = append(out, lenBuf[:]...)
+	totalSize := HeaderSizeHuffman + len(s0) + len(s1) + len(s2) + len(s3)
+	out := make([]byte, totalSize)
+	out[0] = ModeHuffman4X
+	binary.LittleEndian.PutUint32(out[1:5], uint32(n))
 
 	// Pack 256 lengths into 128 bytes (4 bits each, values 0..11)
 	for i := 0; i < 256; i += 2 {
-		b := (lengths[i] & 0x0F) | ((lengths[i+1] & 0x0F) << 4)
-		out = append(out, b)
+		out[5+i/2] = (lengths[i] & 0x0F) | ((lengths[i+1] & 0x0F) << 4)
 	}
 
 	// Write 4 stream lengths
-	var szBuf [4]byte
-	for i := 0; i < 4; i++ {
-		binary.LittleEndian.PutUint32(szBuf[:], uint32(len(writers[i].buf)))
-		out = append(out, szBuf[:]...)
-	}
+	binary.LittleEndian.PutUint32(out[133:137], uint32(len(s0)))
+	binary.LittleEndian.PutUint32(out[137:141], uint32(len(s1)))
+	binary.LittleEndian.PutUint32(out[141:145], uint32(len(s2)))
+	binary.LittleEndian.PutUint32(out[145:149], uint32(len(s3)))
 
-	// Append payloads
-	for i := 0; i < 4; i++ {
-		out = append(out, writers[i].buf...)
-	}
+	// Direct copy payloads
+	pos := HeaderSizeHuffman
+	copy(out[pos:], s0)
+	pos += len(s0)
+	copy(out[pos:], s1)
+	pos += len(s1)
+	copy(out[pos:], s2)
+	pos += len(s2)
+	copy(out[pos:], s3)
 
+	huffScratchPool.Put(pad)
 	return out, nil
 }
 

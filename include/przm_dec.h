@@ -35,6 +35,9 @@ typedef int przm_status_t;
 
 /* Magic 32-bit signatures (Little-Endian) */
 #define PRZM_MAGIC_STANDARD       0x4D5A5250 /* 'P','R','Z','M' */
+#define PRZM_MAGIC_STREAM         0x535A5250 /* 'P','R','Z','S' (Multi-Chunk Stream) */
+#define PRZM_STREAM_HEADER_SIZE   17
+#define PRZM_STREAM_FLAG_INDEPENDENT 0x01
 #define PRZM_MAGIC_SYMPLECTIC     0x53594D50 /* 'S','Y','M','P' */
 #define PRZM_MAGIC_MAHLER         0x4D41484C /* 'M','A','H','L' */
 #define PRZM_MAGIC_SHEAF          0x53484546 /* 'S','H','E','F' */

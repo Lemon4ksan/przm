@@ -21,7 +21,7 @@ func TestTier2_F01_RepeatRegisters_Boundaries(t *testing.T) {
 		data []byte
 	}{
 		{"ZeroRepeats_PureLiterals", []byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")},
-		{"SingleRepeatMatch", append(bytes.Repeat([]byte("PATTERN_X_"), 2))},
+		{"SingleRepeatMatch", bytes.Repeat([]byte("PATTERN_X_"), 2)},
 		{"MaximalConsecutiveRepeats", bytes.Repeat([]byte("REP_"), 500)},
 		{"AlternatingTwoOffsets", generateRepeatOffsetData(2048, []int{16, 32})},
 		{"CyclicThreeOffsets", generateRepeatOffsetData(4096, []int{8, 24, 48})},
@@ -89,7 +89,7 @@ func TestTier2_F04_WindowLog_Boundaries(t *testing.T) {
 			if tc.name == "MaxBlockSize_LimitCheck" {
 				// Assert error returned on exceeding 16 MiB max block limit
 				overflowData := make([]byte, tc.size)
-				_, err := przm.Compress(overflowData, 1)
+				_, err := przm.CompressWithOptions(overflowData, przm.CompressOptions{Level: 1, StandardStreamOnly: true})
 				if err == nil {
 					t.Fatalf("expected ErrExceedsMaxBlock, got nil")
 				}

@@ -6,7 +6,6 @@ package przm
 
 import (
 	"encoding/binary"
-	"math"
 
 	"github.com/lemon4ksan/foundation/generic"
 )
@@ -14,19 +13,22 @@ import (
 const (
 	// BlockSize64K defines the maximum node boundary for the optimal DP forward graph.
 	BlockSize64K = 65536
+
+	maxSubLenCandidates = 16
 )
 
 // dpNode stores the dynamic programming node state for the forward DAG parser.
-// Sized at exactly 28 bytes for high cache-locality during relaxation.
+// Sized at exactly 32 bytes for cache alignment (power of 2) during relaxation.
 type dpNode struct {
-	cost    int32 // Scaled by CostScale (16 units per byte)
-	from    int32 // Predecessor position for backward path tracing
-	dist    int32 // Match distance (0 for literal transition)
-	repCode int8  // -1 for regular match / literal; 0, 1, 2 for rep0, rep1, rep2
+	cost    int32  // Scaled by CostScale (16 units per byte)
+	from    int32  // Predecessor position for backward path tracing
+	dist    int32  // Match distance (0 for literal transition)
+	repCode int8   // -1 for regular match / literal; 0, 1, 2 for rep0, rep1, rep2
 	_       [3]byte
-	rep0    int32 // Snapshot of rep0 hardware repeat register at this node
-	rep1    int32 // Snapshot of rep1 hardware repeat register at this node
-	rep2    int32 // Snapshot of rep2 hardware repeat register at this node
+	rep0    int32  // Snapshot of rep0 hardware repeat register at this node
+	rep1    int32  // Snapshot of rep1 hardware repeat register at this node
+	rep2    int32  // Snapshot of rep2 hardware repeat register at this node
+	gen     uint32 // Epoch Generation Counter
 }
 
 // dpCandidate represents an evaluated match candidate prior to Pareto pruning.
@@ -41,6 +43,7 @@ type dpScratchpad struct {
 	dp     [BlockSize64K + 1]dpNode
 	table3 [65536]int32
 	path   []int32
+	curGen uint32
 }
 
 var dpScratchPool = generic.NewPool(func() *dpScratchpad {
@@ -72,51 +75,64 @@ func calcOffCostPRZM(d int) int {
 	return getVarintBracket(d) + 1
 }
 
+var varintCost = [4]int32{27, 40, 53, 66} // 14 + 13*(bracket+1) for brackets 0..3
+
 // calcEdgeCostPRZM calculates the fixed-point bit-cost (scaled by 16) for a match edge.
 // Repeat matches incur 0 offset serialization bytes in Section 3.
 func calcEdgeCostPRZM(mLen, dist, repCode int) int32 {
+	cost := int32(28)
 	if repCode >= 0 {
 		if mLen <= 7 {
 			return 14
 		}
-		cost := int32(28)
-		if mLen >= 19 {
-			cost += 14 * int32(uvarintLen(uint64(mLen-19)))
-		}
-		return cost
+	} else {
+		cost = varintCost[getVarintBracket(dist)]
 	}
-	cost := int32(14 + 13*calcOffCostPRZM(dist))
 	if mLen >= 19 {
 		cost += 14 * int32(uvarintLen(uint64(mLen-19)))
 	}
 	return cost
 }
 
-// generateSubLengths populates out with sub-lengths S(L) = {4, 5, 6, 8, 12, 16, min(L, 18), L}.
-// Enforces mLen >= 4 on all sub-lengths and eliminates duplicate entries.
-func generateSubLengths(L int, out []int) []int {
-	out = out[:0]
+var subLenLUT = [19][8]uint8{
+	4:  {4},
+	5:  {4, 5},
+	6:  {4, 5, 6},
+	7:  {4, 5, 6, 7},
+	8:  {4, 5, 6, 8},
+	9:  {4, 5, 6, 8, 9},
+	10: {4, 5, 6, 8, 10},
+	11: {4, 5, 6, 8, 11},
+	12: {4, 5, 6, 8, 12},
+	13: {4, 5, 6, 8, 12, 13},
+	14: {4, 5, 6, 8, 12, 14},
+	15: {4, 5, 6, 8, 12, 15},
+	16: {4, 5, 6, 8, 12, 16},
+	17: {4, 5, 6, 8, 12, 16, 17},
+	18: {4, 5, 6, 8, 12, 16, 18},
+}
+
+var subLenCounts = [19]uint8{
+	4: 1, 5: 2, 6: 3, 7: 4, 8: 4, 9: 5, 10: 5, 11: 5, 12: 5,
+	13: 6, 14: 6, 15: 6, 16: 6, 17: 7, 18: 7,
+}
+
+// generateSubLengths writes sub-lengths S(L) = {4, 5, 6, 8, 12, 16, min(L, 18), L}
+// into out without dynamic slice appends or heap allocations.
+// Returns the number of sub-lengths written (at most 8).
+func generateSubLengths(L int, out *[maxSubLenCandidates]int) int {
 	if L < 4 {
-		return out
+		return 0
 	}
-	fixed := [...]int{4, 5, 6, 8, 12, 16}
-	for _, s := range fixed {
-		if s <= L {
-			out = append(out, s)
-		}
+	if L > 18 {
+		*out = [maxSubLenCandidates]int{4, 5, 6, 8, 12, 16, 18, L}
+		return 8
 	}
-	lim18 := min(L, 18)
-	if lim18 >= 4 {
-		if len(out) == 0 || out[len(out)-1] != lim18 {
-			out = append(out, lim18)
-		}
+	n := int(subLenCounts[L])
+	for j := 0; j < n; j++ {
+		out[j] = int(subLenLUT[L][j])
 	}
-	if L >= 4 {
-		if len(out) == 0 || out[len(out)-1] != L {
-			out = append(out, L)
-		}
-	}
-	return out
+	return n
 }
 
 func flushLiteralsPRZM(cmdBuf, litBuf *[]byte, lits []byte) {
@@ -151,23 +167,30 @@ func writeOffsetPRZM(offsetBuf *[]byte, d int) {
 	}
 }
 
+//go:noinline
+func insertHashLarge(src []byte, p, uSize int, windowLog int, sp1M *HenselScratchpad1M, sp8M *HenselScratchpad8M) {
+	switch windowLog {
+	case WindowLog8M:
+		if sp8M != nil {
+			HenselInsert8M(sp8M, p, src, uSize)
+		}
+	case WindowLog1M:
+		if sp1M != nil {
+			HenselInsert1M(sp1M, p, src, uSize)
+		}
+	}
+}
+
 func insertHashPRZM(src []byte, p, uSize int, pad *scratchpad, windowLog int, sp1M *HenselScratchpad1M, sp8M *HenselScratchpad8M) {
 	if p+4 <= uSize {
 		h := (binary.LittleEndian.Uint32(src[p:p+4]) * 0x1E35A7BD) >> 16
 		h &= hashTableMask
 		pad.head[h*2+1] = pad.head[h*2]
 		pad.head[h*2] = int32(p + 1)
-		switch windowLog {
-		case WindowLog8M:
-			if sp8M != nil {
-				HenselInsert8M(sp8M, p, src, uSize)
-			}
-		case WindowLog1M:
-			if sp1M != nil {
-				HenselInsert1M(sp1M, p, src, uSize)
-			}
-		default:
+		if windowLog <= WindowLog64K {
 			HenselInsert(&pad.hensel, p, src, uSize)
+		} else {
+			insertHashLarge(src, p, uSize, windowLog, sp1M, sp8M)
 		}
 	}
 }
@@ -187,8 +210,20 @@ func compressBlockOptimal(
 	if bSize <= 0 {
 		return
 	}
+	if bSize > BlockSize64K {
+		return
+	}
 
-	dpPad.dp[0] = dpNode{
+	dp := dpPad.dp[:BlockSize64K+1]
+	_ = dp[BlockSize64K]
+
+	dpPad.curGen++
+	if dpPad.curGen == 0 {
+		clear(dpPad.dp[:])
+		dpPad.curGen = 1
+	}
+
+	dp[0] = dpNode{
 		cost:    0,
 		from:    0,
 		dist:    0,
@@ -196,16 +231,14 @@ func compressBlockOptimal(
 		rep0:    int32(*rep0),
 		rep1:    int32(*rep1),
 		rep2:    int32(*rep2),
-	}
-	for i := 1; i <= bSize; i++ {
-		dpPad.dp[i].cost = math.MaxInt32
+		gen:     dpPad.curGen,
 	}
 
-	var subLenBuf [8]int
+	var subLenBuf [maxSubLenCandidates]int
 
 	for i := 0; i < bSize; i++ {
 		pos := bStart + i
-		node := &dpPad.dp[i]
+		node := &dp[i]
 		curCost := node.cost
 		r0 := int(node.rep0)
 		r1 := int(node.rep1)
@@ -213,8 +246,9 @@ func compressBlockOptimal(
 
 		// 1. Literal transition i -> i+1 (cost += 16)
 		litCost := curCost + 16
-		if litCost < dpPad.dp[i+1].cost {
-			dpPad.dp[i+1] = dpNode{
+		targetLit := &dp[i+1]
+		if targetLit.gen != dpPad.curGen || litCost < targetLit.cost {
+			*targetLit = dpNode{
 				cost:    litCost,
 				from:    int32(i),
 				dist:    0,
@@ -222,6 +256,7 @@ func compressBlockOptimal(
 				rep0:    int32(r0),
 				rep1:    int32(r1),
 				rep2:    int32(r2),
+				gen:     dpPad.curGen,
 			}
 		}
 
@@ -356,23 +391,26 @@ func compressBlockOptimal(
 		}
 
 		// 3. Forward Relaxation over sub-lengths S(L)
-		for c := 0; c < candCount; c++ {
-			cand := &candidates[c]
+		cands := candidates[:candCount]
+		for c := 0; c < len(cands); c++ {
+			cand := &cands[c]
 			candL := min(cand.length, maxL)
 			if candL < 4 {
 				continue
 			}
-			subLens := generateSubLengths(candL, subLenBuf[:0])
-			for _, subLen := range subLens {
+			nSubLens := generateSubLengths(candL, &subLenBuf)
+			for sIdx := 0; sIdx < nSubLens; sIdx++ {
+				subLen := subLenBuf[sIdx]
 				next := i + subLen
 				edgeCost := calcEdgeCostPRZM(subLen, cand.dist, cand.repCode)
 				newCost := curCost + edgeCost
-				if newCost < dpPad.dp[next].cost || (newCost == dpPad.dp[next].cost && cand.repCode >= 0 && dpPad.dp[next].repCode < 0) {
-					target := &dpPad.dp[next]
+				target := &dp[next]
+				if target.gen != dpPad.curGen || newCost < target.cost || (newCost == target.cost && cand.repCode >= 0 && target.repCode < 0) {
 					target.cost = newCost
 					target.from = int32(i)
 					target.dist = int32(cand.dist)
 					target.repCode = int8(cand.repCode)
+					target.gen = dpPad.curGen
 					switch cand.repCode {
 					case 0:
 						target.rep0 = int32(r0)
@@ -403,7 +441,7 @@ func compressBlockOptimal(
 	curr := int32(bSize)
 	for curr > 0 {
 		path = append(path, curr)
-		curr = dpPad.dp[curr].from
+		curr = dp[curr].from
 	}
 
 	for left, right := 0, len(path)-1; left < right; left, right = left+1, right-1 {
@@ -415,8 +453,8 @@ func compressBlockOptimal(
 	from := int32(0)
 
 	for _, to := range path {
-		dist := int(dpPad.dp[to].dist)
-		repCode := int(dpPad.dp[to].repCode)
+		dist := int(dp[to].dist)
+		repCode := int(dp[to].repCode)
 		step := int(to - from)
 
 		if dist == 0 {

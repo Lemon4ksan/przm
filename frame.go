@@ -14,10 +14,18 @@ import (
 // Frame constants and magic signatures.
 const (
 	MagicPRZM      uint32 = 0x4D5A5250 // ASCII 'P', 'R', 'Z', 'M' (Little-Endian)
+	MagicPRZS      uint32 = 0x535A5250 // ASCII 'P', 'R', 'Z', 'S' (Little-Endian)
 	HeaderSize     int    = 8
+	StreamHeaderSize int  = 17
 	MaxBlockSize   int    = 16 * 1024 * 1024 // 16 MiB max frame size
 	DedupBlockSize        = 65536           // 64 KiB block granularity for cross-block deduplication
 )
+
+// Stream configuration bitmasks.
+const (
+	StreamFlagIndependentChunks uint8 = 0x01 // Bit 0: Independent Chunks
+)
+
 
 // Frame configuration bitmasks (PRZM-SPEC-0.5 Section 3.2).
 const (
@@ -218,3 +226,56 @@ func ParseFrameHeader(src []byte) (FrameHeader, error) {
 
 	return hdr, nil
 }
+
+// StreamHeader holds parsed PRZS multi-chunk stream metadata.
+type StreamHeader struct {
+	Flags                 uint8
+	TotalUncompressedSize uint64
+	ChunkCount            uint32
+}
+
+// ParseStreamHeader parses the 17-byte PRZS stream container header.
+func ParseStreamHeader(src []byte) (StreamHeader, error) {
+	if len(src) < StreamHeaderSize {
+		return StreamHeader{}, fmt.Errorf("%w: stream header smaller than %d bytes (%d bytes)", ErrCorruptedFrame, StreamHeaderSize, len(src))
+	}
+
+	magic := binary.LittleEndian.Uint32(src[0:4])
+	if magic != MagicPRZS {
+		return StreamHeader{}, fmt.Errorf("%w: expected 0x%08X (PRZS), got 0x%08X", ErrInvalidMagic, MagicPRZS, magic)
+	}
+
+	flags := src[4]
+	totalUSize := binary.LittleEndian.Uint64(src[5:13])
+	chunkCount := binary.LittleEndian.Uint32(src[13:17])
+
+	return StreamHeader{
+		Flags:                 flags,
+		TotalUncompressedSize: totalUSize,
+		ChunkCount:            chunkCount,
+	}, nil
+}
+
+// BuildStreamContainer packages multiple compressed chunks into a PRZS stream container.
+func BuildStreamContainer(chunks [][]byte, totalUSize uint64) []byte {
+	totalSize := StreamHeaderSize
+	for _, chunk := range chunks {
+		totalSize += 4 + len(chunk)
+	}
+
+	buf := make([]byte, totalSize)
+	binary.LittleEndian.PutUint32(buf[0:4], MagicPRZS)
+	buf[4] = StreamFlagIndependentChunks
+	binary.LittleEndian.PutUint64(buf[5:13], totalUSize)
+	binary.LittleEndian.PutUint32(buf[13:17], uint32(len(chunks)))
+
+	offset := StreamHeaderSize
+	for _, chunk := range chunks {
+		binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(chunk)))
+		copy(buf[offset+4:offset+4+len(chunk)], chunk)
+		offset += 4 + len(chunk)
+	}
+
+	return buf
+}
+

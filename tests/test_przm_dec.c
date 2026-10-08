@@ -36,6 +36,11 @@ static inline void write_u32_le(uint8_t* p, uint32_t v) {
     p[3] = (uint8_t)(v >> 24);
 }
 
+static inline void write_u64_le(uint8_t* p, uint64_t v) {
+    write_u32_le(p, (uint32_t)v);
+    write_u32_le(p + 4, (uint32_t)(v >> 32));
+}
+
 /* 1. Test Uncompressed Size Inspection */
 static void test_get_uncompressed_size(void) {
     uint8_t frame_std[8] = {
@@ -119,6 +124,14 @@ static void test_get_uncompressed_size(void) {
     write_u32_le(frame_png + 8, 24);
     sz = przm_get_uncompressed_size(frame_png, sizeof(frame_png));
     TEST_ASSERT(sz == 16384, "Archival PNG size mismatch");
+
+    uint8_t frame_stream[17];
+    write_u32_le(frame_stream, PRZM_MAGIC_STREAM);
+    frame_stream[4] = PRZM_STREAM_FLAG_INDEPENDENT;
+    write_u64_le(frame_stream + 5, 1048576);
+    write_u32_le(frame_stream + 13, 4);
+    sz = przm_get_uncompressed_size(frame_stream, sizeof(frame_stream));
+    TEST_ASSERT(sz == 1048576, "Stream container size mismatch");
 
     TEST_PASS("przm_get_uncompressed_size");
 }
@@ -1408,6 +1421,178 @@ static void test_archival_png(void) {
     TEST_PASS("archival_png");
 }
 
+/* Helper to construct a synthetic LZ frame repeating a byte 'ch' 5 times */
+static size_t make_lz5_frame(uint8_t* out, uint8_t ch) {
+    size_t fptr = 0;
+    memcpy(out + fptr, "PRZM", 4); fptr += 4;
+    out[fptr++] = 0x00; /* Flags */
+    out[fptr++] = 5;    /* Uncompressed size = 5 */
+    out[fptr++] = 0;
+    out[fptr++] = 0;
+
+    /* Section Directory: CmdStreamSize = 7, OffsetStreamSize = 0 */
+    out[fptr++] = 7; out[fptr++] = 0;
+    out[fptr++] = 0; out[fptr++] = 0;
+
+    /* Section 1: 8 zeroes */
+    memset(out + fptr, 0, 8); fptr += 8;
+
+    /* Section 2: Command stream (ModeFlat: mode 0, orig_len 2) */
+    out[fptr++] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(out + fptr, 2); fptr += 4;
+    out[fptr++] = 0xF3; /* 1 literal */
+    out[fptr++] = 0x00; /* Fused Repeat: L=0, M=4, k=0 (d=1) */
+
+    /* Section 4: Literals */
+    out[fptr++] = ch;
+    return fptr;
+}
+
+/* Helper to construct an uncompressed PRZM frame */
+static size_t make_raw_frame(uint8_t* out, const uint8_t* data, size_t len) {
+    memcpy(out, "PRZM", 4);
+    out[4] = PRZM_FLAG_UNCOMPRESSED;
+    out[5] = (uint8_t)len;
+    out[6] = (uint8_t)(len >> 8);
+    out[7] = (uint8_t)(len >> 16);
+    memcpy(out + 8, data, len);
+    return 8 + len;
+}
+
+/* 19. Test Multi-Chunk Stream ('PRZS') Container Decompression */
+static void test_stream_multi_chunk(void) {
+    /* 1. Multi-Chunk RAW (2 chunks: 32 bytes 'X' + 48 bytes 'Y') */
+    uint8_t raw0_data[32];
+    memset(raw0_data, 'X', sizeof(raw0_data));
+    uint8_t c0[64];
+    size_t c0_len = make_raw_frame(c0, raw0_data, sizeof(raw0_data));
+
+    uint8_t raw1_data[48];
+    memset(raw1_data, 'Y', sizeof(raw1_data));
+    uint8_t c1[64];
+    size_t c1_len = make_raw_frame(c1, raw1_data, sizeof(raw1_data));
+
+    uint8_t stream_raw[256];
+    size_t s_pos = 0;
+    write_u32_le(stream_raw + s_pos, PRZM_MAGIC_STREAM); s_pos += 4;
+    stream_raw[s_pos++] = PRZM_STREAM_FLAG_INDEPENDENT;
+    write_u64_le(stream_raw + s_pos, 80); s_pos += 8; /* Total: 32 + 48 = 80 */
+    write_u32_le(stream_raw + s_pos, 2); s_pos += 4;  /* 2 chunks */
+
+    /* Chunk 0 */
+    write_u32_le(stream_raw + s_pos, (uint32_t)c0_len); s_pos += 4;
+    memcpy(stream_raw + s_pos, c0, c0_len); s_pos += c0_len;
+
+    /* Chunk 1 */
+    write_u32_le(stream_raw + s_pos, (uint32_t)c1_len); s_pos += 4;
+    memcpy(stream_raw + s_pos, c1, c1_len); s_pos += c1_len;
+
+    uint8_t dst[256];
+    int64_t u_sz = przm_get_uncompressed_size(stream_raw, s_pos);
+    TEST_ASSERT(u_sz == 80, "PRZS raw uncompressed size mismatch");
+
+    int64_t dec_raw = przm_decompress(stream_raw, s_pos, dst, sizeof(dst));
+    TEST_ASSERT(dec_raw == 80, "PRZS raw decompressed size mismatch");
+    TEST_ASSERT(memcmp(dst, raw0_data, 32) == 0, "PRZS chunk 0 mismatch");
+    TEST_ASSERT(memcmp(dst + 32, raw1_data, 48) == 0, "PRZS chunk 1 mismatch");
+
+    /* 2. Multi-Chunk LZ (3 chunks: 5 'A' + 5 'B' + 5 'C' = 15 bytes) */
+    uint8_t lz0[64], lz1[64], lz2[64];
+    size_t lz0_len = make_lz5_frame(lz0, 'A');
+    size_t lz1_len = make_lz5_frame(lz1, 'B');
+    size_t lz2_len = make_lz5_frame(lz2, 'C');
+
+    uint8_t stream_lz[256];
+    s_pos = 0;
+    write_u32_le(stream_lz + s_pos, PRZM_MAGIC_STREAM); s_pos += 4;
+    stream_lz[s_pos++] = PRZM_STREAM_FLAG_INDEPENDENT;
+    write_u64_le(stream_lz + s_pos, 15); s_pos += 8; /* Total: 5 + 5 + 5 = 15 */
+    write_u32_le(stream_lz + s_pos, 3); s_pos += 4;  /* 3 chunks */
+
+    write_u32_le(stream_lz + s_pos, (uint32_t)lz0_len); s_pos += 4;
+    memcpy(stream_lz + s_pos, lz0, lz0_len); s_pos += lz0_len;
+
+    write_u32_le(stream_lz + s_pos, (uint32_t)lz1_len); s_pos += 4;
+    memcpy(stream_lz + s_pos, lz1, lz1_len); s_pos += lz1_len;
+
+    write_u32_le(stream_lz + s_pos, (uint32_t)lz2_len); s_pos += 4;
+    memcpy(stream_lz + s_pos, lz2, lz2_len); s_pos += lz2_len;
+
+    int64_t dec_lz = przm_decompress(stream_lz, s_pos, dst, sizeof(dst));
+    TEST_ASSERT(dec_lz == 15, "PRZS LZ decompressed size mismatch");
+    TEST_ASSERT(memcmp(dst, "AAAAABBBBBCCCCC", 15) == 0, "PRZS LZ content mismatch");
+
+    /* 3. Single Chunk (1 chunk) PRZS */
+    uint8_t stream_1c[128];
+    s_pos = 0;
+    write_u32_le(stream_1c + s_pos, PRZM_MAGIC_STREAM); s_pos += 4;
+    stream_1c[s_pos++] = PRZM_STREAM_FLAG_INDEPENDENT;
+    write_u64_le(stream_1c + s_pos, 5); s_pos += 8;
+    write_u32_le(stream_1c + s_pos, 1); s_pos += 4;
+    write_u32_le(stream_1c + s_pos, (uint32_t)lz0_len); s_pos += 4;
+    memcpy(stream_1c + s_pos, lz0, lz0_len); s_pos += lz0_len;
+
+    int64_t dec_1c = przm_decompress(stream_1c, s_pos, dst, sizeof(dst));
+    TEST_ASSERT(dec_1c == 5, "PRZS 1-chunk decompressed size mismatch");
+    TEST_ASSERT(memcmp(dst, "AAAAA", 5) == 0, "PRZS 1-chunk content mismatch");
+
+    /* 4. N Chunks (8 chunks) */
+    uint8_t stream_8c[1024];
+    s_pos = 0;
+    write_u32_le(stream_8c + s_pos, PRZM_MAGIC_STREAM); s_pos += 4;
+    stream_8c[s_pos++] = PRZM_STREAM_FLAG_INDEPENDENT;
+    write_u64_le(stream_8c + s_pos, 40); s_pos += 8; /* 8 * 5 = 40 */
+    write_u32_le(stream_8c + s_pos, 8); s_pos += 4;
+
+    char expected_8c[41];
+    for (int i = 0; i < 8; i++) {
+        uint8_t ch = (uint8_t)('0' + i);
+        uint8_t lzc[64];
+        size_t lzc_len = make_lz5_frame(lzc, ch);
+        write_u32_le(stream_8c + s_pos, (uint32_t)lzc_len); s_pos += 4;
+        memcpy(stream_8c + s_pos, lzc, lzc_len); s_pos += lzc_len;
+        for (int k = 0; k < 5; k++) expected_8c[i * 5 + k] = (char)ch;
+    }
+    expected_8c[40] = '\0';
+
+    int64_t dec_8c = przm_decompress(stream_8c, s_pos, dst, sizeof(dst));
+    TEST_ASSERT(dec_8c == 40, "PRZS 8-chunk decompressed size mismatch");
+    TEST_ASSERT(memcmp(dst, expected_8c, 40) == 0, "PRZS 8-chunk content mismatch");
+
+    /* 5. Error & Truncation Cases */
+    /* A. Truncated stream header (< 17 bytes) */
+    int64_t err_thdr = przm_decompress(stream_raw, 16, dst, sizeof(dst));
+    TEST_ASSERT(err_thdr < 0, "Truncated stream header must fail");
+
+    /* B. Buffer too small (dst_cap < total_u_size + PRZM_SAFETY_PADDING) */
+    int64_t err_buf = przm_decompress(stream_raw, s_pos, dst, 80 + PRZM_SAFETY_PADDING - 1);
+    TEST_ASSERT(err_buf < 0, "Buffer too small must fail");
+
+    /* C. Truncated chunk length prefix */
+    int64_t err_tchunk_pfx = przm_decompress(stream_raw, 19, dst, sizeof(dst));
+    TEST_ASSERT(err_tchunk_pfx < 0, "Truncated chunk length prefix must fail");
+
+    /* D. Truncated chunk payload */
+    int64_t err_tchunk_pay = przm_decompress(stream_raw, 25, dst, sizeof(dst));
+    TEST_ASSERT(err_tchunk_pay < 0, "Truncated chunk payload must fail");
+
+    /* E. Total uncompressed size mismatch (claims 100 instead of 80) */
+    uint8_t stream_bad_size[256];
+    memcpy(stream_bad_size, stream_raw, sizeof(stream_bad_size));
+    write_u64_le(stream_bad_size + 5, 100);
+    int64_t err_sz_mismatch = przm_decompress(stream_bad_size, sizeof(stream_raw), dst, sizeof(dst));
+    TEST_ASSERT(err_sz_mismatch < 0, "Total size mismatch must fail");
+
+    /* F. Corrupted inner chunk */
+    uint8_t stream_bad_chunk[256];
+    memcpy(stream_bad_chunk, stream_raw, sizeof(stream_bad_chunk));
+    stream_bad_chunk[17 + 4] = 'X'; /* Corrupt 'P' of inner PRZM magic */
+    int64_t err_bad_chunk = przm_decompress(stream_bad_chunk, sizeof(stream_raw), dst, sizeof(dst));
+    TEST_ASSERT(err_bad_chunk < 0, "Corrupted inner chunk magic must fail");
+
+    TEST_PASS("stream_multi_chunk");
+}
+
 int main(int argc, char** argv) {
     if (argc == 3) {
         /* CLI decompression mode: test_przm_dec <in.przm> <out.bin> */
@@ -1477,6 +1662,7 @@ int main(int argc, char** argv) {
     test_block_deduplication();
     test_corrupted_and_truncated_frames();
     test_archival_png();
+    test_stream_multi_chunk();
 
     printf("\n>>> ALL TESTS PASSED SUCCESSFULLY! (0 Allocations, 100%% Lossless) <<<\n");
     return 0;

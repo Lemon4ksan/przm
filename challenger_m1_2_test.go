@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -638,4 +639,157 @@ func TestChallenger_PureCDecompressor_Stress(t *testing.T) {
 		}
 	})
 }
+
+// =============================================================================
+// CHALLENGER M1-2 SUITE: TASK 5 - Multi-Goroutine huffScratchPool Concurrency
+// =============================================================================
+
+// TestChallenger_Huffman_ConcurrentScratchPoolStress launches many concurrent goroutines
+// compressing and decompressing unique datasets through EncodeHuffman4X and PackStream.
+// This empirically validates that huffScratchPool is concurrency-safe and suffers from
+// zero cross-goroutine contamination or data races.
+func TestChallenger_Huffman_ConcurrentScratchPoolStress(t *testing.T) {
+	const (
+		numGoroutines = 32
+		iterations    = 100
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	for g := 0; g < numGoroutines; g++ {
+		go func(gid int) {
+			defer wg.Done()
+			rng := rand.New(rand.NewSource(int64(gid*10007 + 42)))
+
+			for iter := 0; iter < iterations; iter++ {
+				// Vary payload sizes across iterations:
+				// - Small: 64B - 512B
+				// - Medium: 2KB - 8KB
+				// - Large block: 32KB - 64KB
+				// - Oversized (exceeding 32KB per stream): 80KB
+				var sz int
+				switch iter % 4 {
+				case 0:
+					sz = 64 + rng.Intn(448)
+				case 1:
+					sz = 2048 + rng.Intn(6144)
+				case 2:
+					sz = 32768 + rng.Intn(32768)
+				case 3:
+					sz = 80000 + rng.Intn(10000)
+				}
+
+				// Generate unique payload containing goroutine ID and iteration
+				payload := make([]byte, sz)
+				prefix := fmt.Sprintf("GID:%03d-ITER:%04d-", gid, iter)
+				copy(payload, prefix)
+
+				// Fill remainder with patterned and compressible symbols
+				symCount := 2 + (iter % 15)
+				for i := len(prefix); i < sz; i++ {
+					payload[i] = byte((i + gid) % symCount)
+				}
+
+				// Test EncodeHuffman4X
+				enc, err := EncodeHuffman4X(payload)
+				if err != nil {
+					t.Errorf("Goroutine %d iter %d EncodeHuffman4X failed: %v", gid, iter, err)
+					return
+				}
+
+				decDst := make([]byte, sz+64)
+				var decTable CanonicalHuffmanTable
+				decN, err := UnpackStream(decDst, enc, &decTable)
+				if err != nil {
+					t.Errorf("Goroutine %d iter %d UnpackStream failed: %v", gid, iter, err)
+					return
+				}
+				if decN != sz {
+					t.Errorf("Goroutine %d iter %d len mismatch: got %d, want %d", gid, iter, decN, sz)
+					return
+				}
+				if !bytes.Equal(decDst[:decN], payload) {
+					t.Errorf("Goroutine %d iter %d data mismatch (cross-contamination or race)", gid, iter)
+					return
+				}
+
+				// Also test PackStream
+				packed, err := PackStream(payload, ModeHuffman4X)
+				if err != nil {
+					t.Errorf("Goroutine %d iter %d PackStream failed: %v", gid, iter, err)
+					return
+				}
+				packDst := make([]byte, sz+64)
+				packN, err := UnpackStream(packDst, packed, &decTable)
+				if err != nil {
+					t.Errorf("Goroutine %d iter %d UnpackStream(packed) failed: %v", gid, iter, err)
+					return
+				}
+				if packN != sz || !bytes.Equal(packDst[:packN], payload) {
+					t.Errorf("Goroutine %d iter %d PackStream roundtrip mismatch", gid, iter)
+					return
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+}
+
+// TestChallenger_HuffBitWriter_DirtyBufferStress verifies that HuffBitWriter operates
+// correctly even when the pre-allocated buffer is full of dirty non-zero bytes.
+func TestChallenger_HuffBitWriter_DirtyBufferStress(t *testing.T) {
+	for trial := 0; trial < 100; trial++ {
+		buf := make([]byte, 4096)
+		// Fill buffer with dirty garbage (0xFF, 0xAA, random)
+		for i := range buf {
+			buf[i] = byte(trial*31 + i)
+		}
+
+		var w HuffBitWriter
+		w.Reset(buf)
+
+		// Write sequence of known bit patterns
+		rng := rand.New(rand.NewSource(int64(trial + 777)))
+		type bitItem struct {
+			code uint16
+			len  uint8
+		}
+		items := make([]bitItem, 100)
+		totalBits := 0
+		for i := range items {
+			l := uint8(1 + rng.Intn(11))
+			mask := uint16((1 << l) - 1)
+			c := uint16(rng.Intn(int(mask) + 1))
+			items[i] = bitItem{code: c, len: l}
+			totalBits += int(l)
+		}
+
+		for _, item := range items {
+			w.Write(item.code, item.len)
+		}
+		flushed := w.Flush()
+
+		expectedBytes := (totalBits + 7) / 8
+		if len(flushed) != expectedBytes {
+			t.Fatalf("Trial %d: expected %d bytes, got %d", trial, expectedBytes, len(flushed))
+		}
+
+		// Verify reading with HuffBitReader
+		var r HuffBitReader
+		r.Init(flushed)
+		for idx, item := range items {
+			c := r.Peek(int(item.len))
+			r.Consume(int(item.len))
+			if c != item.code {
+				t.Fatalf("Trial %d item %d: got code 0x%X, want 0x%X (len %d)", trial, idx, c, item.code, item.len)
+			}
+		}
+		if r.underflow {
+			t.Fatalf("Trial %d: unexpected underflow in HuffBitReader", trial)
+		}
+	}
+}
+
 

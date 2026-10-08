@@ -5,8 +5,8 @@
 package przm
 
 import (
-	"encoding/binary"
 	"math/bits"
+	"unsafe"
 
 	"github.com/lemon4ksan/foundation/generic"
 	"github.com/lemon4ksan/foundation/silicon/simd"
@@ -218,81 +218,134 @@ func (mf *HenselMatchFinder) FindMatchHensel(src []byte, pos int, maxDepth int, 
 // (4B -> 8B -> 16B -> 32B -> SIMD).
 func HenselLCP(a, b []byte) int {
 	maxLen := min(len(a), len(b))
-	if maxLen == 0 {
+	if maxLen <= 0 {
 		return 0
 	}
-	if maxLen < 4 {
-		l := 0
-		for l < maxLen && a[l] == b[l] {
-			l++
-		}
-		return l
+	ptr1 := unsafe.Pointer(unsafe.SliceData(a))
+	ptr2 := unsafe.Pointer(unsafe.SliceData(b))
+	if ptr1 == ptr2 {
+		return maxLen
 	}
 
-	// Step 1: Base 4-byte check
-	diff4 := binary.LittleEndian.Uint32(a[:4]) ^ binary.LittleEndian.Uint32(b[:4])
-	if diff4 != 0 {
-		return bits.TrailingZeros32(diff4) >> 3
-	}
 	if maxLen < 8 {
-		l := 4
-		for l < maxLen && a[l] == b[l] {
-			l++
+		if maxLen < 4 {
+			l := 0
+			for l < maxLen && *(*byte)(unsafe.Add(ptr1, l)) == *(*byte)(unsafe.Add(ptr2, l)) {
+				l++
+			}
+			return l
 		}
-		return l
+		diff4 := *(*uint32)(ptr1) ^ *(*uint32)(ptr2)
+		if diff4 != 0 {
+			return bits.TrailingZeros32(diff4) >> 3
+		}
+		diffTail := *(*uint32)(unsafe.Add(ptr1, maxLen-4)) ^ *(*uint32)(unsafe.Add(ptr2, maxLen-4))
+		if diffTail != 0 {
+			return (maxLen - 4) + (bits.TrailingZeros32(diffTail) >> 3)
+		}
+		return maxLen
 	}
 
-	// Step 2: Hensel Lift 4B -> 8B (Evaluate bytes 4..7)
-	diff8 := binary.LittleEndian.Uint32(a[4:8]) ^ binary.LittleEndian.Uint32(b[4:8])
+	// Step 1: 8-byte check
+	diff8 := *(*uint64)(ptr1) ^ *(*uint64)(ptr2)
 	if diff8 != 0 {
-		return 4 + (bits.TrailingZeros32(diff8) >> 3)
+		return bits.TrailingZeros64(diff8) >> 3
 	}
 	if maxLen < 16 {
-		l := 8
-		for l < maxLen && a[l] == b[l] {
-			l++
+		diffTail := *(*uint64)(unsafe.Add(ptr1, maxLen-8)) ^ *(*uint64)(unsafe.Add(ptr2, maxLen-8))
+		if diffTail != 0 {
+			return (maxLen - 8) + (bits.TrailingZeros64(diffTail) >> 3)
 		}
-		return l
+		return maxLen
 	}
 
-	// Step 3: Hensel Lift 8B -> 16B (Evaluate bytes 8..15)
-	diff16 := binary.LittleEndian.Uint64(a[8:16]) ^ binary.LittleEndian.Uint64(b[8:16])
+	// Step 2: 16-byte check
+	diff16 := *(*uint64)(unsafe.Add(ptr1, 8)) ^ *(*uint64)(unsafe.Add(ptr2, 8))
 	if diff16 != 0 {
 		return 8 + (bits.TrailingZeros64(diff16) >> 3)
 	}
-	if maxLen < 32 {
-		l := 16
-		for l < maxLen && a[l] == b[l] {
-			l++
+	if maxLen < 24 {
+		diffTail := *(*uint64)(unsafe.Add(ptr1, maxLen-8)) ^ *(*uint64)(unsafe.Add(ptr2, maxLen-8))
+		if diffTail != 0 {
+			return (maxLen - 8) + (bits.TrailingZeros64(diffTail) >> 3)
 		}
-		return l
+		return maxLen
 	}
 
-	// Step 4: Hensel Lift 16B -> 32B (Evaluate bytes 16..31)
-	d24 := binary.LittleEndian.Uint64(a[16:24]) ^ binary.LittleEndian.Uint64(b[16:24])
-	if d24 != 0 {
-		return 16 + (bits.TrailingZeros64(d24) >> 3)
+	// Step 3: 24-byte check
+	diff24 := *(*uint64)(unsafe.Add(ptr1, 16)) ^ *(*uint64)(unsafe.Add(ptr2, 16))
+	if diff24 != 0 {
+		return 16 + (bits.TrailingZeros64(diff24) >> 3)
 	}
-	d32 := binary.LittleEndian.Uint64(a[24:32]) ^ binary.LittleEndian.Uint64(b[24:32])
-	if d32 != 0 {
-		return 24 + (bits.TrailingZeros64(d32) >> 3)
+	if maxLen < 32 {
+		diffTail := *(*uint64)(unsafe.Add(ptr1, maxLen-8)) ^ *(*uint64)(unsafe.Add(ptr2, maxLen-8))
+		if diffTail != 0 {
+			return (maxLen - 8) + (bits.TrailingZeros64(diffTail) >> 3)
+		}
+		return maxLen
 	}
 
-	// Step 5: SIMD vector extension for matches >= 32 bytes
+	// Step 4: 32-byte check
+	diff32 := *(*uint64)(unsafe.Add(ptr1, 24)) ^ *(*uint64)(unsafe.Add(ptr2, 24))
+	if diff32 != 0 {
+		return 24 + (bits.TrailingZeros64(diff32) >> 3)
+	}
+	if maxLen == 32 {
+		return 32
+	}
+
+	// Step 5: SIMD vector extension for bulk matches >= 32 bytes
+	l := 32
 	rem := maxLen - 32
 	if rem >= 32 {
-		vLen := simd.FindMatchLengthVector(a[32:maxLen], b[32:maxLen], rem)
-		mLen := 32 + vLen
-		for mLen < maxLen && a[mLen] == b[mLen] {
-			mLen++
+		s1 := unsafe.Slice((*byte)(unsafe.Add(ptr1, 32)), rem)
+		s2 := unsafe.Slice((*byte)(unsafe.Add(ptr2, 32)), rem)
+		vLen := simd.FindMatchLengthVector(s1, s2, rem)
+		l = 32 + vLen
+		if l < maxLen && *(*byte)(unsafe.Add(ptr1, l)) != *(*byte)(unsafe.Add(ptr2, l)) {
+			return l
 		}
-		return mLen
 	}
-	mLen := 32
-	for mLen < maxLen && a[mLen] == b[mLen] {
-		mLen++
+
+	// Unrolled 32-byte loop (4x uint64)
+	for l <= maxLen-32 {
+		d0 := *(*uint64)(unsafe.Add(ptr1, l)) ^ *(*uint64)(unsafe.Add(ptr2, l))
+		if d0 != 0 {
+			return l + (bits.TrailingZeros64(d0) >> 3)
+		}
+		d1 := *(*uint64)(unsafe.Add(ptr1, l+8)) ^ *(*uint64)(unsafe.Add(ptr2, l+8))
+		if d1 != 0 {
+			return l + 8 + (bits.TrailingZeros64(d1) >> 3)
+		}
+		d2 := *(*uint64)(unsafe.Add(ptr1, l+16)) ^ *(*uint64)(unsafe.Add(ptr2, l+16))
+		if d2 != 0 {
+			return l + 16 + (bits.TrailingZeros64(d2) >> 3)
+		}
+		d3 := *(*uint64)(unsafe.Add(ptr1, l+24)) ^ *(*uint64)(unsafe.Add(ptr2, l+24))
+		if d3 != 0 {
+			return l + 24 + (bits.TrailingZeros64(d3) >> 3)
+		}
+		l += 32
 	}
-	return mLen
+
+	// 8-byte uint64 word loop
+	for l <= maxLen-8 {
+		diff64 := *(*uint64)(unsafe.Add(ptr1, l)) ^ *(*uint64)(unsafe.Add(ptr2, l))
+		if diff64 != 0 {
+			return l + (bits.TrailingZeros64(diff64) >> 3)
+		}
+		l += 8
+	}
+
+	// Branch-free overlapping 8-byte tail comparison at maxLen - 8
+	if l < maxLen {
+		diffTail := *(*uint64)(unsafe.Add(ptr1, maxLen-8)) ^ *(*uint64)(unsafe.Add(ptr2, maxLen-8))
+		if diffTail != 0 {
+			return (maxLen - 8) + (bits.TrailingZeros64(diffTail) >> 3)
+		}
+		return maxLen
+	}
+	return l
 }
 
 // HenselLCPPos evaluates the longest common prefix between src[p1:] and src[p2:]
@@ -301,88 +354,163 @@ func HenselLCPPos(src []byte, p1, p2, maxLen int) int {
 	if p1 == p2 {
 		return maxLen
 	}
+	if maxLen <= 0 || p1 < 0 || p2 < 0 || p1 >= len(src) || p2 >= len(src) {
+		return 0
+	}
+	if p1+maxLen > len(src) {
+		maxLen = len(src) - p1
+	}
+	if p2+maxLen > len(src) {
+		maxLen = len(src) - p2
+	}
 	if maxLen <= 0 {
 		return 0
 	}
-	if maxLen < 4 {
-		l := 0
-		for l < maxLen && src[p1+l] == src[p2+l] {
-			l++
-		}
-		return l
-	}
 
-	// Step 1: Base 4-byte check
-	diff4 := binary.LittleEndian.Uint32(src[p1:p1+4]) ^ binary.LittleEndian.Uint32(src[p2:p2+4])
-	if diff4 != 0 {
-		return bits.TrailingZeros32(diff4) >> 3
-	}
+	base := unsafe.Pointer(unsafe.SliceData(src))
+	ptr1 := unsafe.Pointer(unsafe.Add(base, p1))
+	ptr2 := unsafe.Pointer(unsafe.Add(base, p2))
+
 	if maxLen < 8 {
-		l := 4
-		for l < maxLen && src[p1+l] == src[p2+l] {
-			l++
+		if maxLen < 4 {
+			l := 0
+			for l < maxLen && *(*byte)(unsafe.Add(ptr1, l)) == *(*byte)(unsafe.Add(ptr2, l)) {
+				l++
+			}
+			return l
 		}
-		return l
+		diff4 := *(*uint32)(ptr1) ^ *(*uint32)(ptr2)
+		if diff4 != 0 {
+			return bits.TrailingZeros32(diff4) >> 3
+		}
+		diffTail := *(*uint32)(unsafe.Add(ptr1, maxLen-4)) ^ *(*uint32)(unsafe.Add(ptr2, maxLen-4))
+		if diffTail != 0 {
+			return (maxLen - 4) + (bits.TrailingZeros32(diffTail) >> 3)
+		}
+		return maxLen
 	}
 
-	// Step 2: Hensel Lift 4B -> 8B
-	diff8 := binary.LittleEndian.Uint32(src[p1+4:p1+8]) ^ binary.LittleEndian.Uint32(src[p2+4:p2+8])
+	// Step 1: 8-byte check
+	diff8 := *(*uint64)(ptr1) ^ *(*uint64)(ptr2)
 	if diff8 != 0 {
-		return 4 + (bits.TrailingZeros32(diff8) >> 3)
+		return bits.TrailingZeros64(diff8) >> 3
 	}
 	if maxLen < 16 {
-		l := 8
-		for l < maxLen && src[p1+l] == src[p2+l] {
-			l++
+		diffTail := *(*uint64)(unsafe.Add(ptr1, maxLen-8)) ^ *(*uint64)(unsafe.Add(ptr2, maxLen-8))
+		if diffTail != 0 {
+			return (maxLen - 8) + (bits.TrailingZeros64(diffTail) >> 3)
 		}
-		return l
+		return maxLen
 	}
 
-	// Step 3: Hensel Lift 8B -> 16B
-	diff16 := binary.LittleEndian.Uint64(src[p1+8:p1+16]) ^ binary.LittleEndian.Uint64(src[p2+8:p2+16])
+	// Step 2: 16-byte check
+	diff16 := *(*uint64)(unsafe.Add(ptr1, 8)) ^ *(*uint64)(unsafe.Add(ptr2, 8))
 	if diff16 != 0 {
 		return 8 + (bits.TrailingZeros64(diff16) >> 3)
 	}
-	if maxLen < 32 {
-		l := 16
-		for l < maxLen && src[p1+l] == src[p2+l] {
-			l++
+	if maxLen < 24 {
+		diffTail := *(*uint64)(unsafe.Add(ptr1, maxLen-8)) ^ *(*uint64)(unsafe.Add(ptr2, maxLen-8))
+		if diffTail != 0 {
+			return (maxLen - 8) + (bits.TrailingZeros64(diffTail) >> 3)
 		}
-		return l
+		return maxLen
 	}
 
-	// Step 4: Hensel Lift 16B -> 32B
-	d24 := binary.LittleEndian.Uint64(src[p1+16:p1+24]) ^ binary.LittleEndian.Uint64(src[p2+16:p2+24])
-	if d24 != 0 {
-		return 16 + (bits.TrailingZeros64(d24) >> 3)
+	// Step 3: 24-byte check
+	diff24 := *(*uint64)(unsafe.Add(ptr1, 16)) ^ *(*uint64)(unsafe.Add(ptr2, 16))
+	if diff24 != 0 {
+		return 16 + (bits.TrailingZeros64(diff24) >> 3)
 	}
-	d32 := binary.LittleEndian.Uint64(src[p1+24:p1+32]) ^ binary.LittleEndian.Uint64(src[p2+24:p2+32])
-	if d32 != 0 {
-		return 24 + (bits.TrailingZeros64(d32) >> 3)
+	if maxLen < 32 {
+		diffTail := *(*uint64)(unsafe.Add(ptr1, maxLen-8)) ^ *(*uint64)(unsafe.Add(ptr2, maxLen-8))
+		if diffTail != 0 {
+			return (maxLen - 8) + (bits.TrailingZeros64(diffTail) >> 3)
+		}
+		return maxLen
 	}
 
-	// Step 5: SIMD vector extension
+	// Step 4: 32-byte check
+	diff32 := *(*uint64)(unsafe.Add(ptr1, 24)) ^ *(*uint64)(unsafe.Add(ptr2, 24))
+	if diff32 != 0 {
+		return 24 + (bits.TrailingZeros64(diff32) >> 3)
+	}
+	if maxLen == 32 {
+		return 32
+	}
+
+	// Step 5: SIMD vector extension for bulk matches >= 32 bytes
+	l := 32
 	rem := maxLen - 32
 	if rem >= 32 {
-		vLen := simd.FindMatchLengthVector(src[p1+32:p1+maxLen], src[p2+32:p2+maxLen], rem)
-		mLen := 32 + vLen
-		for mLen < maxLen && src[p1+mLen] == src[p2+mLen] {
-			mLen++
+		s1 := unsafe.Slice((*byte)(unsafe.Add(ptr1, 32)), rem)
+		s2 := unsafe.Slice((*byte)(unsafe.Add(ptr2, 32)), rem)
+		vLen := simd.FindMatchLengthVector(s1, s2, rem)
+		l = 32 + vLen
+		if l < maxLen && *(*byte)(unsafe.Add(ptr1, l)) != *(*byte)(unsafe.Add(ptr2, l)) {
+			return l
 		}
-		return mLen
 	}
-	mLen := 32
-	for mLen < maxLen && src[p1+mLen] == src[p2+mLen] {
-		mLen++
+
+	// Unrolled 32-byte loop (4x uint64)
+	for l <= maxLen-32 {
+		d0 := *(*uint64)(unsafe.Add(ptr1, l)) ^ *(*uint64)(unsafe.Add(ptr2, l))
+		if d0 != 0 {
+			return l + (bits.TrailingZeros64(d0) >> 3)
+		}
+		d1 := *(*uint64)(unsafe.Add(ptr1, l+8)) ^ *(*uint64)(unsafe.Add(ptr2, l+8))
+		if d1 != 0 {
+			return l + 8 + (bits.TrailingZeros64(d1) >> 3)
+		}
+		d2 := *(*uint64)(unsafe.Add(ptr1, l+16)) ^ *(*uint64)(unsafe.Add(ptr2, l+16))
+		if d2 != 0 {
+			return l + 16 + (bits.TrailingZeros64(d2) >> 3)
+		}
+		d3 := *(*uint64)(unsafe.Add(ptr1, l+24)) ^ *(*uint64)(unsafe.Add(ptr2, l+24))
+		if d3 != 0 {
+			return l + 24 + (bits.TrailingZeros64(d3) >> 3)
+		}
+		l += 32
 	}
-	return mLen
+
+	// 8-byte uint64 word loop
+	for l <= maxLen-8 {
+		diff64 := *(*uint64)(unsafe.Add(ptr1, l)) ^ *(*uint64)(unsafe.Add(ptr2, l))
+		if diff64 != 0 {
+			return l + (bits.TrailingZeros64(diff64) >> 3)
+		}
+		l += 8
+	}
+
+	// Branch-free overlapping 8-byte tail comparison at maxLen - 8
+	if l < maxLen {
+		diffTail := *(*uint64)(unsafe.Add(ptr1, maxLen-8)) ^ *(*uint64)(unsafe.Add(ptr2, maxLen-8))
+		if diffTail != 0 {
+			return (maxLen - 8) + (bits.TrailingZeros64(diffTail) >> 3)
+		}
+		return maxLen
+	}
+	return l
+}
+
+// hash4 calculates the multiplicative Fibonacci hash for a 4-byte prefix.
+//
+//go:nosplit
+func hash4(w4 uint32) uint32 {
+	return w4 * HenselHashPrime
+}
+
+// Hash4 calculates the multiplicative Fibonacci hash for a 4-byte prefix.
+//
+//go:nosplit
+func Hash4(w4 uint32) uint32 {
+	return hash4(w4)
 }
 
 // computeHenselHash calculates the multiplicative Fibonacci hash for a 4-byte prefix.
 //
 //go:nosplit
 func computeHenselHash(w4 uint32, headBits int, headMask int) int {
-	return int((w4 * HenselHashPrime) >> (32 - headBits)) & headMask
+	return int(hash4(w4)>>(32-headBits)) & headMask
 }
 
 // HenselInsertGeneric indexes position p into the provided scratchpad slices.
@@ -402,7 +530,12 @@ func HenselInsertGeneric(
 	if p+4 > uSize {
 		return
 	}
-	w4 := binary.LittleEndian.Uint32(src[p : p+4])
+	_ = head[headMask]
+	_ = prev[windowMask]
+	_ = fp32[windowMask]
+
+	srcPtr := unsafe.Pointer(unsafe.SliceData(src))
+	w4 := *(*uint32)(unsafe.Add(srcPtr, p))
 	h := computeHenselHash(w4, headBits, headMask)
 
 	if int(head[h]) == p+1 {
@@ -414,16 +547,57 @@ func HenselInsertGeneric(
 	head[h] = int32(p + 1)
 
 	if p+8 <= uSize {
-		fp32[slot] = binary.LittleEndian.Uint32(src[p+4 : p+8])
+		fp32[slot] = *(*uint32)(unsafe.Add(srcPtr, p+4))
 	} else {
 		fp32[slot] = 0
 	}
 }
 
-// HenselFindMatchGeneric executes ultrametric match search up to maxDepth with Theorem HL-2 pruning.
+// HenselInsertGenericWithHash indexes position p using pre-computed w4 and hash h.
 //
 //go:nosplit
-func HenselFindMatchGeneric(
+func HenselInsertGenericWithHash(
+	head []int32,
+	prev []int32,
+	fp32 []uint32,
+	p int,
+	src []byte,
+	uSize int,
+	windowMask int,
+	headBits int,
+	headMask int,
+	w4 uint32,
+	h uint32,
+) {
+	if p+4 > uSize {
+		return
+	}
+	_ = head[headMask]
+	_ = prev[windowMask]
+	_ = fp32[windowMask]
+
+	hIdx := int(h) & headMask
+	if int(head[hIdx]) == p+1 {
+		return
+	}
+
+	slot := p & windowMask
+	prev[slot] = head[hIdx]
+	head[hIdx] = int32(p + 1)
+
+	if p+8 <= uSize {
+		srcPtr := unsafe.Pointer(unsafe.SliceData(src))
+		fp32[slot] = *(*uint32)(unsafe.Add(srcPtr, p+4))
+	} else {
+		fp32[slot] = 0
+	}
+}
+
+// HenselFindMatchGenericWithHash executes ultrametric match search up to maxDepth with Theorem HL-2 pruning
+// using pre-computed w4 prefix and hash table index h.
+//
+//go:nosplit
+func HenselFindMatchGenericWithHash(
 	src []byte,
 	pos int,
 	uSize int,
@@ -436,6 +610,8 @@ func HenselFindMatchGeneric(
 	head []int32,
 	prev []int32,
 	fp32 []uint32,
+	w4 uint32,
+	h int,
 ) (bestDist, bestLen int) {
 	if pos+4 > uSize {
 		return 0, 0
@@ -444,18 +620,20 @@ func HenselFindMatchGeneric(
 		minLen = 4
 	}
 
-	w4 := binary.LittleEndian.Uint32(src[pos : pos+4])
-	h := computeHenselHash(w4, headBits, headMask)
+	_ = head[headMask]
+	_ = prev[windowMask]
+	_ = fp32[windowMask]
 
-	cand := int(head[h]) - 1
+	cand := int(head[h&headMask]) - 1
 	if cand < 0 {
 		return 0, 0
 	}
 
+	srcPtr := unsafe.Pointer(unsafe.SliceData(src))
 	has8 := pos+8 <= uSize
 	var targetFP32 uint32
 	if has8 {
-		targetFP32 = binary.LittleEndian.Uint32(src[pos+4 : pos+8])
+		targetFP32 = *(*uint32)(unsafe.Add(srcPtr, pos+4))
 	}
 
 	bestLen = minLen - 1
@@ -481,14 +659,14 @@ func HenselFindMatchGeneric(
 			break
 		}
 
-		// Theorem HL-2 (Ultrametric Disjoint Ball Pruning):
-		// Bitwise single-cycle XOR check before dereferencing payload memory.
+		// Theorem HL-2 (Ultrametric Disjoint Ball Pruning & Exact Match Short-Circuit)
+		hasDiff := false
+		var maxLift int
 		if has8 && bestLen >= 4 {
 			diff := fp32[candSlot] ^ targetFP32
 			if diff != 0 {
-				maxLift := 4 + (bits.TrailingZeros32(diff) >> 3)
+				maxLift = 4 + (bits.TrailingZeros32(diff) >> 3)
 				if maxLift <= bestLen {
-					// 1-cycle rejection without touching cache line for src[cand..]
 					nextCand := int(prev[candSlot]) - 1
 					if nextCand >= cand || nextCand < 0 {
 						break
@@ -497,17 +675,23 @@ func HenselFindMatchGeneric(
 					depth++
 					continue
 				}
+				hasDiff = true
 			}
 		}
 
-		// Candidate passed Theorem HL-2 pruning. Verify 4-byte prefix.
-		if binary.LittleEndian.Uint32(src[cand:cand+4]) == w4 {
-			mLen := HenselLCPPos(src, pos, cand, maxSearchLen)
-			if mLen > bestLen {
-				bestLen = mLen
+		if *(*uint32)(unsafe.Add(srcPtr, cand)) == w4 {
+			if hasDiff {
+				// Theorem HL-2 exact length proof: DO NOT call HenselLCPPos!
+				bestLen = maxLift
 				bestDist = d
-				if bestLen >= 258 {
-					break
+			} else {
+				mLen := HenselLCPPos(src, pos, cand, maxSearchLen)
+				if mLen > bestLen {
+					bestLen = mLen
+					bestDist = d
+					if bestLen >= 258 {
+						break
+					}
 				}
 			}
 		}
@@ -524,6 +708,37 @@ func HenselFindMatchGeneric(
 		return 0, 0
 	}
 	return bestDist, bestLen
+}
+
+// HenselFindMatchGeneric executes ultrametric match search up to maxDepth with Theorem HL-2 pruning.
+//
+//go:nosplit
+func HenselFindMatchGeneric(
+	src []byte,
+	pos int,
+	uSize int,
+	maxDepth int,
+	minLen int,
+	windowSize int,
+	windowMask int,
+	headBits int,
+	headMask int,
+	head []int32,
+	prev []int32,
+	fp32 []uint32,
+) (bestDist, bestLen int) {
+	if pos+4 > uSize {
+		return 0, 0
+	}
+	srcPtr := unsafe.Pointer(unsafe.SliceData(src))
+	w4 := *(*uint32)(unsafe.Add(srcPtr, pos))
+	h := computeHenselHash(w4, headBits, headMask)
+	return HenselFindMatchGenericWithHash(
+		src, pos, uSize, maxDepth, minLen,
+		windowSize, windowMask, headBits, headMask,
+		head, prev, fp32,
+		w4, h,
+	)
 }
 
 // HenselInsert registers position p into the 64 KiB Hensel search tables.

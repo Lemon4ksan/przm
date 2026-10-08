@@ -1639,6 +1639,12 @@ int64_t przm_get_uncompressed_size(const uint8_t* src, size_t src_len) {
 
     uint32_t magic = read_u32_le(src);
 
+    /* Multi-Chunk Stream ('PRZS', 0x535A5250) */
+    if (magic == PRZM_MAGIC_STREAM) {
+        if (src_len < PRZM_STREAM_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+        return (int64_t)read_u64_le(src + 5);
+    }
+
     /* 32-bit Specialized signatures */
     if (magic == PRZM_MAGIC_ARCHIVAL_PNG) {
         if (src_len < 12) return PRZM_ERR_CORRUPTED_FRAME;
@@ -2852,6 +2858,37 @@ int64_t przm_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t
 
     uint32_t magic = read_u32_le(src);
 
+    /* Multi-Chunk Stream ('PRZS', 0x535A5250) */
+    if (magic == PRZM_MAGIC_STREAM) {
+        if (src_len < PRZM_STREAM_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+        int64_t total_u_size = (int64_t)read_u64_le(src + 5);
+        if (total_u_size < 0) return PRZM_ERR_CORRUPTED_FRAME;
+        if (dst_cap < (size_t)total_u_size + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
+        uint32_t chunk_count = read_u32_le(src + 13);
+
+        size_t offset = PRZM_STREAM_HEADER_SIZE;
+        size_t dst_pos = 0;
+
+        for (uint32_t i = 0; i < chunk_count; i++) {
+            if (offset + 4 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+            uint32_t chunk_comp_size = read_u32_le(src + offset);
+            offset += 4;
+            if (offset + chunk_comp_size > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+            const uint8_t* chunk_ptr = src + offset;
+            offset += chunk_comp_size;
+
+            int64_t chunk_u_size = przm_decompress(chunk_ptr, (size_t)chunk_comp_size, dst + dst_pos, dst_cap - dst_pos);
+            if (chunk_u_size < 0) return chunk_u_size;
+
+            dst_pos += (size_t)chunk_u_size;
+            if (dst_pos > (size_t)total_u_size) return PRZM_ERR_CORRUPTED_FRAME;
+        }
+
+        if (dst_pos != (size_t)total_u_size) return PRZM_ERR_CORRUPTED_FRAME;
+        return total_u_size;
+    }
+
     /* 1.10. Archival Mode PNG Container ('PNGA', 0x504E4741) */
     if (magic == PRZM_MAGIC_ARCHIVAL_PNG) {
         return przm_archival_png_decompress(src, src_len, dst, dst_cap);
@@ -3068,6 +3105,36 @@ int64_t przm_decompress_dict(const uint8_t* src, size_t src_len,
     if (src == NULL || dst == NULL || src_len < 4) return PRZM_ERR_CORRUPTED_FRAME;
 
     uint32_t magic = read_u32_le(src);
+    if (magic == PRZM_MAGIC_STREAM) {
+        if (src_len < PRZM_STREAM_HEADER_SIZE) return PRZM_ERR_CORRUPTED_FRAME;
+        int64_t total_u_size = (int64_t)read_u64_le(src + 5);
+        if (total_u_size < 0) return PRZM_ERR_CORRUPTED_FRAME;
+        if (dst_cap < (size_t)total_u_size + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
+        uint32_t chunk_count = read_u32_le(src + 13);
+
+        size_t offset = PRZM_STREAM_HEADER_SIZE;
+        size_t dst_pos = 0;
+
+        for (uint32_t i = 0; i < chunk_count; i++) {
+            if (offset + 4 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+            uint32_t chunk_comp_size = read_u32_le(src + offset);
+            offset += 4;
+            if (offset + chunk_comp_size > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+            const uint8_t* chunk_ptr = src + offset;
+            offset += chunk_comp_size;
+
+            int64_t chunk_u_size = przm_decompress_dict(chunk_ptr, (size_t)chunk_comp_size, dst + dst_pos, dst_cap - dst_pos, dict);
+            if (chunk_u_size < 0) return chunk_u_size;
+
+            dst_pos += (size_t)chunk_u_size;
+            if (dst_pos > (size_t)total_u_size) return PRZM_ERR_CORRUPTED_FRAME;
+        }
+
+        if (dst_pos != (size_t)total_u_size) return PRZM_ERR_CORRUPTED_FRAME;
+        return total_u_size;
+    }
+
     if (magic == PRZM_MAGIC_STANDARD) {
         return decompress_standard_fused(src, src_len, dst, dst_cap, dict);
     }
