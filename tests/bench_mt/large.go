@@ -39,10 +39,7 @@ func runLargeBenchmark(cfg Config) (*LargeReport, error) {
 	dst := bufkit.AlignedBytes(len(data)+64, 64)
 
 	scalingAll := true
-	runs := cfg.Runs
-	if runs < 1 {
-		runs = 1
-	}
+	runs := max(cfg.Runs, 1)
 
 	for _, preset := range presets {
 		var speedT1, speedT12 float64
@@ -69,7 +66,7 @@ func runLargeBenchmark(cfg Config) (*LargeReport, error) {
 			var totalWallElapsed time.Duration
 			var totalCPUElapsed time.Duration
 			var compTimed []byte
-			for r := 0; r < runs; r++ {
+			for range runs {
 				timer := startCPUTimer()
 				ct, err := przm.CompressWithOptions(data, opts)
 				w, c, _ := timer.Stop()

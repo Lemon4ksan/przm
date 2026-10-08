@@ -77,7 +77,7 @@ func (h *CanonicalHuffmanTable) BuildFromLengths(lengths [256]uint8) bool {
 	// 3. Populate direct decode table
 	// For each symbol with length L and canonical code C,
 	// all table indices whose prefix matches C map to (sym, L).
-	for sym := 0; sym < 256; sym++ {
+	for sym := range 256 {
 		l := lengths[sym]
 		if l == 0 {
 			continue
@@ -94,7 +94,7 @@ func (h *CanonicalHuffmanTable) BuildFromLengths(lengths [256]uint8) bool {
 			return false
 		}
 
-		for i := 0; i < numEntries; i++ {
+		for i := range numEntries {
 			h.Table[baseIdx+i] = entry
 		}
 	}
@@ -251,7 +251,7 @@ func ComputeHuffmanLengths(src []byte) ([256]uint8, int) {
 	var leafSym [256]uint8
 
 	numSymbols := 0
-	for s := 0; s < 256; s++ {
+	for s := range 256 {
 		if freqs[s] > 0 {
 			id := int16(numSymbols)
 			leafSym[numSymbols] = uint8(s)
@@ -316,10 +316,7 @@ func ComputeHuffmanLengths(src []byte) ([256]uint8, int) {
 	kraftSum := 0
 	for i := 0; i < numSymbols; i++ {
 		s := leafSym[i]
-		l := uint8(depths[i])
-		if l > MaxHuffBits {
-			l = MaxHuffBits
-		}
+		l := min(uint8(depths[i]), MaxHuffBits)
 		if l == 0 {
 			l = 1
 		}
@@ -391,7 +388,7 @@ func EncodeHuffman4X(src []byte) ([]byte, error) {
 
 	// Table fusion: pack (code << 8) | length for branchless single-lookup symbol encoding
 	var fused [256]uint32
-	for s := 0; s < 256; s++ {
+	for s := range 256 {
 		l := lengths[s]
 		if l > 0 {
 			c := nextCode[l]
@@ -419,7 +416,7 @@ func EncodeHuffman4X(src []byte) ([]byte, error) {
 	maxChunkBytes := ((chunkSize*MaxHuffBits + 31) / 8) + 8
 
 	var writers [4]HuffBitWriter
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if maxChunkBytes <= len(pad.streams[i]) {
 			writers[i].Reset(pad.streams[i][:])
 		} else {
@@ -486,7 +483,7 @@ func DecodeHuffman4X(dst []byte, src []byte, decTable *CanonicalHuffmanTable) (i
 
 	// 1. Unpack lengths
 	var lengths [256]uint8
-	for i := 0; i < 128; i++ {
+	for i := range 128 {
 		b := src[5+i]
 		lengths[i*2] = b & 0x0F
 		lengths[i*2+1] = (b >> 4) & 0x0F

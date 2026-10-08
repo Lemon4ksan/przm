@@ -146,7 +146,7 @@ func ProbeZeroDensity512(data []byte) float64 {
 		return 0
 	}
 	zeros := 0
-	for i := 0; i < sample; i++ {
+	for i := range sample {
 		if data[i] == 0 {
 			zeros++
 		}
@@ -274,40 +274,40 @@ func IsSmoothDeltaFast(data []byte) bool {
 		v0 := *(*uint64)(unsafe.Add(p, i-1))
 		rE0 := (u0&byteMask + bias) - v0&byteMask
 		invSE0 := ((rE0 >> 9) & laneOne) ^ laneOne
-		absE0 := (rE0&byteMask ^ (invSE0*255)) + invSE0
+		absE0 := (rE0&byteMask ^ (invSE0 * 255)) + invSE0
 		rO0 := ((u0>>8)&byteMask + bias) - (v0>>8)&byteMask
 		invSO0 := ((rO0 >> 9) & laneOne) ^ laneOne
-		absO0 := (rO0&byteMask ^ (invSO0*255)) + invSO0
+		absO0 := (rO0&byteMask ^ (invSO0 * 255)) + invSO0
 
 		// Chunk 1
 		u1 := *(*uint64)(unsafe.Add(p, i+8))
 		v1 := *(*uint64)(unsafe.Add(p, i+7))
 		rE1 := (u1&byteMask + bias) - v1&byteMask
 		invSE1 := ((rE1 >> 9) & laneOne) ^ laneOne
-		absE1 := (rE1&byteMask ^ (invSE1*255)) + invSE1
+		absE1 := (rE1&byteMask ^ (invSE1 * 255)) + invSE1
 		rO1 := ((u1>>8)&byteMask + bias) - (v1>>8)&byteMask
 		invSO1 := ((rO1 >> 9) & laneOne) ^ laneOne
-		absO1 := (rO1&byteMask ^ (invSO1*255)) + invSO1
+		absO1 := (rO1&byteMask ^ (invSO1 * 255)) + invSO1
 
 		// Chunk 2
 		u2 := *(*uint64)(unsafe.Add(p, i+16))
 		v2 := *(*uint64)(unsafe.Add(p, i+15))
 		rE2 := (u2&byteMask + bias) - v2&byteMask
 		invSE2 := ((rE2 >> 9) & laneOne) ^ laneOne
-		absE2 := (rE2&byteMask ^ (invSE2*255)) + invSE2
+		absE2 := (rE2&byteMask ^ (invSE2 * 255)) + invSE2
 		rO2 := ((u2>>8)&byteMask + bias) - (v2>>8)&byteMask
 		invSO2 := ((rO2 >> 9) & laneOne) ^ laneOne
-		absO2 := (rO2&byteMask ^ (invSO2*255)) + invSO2
+		absO2 := (rO2&byteMask ^ (invSO2 * 255)) + invSO2
 
 		// Chunk 3
 		u3 := *(*uint64)(unsafe.Add(p, i+24))
 		v3 := *(*uint64)(unsafe.Add(p, i+23))
 		rE3 := (u3&byteMask + bias) - v3&byteMask
 		invSE3 := ((rE3 >> 9) & laneOne) ^ laneOne
-		absE3 := (rE3&byteMask ^ (invSE3*255)) + invSE3
+		absE3 := (rE3&byteMask ^ (invSE3 * 255)) + invSE3
 		rO3 := ((u3>>8)&byteMask + bias) - (v3>>8)&byteMask
 		invSO3 := ((rO3 >> 9) & laneOne) ^ laneOne
-		absO3 := (rO3&byteMask ^ (invSO3*255)) + invSO3
+		absO3 := (rO3&byteMask ^ (invSO3 * 255)) + invSO3
 
 		laneSum := (absE0 + absO0) + (absE1 + absO1) + (absE2 + absO2) + (absE3 + absO3)
 		diffSum += int32((laneSum * laneOne) >> 48)
@@ -320,10 +320,10 @@ func IsSmoothDeltaFast(data []byte) bool {
 		v := *(*uint64)(unsafe.Add(p, i-1))
 		rE := (u&byteMask + bias) - v&byteMask
 		invSE := ((rE >> 9) & laneOne) ^ laneOne
-		absE := (rE&byteMask ^ (invSE*255)) + invSE
+		absE := (rE&byteMask ^ (invSE * 255)) + invSE
 		rO := ((u>>8)&byteMask + bias) - (v>>8)&byteMask
 		invSO := ((rO >> 9) & laneOne) ^ laneOne
-		absO := (rO&byteMask ^ (invSO*255)) + invSO
+		absO := (rO&byteMask ^ (invSO * 255)) + invSO
 		diffSum += int32(((absE + absO) * laneOne) >> 48)
 		if diffSum > maxDiff {
 			return false

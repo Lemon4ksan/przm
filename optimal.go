@@ -20,10 +20,10 @@ const (
 // dpNode stores the dynamic programming node state for the forward DAG parser.
 // Sized at exactly 32 bytes for cache alignment (power of 2) during relaxation.
 type dpNode struct {
-	cost    int32  // Scaled by CostScale (16 units per byte)
-	from    int32  // Predecessor position for backward path tracing
-	dist    int32  // Match distance (0 for literal transition)
-	repCode int8   // -1 for regular match / literal; 0, 1, 2 for rep0, rep1, rep2
+	cost    int32 // Scaled by CostScale (16 units per byte)
+	from    int32 // Predecessor position for backward path tracing
+	dist    int32 // Match distance (0 for literal transition)
+	repCode int8  // -1 for regular match / literal; 0, 1, 2 for rep0, rep1, rep2
 	_       [3]byte
 	rep0    int32  // Snapshot of rep0 hardware repeat register at this node
 	rep1    int32  // Snapshot of rep1 hardware repeat register at this node
@@ -129,7 +129,7 @@ func generateSubLengths(L int, out *[maxSubLenCandidates]int) int {
 		return 8
 	}
 	n := int(subLenCounts[L])
-	for j := 0; j < n; j++ {
+	for j := range n {
 		out[j] = int(subLenLUT[L][j])
 	}
 	return n
@@ -236,7 +236,7 @@ func compressBlockOptimal(
 
 	var subLenBuf [maxSubLenCandidates]int
 
-	for i := 0; i < bSize; i++ {
+	for i := range bSize {
 		pos := bStart + i
 		node := &dp[i]
 		curCost := node.cost
@@ -260,10 +260,7 @@ func compressBlockOptimal(
 			}
 		}
 
-		maxL := bSize - i
-		if maxL > 65535 {
-			maxL = 65535
-		}
+		maxL := min(bSize-i, 65535)
 		if maxL < 4 {
 			insertHashPRZM(src, pos, uSize, pad, windowLog, sp1M, sp8M)
 			continue
@@ -383,7 +380,7 @@ func compressBlockOptimal(
 			}
 		}
 
-		for b := 0; b < 4; b++ {
+		for b := range 4 {
 			if bracketBest[b].length >= 4 {
 				candidates[candCount] = bracketBest[b]
 				candCount++
@@ -392,14 +389,14 @@ func compressBlockOptimal(
 
 		// 3. Forward Relaxation over sub-lengths S(L)
 		cands := candidates[:candCount]
-		for c := 0; c < len(cands); c++ {
+		for c := range cands {
 			cand := &cands[c]
 			candL := min(cand.length, maxL)
 			if candL < 4 {
 				continue
 			}
 			nSubLens := generateSubLengths(candL, &subLenBuf)
-			for sIdx := 0; sIdx < nSubLens; sIdx++ {
+			for sIdx := range nSubLens {
 				subLen := subLenBuf[sIdx]
 				next := i + subLen
 				edgeCost := calcEdgeCostPRZM(subLen, cand.dist, cand.repCode)

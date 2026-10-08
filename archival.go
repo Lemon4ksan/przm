@@ -161,7 +161,7 @@ func CompressArchivalPNG(src []byte, level int) ([]byte, error) {
 	binary.LittleEndian.PutUint16(metaBuf[6:8], uint16(idatCount))
 
 	descPos := 8
-	for i := 0; i < idatCount; i++ {
+	for i := range idatCount {
 		binary.LittleEndian.PutUint32(metaBuf[descPos:descPos+4], meta.IDATLengths[i])
 		binary.BigEndian.PutUint32(metaBuf[descPos+4:descPos+8], meta.IDATCRCs[i])
 		descPos += 8
@@ -247,7 +247,7 @@ func DecompressArchivalPNGTo(src []byte, dst []byte) ([]byte, error) {
 
 	// 2. IDAT Chunks
 	innerPos := 0
-	for i := 0; i < idatCount; i++ {
+	for range idatCount {
 		chunkLen := int(binary.LittleEndian.Uint32(metaBuf[descPos : descPos+4]))
 		chunkCRC := binary.BigEndian.Uint32(metaBuf[descPos+4 : descPos+8])
 		descPos += 8
@@ -340,7 +340,7 @@ func (idx *ApproxSubChunkIndex) Insert(src []byte, pos int) {
 		return
 	}
 	p1 := int32(pos + 1)
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		chunk := binary.LittleEndian.Uint32(src[pos+4*k : pos+4*k+4])
 		h := approxHash(chunk) & ApproxTableMask
 		idx.tables[k][h] = approxEntry{pos: p1, chunk: chunk}
@@ -381,7 +381,7 @@ func (idx *ApproxSubChunkIndex) FindMatch(
 	var testedRefs [4]int
 	testedCount := 0
 
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		h := approxHash(chunks[k]) & ApproxTableMask
 		ent := idx.tables[k][h]
 		if ent.pos == 0 || ent.chunk != chunks[k] {
@@ -411,7 +411,7 @@ func (idx *ApproxSubChunkIndex) FindMatch(
 
 		// Pigeonhole Principle: Hamming distance <= 2 requires >= 2 matching 4-byte sub-chunks
 		matchingSubChunks := 1 // slot k already matches
-		for j := 0; j < 4; j++ {
+		for j := range 4 {
 			if j != k {
 				refChunk := binary.LittleEndian.Uint32(src[ref+4*j : ref+4*j+4])
 				if refChunk == chunks[j] {
@@ -436,7 +436,7 @@ func (idx *ApproxSubChunkIndex) FindMatch(
 		var diffXORs [2]byte
 		exceeded := false
 
-		for b := 0; b < 16; b++ {
+		for b := range 16 {
 			sb := src[pos+b]
 			rb := src[ref+b]
 			if sb != rb {

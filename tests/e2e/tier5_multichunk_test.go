@@ -271,7 +271,7 @@ func TestTier5_MultiChunk_FormatInteroperability(t *testing.T) {
 	var samples []streamSample
 
 	// Generate alternating sequence of single-frame and multi-chunk streams
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if i%2 == 0 {
 			// Single-frame stream (MagicPRZM)
 			size := 32*1024 + i*4096

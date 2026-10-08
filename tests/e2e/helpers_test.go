@@ -236,7 +236,7 @@ func generateMachineCode(length int) []byte {
 		}
 
 		if i < len(code)-2 {
-			code[i] = 0xC9 // leave
+			code[i] = 0xC9   // leave
 			code[i+1] = 0xC3 // ret
 			i += 2
 		}
@@ -261,10 +261,10 @@ func generatePNGContainer(width, height int) []byte {
 	// Synthetic IDAT payload
 	rawPixelCount := (width*3 + 1) * height
 	pixelData := make([]byte, rawPixelCount)
-	for y := 0; y < height; y++ {
+	for y := range height {
 		rowStart := y * (width*3 + 1)
 		pixelData[rowStart] = 0 // Filter type: None
-		for x := 0; x < width; x++ {
+		for x := range width {
 			px := rowStart + 1 + x*3
 			pixelData[px] = byte(x % 256)
 			pixelData[px+1] = byte(y % 256)

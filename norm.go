@@ -74,10 +74,10 @@ func init() {
 		b64RevStd[i] = -1
 		b64RevURL[i] = -1
 	}
-	for i := 0; i < len(b64LutStd); i++ {
+	for i := range len(b64LutStd) {
 		b64RevStd[b64LutStd[i]] = int8(i)
 	}
-	for i := 0; i < len(b64LutURL); i++ {
+	for i := range len(b64LutURL) {
 		b64RevURL[b64LutURL[i]] = int8(i)
 	}
 }
@@ -90,7 +90,7 @@ func IsWholeBlockHex(src []byte) (isHex bool, upper bool) {
 	}
 	hasLower := false
 	hasUpper := false
-	for i := 0; i < n; i++ {
+	for i := range n {
 		b := src[i]
 		if b >= '0' && b <= '9' {
 			continue
@@ -130,7 +130,7 @@ func IsWholeBlockBase64(src []byte) (isB64 bool, padCount int, urlSafe bool) {
 	hasPlusSlash := false
 	hasDashUnderscore := false
 
-	for i := 0; i < bodyLen; i++ {
+	for i := range bodyLen {
 		b := src[i]
 		if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') {
 			continue
@@ -190,7 +190,7 @@ func hexNibble(c byte) (byte, bool) {
 // ContractHex contracts 2 ASCII hex characters into 1 raw byte.
 func ContractHex(src []byte, dst []byte) {
 	n := len(src) / 2
-	for i := 0; i < n; i++ {
+	for i := range n {
 		hi, _ := hexNibble(src[2*i])
 		lo, _ := hexNibble(src[2*i+1])
 		dst[i] = (hi << 4) | lo
@@ -224,7 +224,7 @@ func ContractBase64(src []byte, dst []byte, padCount int, urlSafe bool) int {
 	numQuads := n / 4
 	dstIdx := 0
 
-	for q := 0; q < numQuads; q++ {
+	for q := range numQuads {
 		sIdx := q * 4
 		isLast := (q == numQuads-1) && (padCount > 0)
 		if !isLast {
@@ -268,7 +268,7 @@ func ExpandBase64To(dst []byte, src []byte, padCount int, urlSafe bool) {
 	remBytes := srcLen % 3
 
 	dstIdx := 0
-	for t := 0; t < fullTriplets; t++ {
+	for t := range fullTriplets {
 		if dstIdx+4 > len(dst) {
 			return
 		}
@@ -376,7 +376,7 @@ func DetectNormSpans(src []byte) NormPlan {
 		if spanLen >= minNormSpanLen {
 			isB64, padCount, urlSafe := IsWholeBlockBase64(candidate)
 			if isB64 {
-				contractedLen := (spanLen / 4) * 3 - padCount
+				contractedLen := (spanLen/4)*3 - padCount
 				var spanType uint8
 				if !urlSafe {
 					switch padCount {
@@ -436,10 +436,12 @@ func DetectNormSpans(src []byte) NormPlan {
 // Format:
 // [0..1] numSpans uint16_le (K)
 // For each span:
-//   [0] spanType uint8
-//   [1..4] contractedOffset uint32_le
-//   [5..8] contractedLen uint32_le
-//   [9..12] originalLen uint32_le
+//
+//	[0] spanType uint8
+//	[1..4] contractedOffset uint32_le
+//	[5..8] contractedLen uint32_le
+//	[9..12] originalLen uint32_le
+//
 // Followed by contracted payload data.
 func EncodeNormSpans(src []byte, plan NormPlan, out []byte) []byte {
 	numSpans := len(plan.Spans)
@@ -526,7 +528,7 @@ func ExpandNormSpansTo(dst []byte, contracted []byte) (int, error) {
 	dstPos := 0
 	dataReadPos := tableSize
 
-	for i := 0; i < numSpans; i++ {
+	for i := range numSpans {
 		descOffset := 2 + 13*i
 		spanType := contracted[descOffset]
 		contractedOffset := int(binary.LittleEndian.Uint32(contracted[descOffset+1 : descOffset+5]))

@@ -442,10 +442,7 @@ func compressMultiChunk(src []byte, opts CompressOptions) ([]byte, error) {
 
 	results := make([][]byte, chunkCount)
 
-	numWorkers := min(chunkCount, threads)
-	if numWorkers < 1 {
-		numWorkers = 1
-	}
+	numWorkers := max(min(chunkCount, threads), 1)
 
 	if numWorkers <= 1 {
 		for idx := 0; idx < chunkCount; idx++ {
@@ -464,10 +461,8 @@ func compressMultiChunk(src []byte, opts CompressOptions) ([]byte, error) {
 	var firstErr atomic.Pointer[error]
 	var wg sync.WaitGroup
 
-	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numWorkers {
+		wg.Go(func() {
 			for {
 				if firstErr.Load() != nil {
 					return
@@ -488,7 +483,7 @@ func compressMultiChunk(src []byte, opts CompressOptions) ([]byte, error) {
 				}
 				results[idx] = comp
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -1331,241 +1326,241 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 				if level >= 3 && best.length <= 6 && pos+1+minMatch <= bEnd {
 					insertHash(pos)
 					nextBest := findBest(pos+1, bEnd)
-				// Lookahead comparison between match candidate at pos and pos+1
-				preferNext := false
-				if nextBest.length > best.length+1 {
-					// 1. Yield dominance: l2 covers strictly more bytes even with 1 skipped literal
-					preferNext = true
-				} else if nextBest.score-1 > best.score {
-					// 2. Information-theoretic yield: net score higher after paying 1-byte literal penalty
-					preferNext = true
-				} else if nextBest.score-1 == best.score && nextBest.length == best.length+1 {
-					// 3. Deterministic tie-breaker: prefer repeat/fused matches (lower entropy, 1-byte opcode)
-					if nextBest.mType <= 2 && best.mType > 2 {
+					// Lookahead comparison between match candidate at pos and pos+1
+					preferNext := false
+					if nextBest.length > best.length+1 {
+						// 1. Yield dominance: l2 covers strictly more bytes even with 1 skipped literal
 						preferNext = true
+					} else if nextBest.score-1 > best.score {
+						// 2. Information-theoretic yield: net score higher after paying 1-byte literal penalty
+						preferNext = true
+					} else if nextBest.score-1 == best.score && nextBest.length == best.length+1 {
+						// 3. Deterministic tie-breaker: prefer repeat/fused matches (lower entropy, 1-byte opcode)
+						if nextBest.mType <= 2 && best.mType > 2 {
+							preferNext = true
+						}
 					}
-				}
-				if preferNext {
-					pos++
-					continue
-				}
-			}
-
-			// Backward match extension into uncommitted literals!
-			if best.mType != 5 && best.mType != 6 && best.mType != 7 && best.mType != 8 {
-				for pos > litStart && pos-best.distance > 0 && src[pos-1] == src[pos-best.distance-1] && best.length < 65530 {
-					pos--
-					best.length++
-					if best.mType == 1 && (best.length > 7 || best.ringK > 2) {
-						best.mType = 3
-					}
-					if best.mType == 2 && best.length > 19 {
+					if preferNext {
 						pos++
-						best.length--
-						break
+						continue
 					}
 				}
-			}
 
-			litLen := pos - litStart
+				// Backward match extension into uncommitted literals!
+				if best.mType != 5 && best.mType != 6 && best.mType != 7 && best.mType != 8 {
+					for pos > litStart && pos-best.distance > 0 && src[pos-1] == src[pos-best.distance-1] && best.length < 65530 {
+						pos--
+						best.length++
+						if best.mType == 1 && (best.length > 7 || best.ringK > 2) {
+							best.mType = 3
+						}
+						if best.mType == 2 && best.length > 19 {
+							pos++
+							best.length--
+							break
+						}
+					}
+				}
 
-			switch best.mType {
-			case 1: // Fused Repeat (k <= 2, length 4..7)
-				if litLen > 7 {
-					flushLiterals(src[litStart : pos-7])
-					litStart = pos - 7
-					litLen = 7
-				}
-				op := uint8((litLen << 4) | ((best.length - 4) << 2) | best.ringK)
-				pad.cmdBuf = append(pad.cmdBuf, op)
-				if litLen > 0 {
-					pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
-				}
-				switch best.ringK {
-				case 0:
-				case 1:
-					rep1 = rep0
-					rep0 = best.distance
-				case 2:
+				litLen := pos - litStart
+
+				switch best.mType {
+				case 1: // Fused Repeat (k <= 2, length 4..7)
+					if litLen > 7 {
+						flushLiterals(src[litStart : pos-7])
+						litStart = pos - 7
+						litLen = 7
+					}
+					op := uint8((litLen << 4) | ((best.length - 4) << 2) | best.ringK)
+					pad.cmdBuf = append(pad.cmdBuf, op)
+					if litLen > 0 {
+						pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
+					}
+					switch best.ringK {
+					case 0:
+					case 1:
+						rep1 = rep0
+						rep0 = best.distance
+					case 2:
+						rep2 = rep1
+						rep1 = rep0
+						rep0 = best.distance
+					}
+
+				case 2: // Stride (m 1..8, length 4..19)
+					if litLen > 15 {
+						flushLiterals(src[litStart : pos-15])
+						litStart = pos - 15
+						litLen = 15
+					}
+					op := OpcodePrefixStride | uint8(best.strideM-1)
+					token := uint8((litLen << 4) | (best.length - 4))
+					pad.cmdBuf = append(pad.cmdBuf, op, token)
+					if litLen > 0 {
+						pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
+					}
 					rep2 = rep1
 					rep1 = rep0
 					rep0 = best.distance
-				}
 
-			case 2: // Stride (m 1..8, length 4..19)
-				if litLen > 15 {
-					flushLiterals(src[litStart : pos-15])
-					litStart = pos - 15
-					litLen = 15
-				}
-				op := OpcodePrefixStride | uint8(best.strideM-1)
-				token := uint8((litLen << 4) | (best.length - 4))
-				pad.cmdBuf = append(pad.cmdBuf, op, token)
-				if litLen > 0 {
-					pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
-				}
-				rep2 = rep1
-				rep1 = rep0
-				rep0 = best.distance
+				case 3: // Long Repeat (k 0..2, length 4..N) with Fused Literals
+					if litLen > 15 {
+						flushLiterals(src[litStart : pos-15])
+						litStart = pos - 15
+						litLen = 15
+					}
+					baseLen := best.length - 4
+					if baseLen > 14 {
+						baseLen = 15
+					}
+					op := OpcodePrefixLongRepeat | uint8(best.ringK)
+					token := uint8((litLen << 4) | baseLen)
+					pad.cmdBuf = append(pad.cmdBuf, op, token)
+					if baseLen == 15 {
+						var varBuf [8]byte
+						n := binary.PutUvarint(varBuf[:], uint64(best.length-19))
+						pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
+					}
+					if litLen > 0 {
+						pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
+					}
+					switch best.ringK {
+					case 0:
+					case 1:
+						rep1 = rep0
+						rep0 = best.distance
+					case 2:
+						rep2 = rep1
+						rep1 = rep0
+						rep0 = best.distance
+					}
 
-			case 3: // Long Repeat (k 0..2, length 4..N) with Fused Literals
-				if litLen > 15 {
-					flushLiterals(src[litStart : pos-15])
-					litStart = pos - 15
-					litLen = 15
-				}
-				baseLen := best.length - 4
-				if baseLen > 14 {
-					baseLen = 15
-				}
-				op := OpcodePrefixLongRepeat | uint8(best.ringK)
-				token := uint8((litLen << 4) | baseLen)
-				pad.cmdBuf = append(pad.cmdBuf, op, token)
-				if baseLen == 15 {
-					var varBuf [8]byte
-					n := binary.PutUvarint(varBuf[:], uint64(best.length-19))
-					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
-				}
-				if litLen > 0 {
-					pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
-				}
-				switch best.ringK {
-				case 0:
-				case 1:
-					rep1 = rep0
-					rep0 = best.distance
-				case 2:
+				case 4: // Fused Extended Match (length 4..N, explicit offset)
+					if litLen > 3 {
+						flushLiterals(src[litStart : pos-3])
+						litStart = pos - 3
+						litLen = 3
+					}
+					baseLen := best.length - 4
+					if baseLen > 14 {
+						baseLen = 15
+					}
+					op := OpcodeFlagFusedExt | uint8(litLen<<4) | uint8(baseLen)
+					pad.cmdBuf = append(pad.cmdBuf, op)
+					if baseLen == 15 {
+						var varBuf [8]byte
+						n := binary.PutUvarint(varBuf[:], uint64(best.length-19))
+						pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
+					}
+					if litLen > 0 {
+						pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
+					}
+					writeOffset(best.distance)
 					rep2 = rep1
 					rep1 = rep0
 					rep0 = best.distance
-				}
 
-			case 4: // Fused Extended Match (length 4..N, explicit offset)
-				if litLen > 3 {
-					flushLiterals(src[litStart : pos-3])
-					litStart = pos - 3
-					litLen = 3
-				}
-				baseLen := best.length - 4
-				if baseLen > 14 {
-					baseLen = 15
-				}
-				op := OpcodeFlagFusedExt | uint8(litLen<<4) | uint8(baseLen)
-				pad.cmdBuf = append(pad.cmdBuf, op)
-				if baseLen == 15 {
-					var varBuf [8]byte
-					n := binary.PutUvarint(varBuf[:], uint64(best.length-19))
-					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
-				}
-				if litLen > 0 {
-					pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
-				}
-				writeOffset(best.distance)
-				rep2 = rep1
-				rep1 = rep0
-				rep0 = best.distance
-
-			case 5: // DeltaMaskExplicit
-				if litLen > 0 {
-					flushLiterals(src[litStart:pos])
-				}
-				flags |= FlagDeltaMask
-				pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixDeltaExpl)
-				baseLen := best.length - 4
-				if baseLen >= 255 {
-					pad.cmdBuf = append(pad.cmdBuf, 255)
-					var varBuf [8]byte
-					n := binary.PutUvarint(varBuf[:], uint64(best.length-259))
-					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
-				} else {
-					pad.cmdBuf = append(pad.cmdBuf, uint8(baseLen))
-				}
-				writeOffset(best.distance)
-				pad.literalBuf = append(pad.literalBuf, uint8(best.mismatches))
-				for m := 0; m < best.mismatches; m++ {
-					if best.length <= 256 {
-						pad.literalBuf = append(pad.literalBuf, uint8(best.diffOffs[m]))
+				case 5: // DeltaMaskExplicit
+					if litLen > 0 {
+						flushLiterals(src[litStart:pos])
+					}
+					flags |= FlagDeltaMask
+					pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixDeltaExpl)
+					baseLen := best.length - 4
+					if baseLen >= 255 {
+						pad.cmdBuf = append(pad.cmdBuf, 255)
+						var varBuf [8]byte
+						n := binary.PutUvarint(varBuf[:], uint64(best.length-259))
+						pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
 					} else {
-						var rel [2]byte
-						binary.LittleEndian.PutUint16(rel[:], uint16(best.diffOffs[m]))
-						pad.literalBuf = append(pad.literalBuf, rel[:]...)
+						pad.cmdBuf = append(pad.cmdBuf, uint8(baseLen))
 					}
-					pad.literalBuf = append(pad.literalBuf, best.diffXORs[m])
-				}
-				rep2 = rep1
-				rep1 = rep0
-				rep0 = best.distance
-
-			case 6: // DeltaMaskRing8
-				if litLen > 0 {
-					flushLiterals(src[litStart:pos])
-				}
-				flags |= FlagDeltaMask
-				op := OpcodePrefixDeltaRing | uint8(best.ringK)
-				pad.cmdBuf = append(pad.cmdBuf, op)
-				baseLen := best.length - 4
-				if baseLen >= 255 {
-					pad.cmdBuf = append(pad.cmdBuf, 255)
-					var varBuf [8]byte
-					n := binary.PutUvarint(varBuf[:], uint64(best.length-259))
-					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
-				} else {
-					pad.cmdBuf = append(pad.cmdBuf, uint8(baseLen))
-				}
-				pad.literalBuf = append(pad.literalBuf, uint8(best.mismatches))
-				for m := 0; m < best.mismatches; m++ {
-					if best.length <= 256 {
-						pad.literalBuf = append(pad.literalBuf, uint8(best.diffOffs[m]))
-					} else {
-						var rel [2]byte
-						binary.LittleEndian.PutUint16(rel[:], uint16(best.diffOffs[m]))
-						pad.literalBuf = append(pad.literalBuf, rel[:]...)
+					writeOffset(best.distance)
+					pad.literalBuf = append(pad.literalBuf, uint8(best.mismatches))
+					for m := 0; m < best.mismatches; m++ {
+						if best.length <= 256 {
+							pad.literalBuf = append(pad.literalBuf, uint8(best.diffOffs[m]))
+						} else {
+							var rel [2]byte
+							binary.LittleEndian.PutUint16(rel[:], uint16(best.diffOffs[m]))
+							pad.literalBuf = append(pad.literalBuf, rel[:]...)
+						}
+						pad.literalBuf = append(pad.literalBuf, best.diffXORs[m])
 					}
-					pad.literalBuf = append(pad.literalBuf, best.diffXORs[m])
-				}
-				switch best.ringK {
-				case 0:
-				case 1:
-					rep1 = rep0
-					rep0 = best.distance
-				case 2:
 					rep2 = rep1
 					rep1 = rep0
 					rep0 = best.distance
+
+				case 6: // DeltaMaskRing8
+					if litLen > 0 {
+						flushLiterals(src[litStart:pos])
+					}
+					flags |= FlagDeltaMask
+					op := OpcodePrefixDeltaRing | uint8(best.ringK)
+					pad.cmdBuf = append(pad.cmdBuf, op)
+					baseLen := best.length - 4
+					if baseLen >= 255 {
+						pad.cmdBuf = append(pad.cmdBuf, 255)
+						var varBuf [8]byte
+						n := binary.PutUvarint(varBuf[:], uint64(best.length-259))
+						pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
+					} else {
+						pad.cmdBuf = append(pad.cmdBuf, uint8(baseLen))
+					}
+					pad.literalBuf = append(pad.literalBuf, uint8(best.mismatches))
+					for m := 0; m < best.mismatches; m++ {
+						if best.length <= 256 {
+							pad.literalBuf = append(pad.literalBuf, uint8(best.diffOffs[m]))
+						} else {
+							var rel [2]byte
+							binary.LittleEndian.PutUint16(rel[:], uint16(best.diffOffs[m]))
+							pad.literalBuf = append(pad.literalBuf, rel[:]...)
+						}
+						pad.literalBuf = append(pad.literalBuf, best.diffXORs[m])
+					}
+					switch best.ringK {
+					case 0:
+					case 1:
+						rep1 = rep0
+						rep0 = best.distance
+					case 2:
+						rep2 = rep1
+						rep1 = rep0
+						rep0 = best.distance
+					}
+
+				case 7: // OpcodePrefixShortDict (0xD8 .. 0xDF)
+					if litLen > 0 {
+						flushLiterals(src[litStart:pos])
+					}
+					op := OpcodePrefixShortDict | uint8(best.dictTok)
+					pad.cmdBuf = append(pad.cmdBuf, op)
+
+				case 8: // OpcodePrefixDictToken (0xF2 <tokID>)
+					if litLen > 0 {
+						flushLiterals(src[litStart:pos])
+					}
+					pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixDictToken, uint8(best.dictTok))
 				}
 
-			case 7: // OpcodePrefixShortDict (0xD8 .. 0xDF)
-				if litLen > 0 {
-					flushLiterals(src[litStart:pos])
+				insertHash(pos)
+				if best.length > 2 && pos+best.length-1+4 <= uSize {
+					insertHash(pos + best.length - 1)
 				}
-				op := OpcodePrefixShortDict | uint8(best.dictTok)
-				pad.cmdBuf = append(pad.cmdBuf, op)
-
-			case 8: // OpcodePrefixDictToken (0xF2 <tokID>)
-				if litLen > 0 {
-					flushLiterals(src[litStart:pos])
-				}
-				pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixDictToken, uint8(best.dictTok))
+				pos += best.length
+				litStart = pos
+				misses = 0
+				continue
 			}
 
 			insertHash(pos)
-			if best.length > 2 && pos+best.length-1+4 <= uSize {
-				insertHash(pos + best.length - 1)
+			misses++
+			step := min(1+(misses>>6), 32)
+			if level <= 2 {
+				step = min(1+(misses>>4), 32)
 			}
-			pos += best.length
-			litStart = pos
-			misses = 0
-			continue
+			pos += step
 		}
-
-		insertHash(pos)
-		misses++
-		step := min(1+(misses>>6), 32)
-		if level <= 2 {
-			step = min(1+(misses>>4), 32)
-		}
-		pos += step
-	}
 
 		// Flush remaining literals for this block
 		if litStart < bEnd {

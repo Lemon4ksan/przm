@@ -45,7 +45,7 @@ func TestStream_HeaderParsing(t *testing.T) {
 	}
 
 	// Truncated header
-	for l := 0; l < StreamHeaderSize; l++ {
+	for l := range StreamHeaderSize {
 		_, err := ParseStreamHeader(validHdr[:l])
 		if !errors.Is(err, ErrCorruptedFrame) {
 			t.Errorf("expected ErrCorruptedFrame for length %d, got %v", l, err)
@@ -567,4 +567,3 @@ func TestStream_MultithreadedCompression(t *testing.T) {
 		}
 	})
 }
-

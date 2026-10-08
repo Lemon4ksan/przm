@@ -101,5 +101,5 @@ type BenchmarkReport struct {
 	Corpus     *CorpusReport     `json:"corpus,omitempty"`
 	Large      *LargeReport      `json:"large,omitempty"`
 	Summary    ValidationSummary `json:"summary"`
-	Validation ValidationSummary `json:"validation,omitempty"`
+	Validation ValidationSummary `json:"validation"`
 }

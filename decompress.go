@@ -360,7 +360,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			offset := StreamHeaderSize
 			dstPos := 0
 
-			for i := uint32(0); i < chunkCount; i++ {
+			for range chunkCount {
 				if offset+4 > len(src) {
 					return nil, ErrCorruptedFrame
 				}

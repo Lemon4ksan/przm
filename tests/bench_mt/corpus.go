@@ -201,10 +201,7 @@ func runCorpusBenchmark(cfg Config) (*CorpusReport, error) {
 		{level: 5, name: "PRZM Level 5 (MT High)", archivalMode: false},
 	}
 
-	runs := cfg.Runs
-	if runs < 1 {
-		runs = 1
-	}
+	runs := max(cfg.Runs, 1)
 
 	for _, pl := range przmLevels {
 		var totalCompBytes int64
@@ -217,7 +214,7 @@ func runCorpusBenchmark(cfg Config) (*CorpusReport, error) {
 
 		// Warmup + Compression
 		var totalCompDuration time.Duration
-		for r := 0; r < runs; r++ {
+		for r := range runs {
 			startComp := time.Now()
 			for i, it := range items {
 				opts := przm.CompressOptions{
@@ -266,7 +263,7 @@ func runCorpusBenchmark(cfg Config) (*CorpusReport, error) {
 
 		// 1. Timed Decompression & Bit-Exact Verification Pass
 		var totalDecompDuration time.Duration
-		for r := 0; r < runs; r++ {
+		for range runs {
 			startDecomp := time.Now()
 			for i, it := range items {
 				comp := compressedPayloads[i]

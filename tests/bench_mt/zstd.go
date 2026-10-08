@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -54,8 +55,8 @@ func parseZstdBenchmarkOutput(output string) (rawBytes int64, compBytes int64, r
 		return r == '\r' || r == '\n'
 	})
 
-	for i := len(lines) - 1; i >= 0; i-- {
-		matches := zstdBenchRegex.FindStringSubmatch(lines[i])
+	for _, line := range slices.Backward(lines) {
+		matches := zstdBenchRegex.FindStringSubmatch(line)
 		if len(matches) >= 5 {
 			rawBytes, _ = strconv.ParseInt(matches[1], 10, 64)
 			compBytes, _ = strconv.ParseInt(matches[2], 10, 64)

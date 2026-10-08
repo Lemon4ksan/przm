@@ -40,7 +40,7 @@ func (t *DedupTable) Reset() {
 // Returns the matching block index and true if an exact duplicate is found.
 func (t *DedupTable) Probe(hash uint64, src []byte, currPos int) (uint32, bool) {
 	idx := int(hash & dedupTableMask)
-	for i := 0; i < dedupProbes; i++ {
+	for i := range dedupProbes {
 		slot := (idx + i) & dedupTableMask
 		e := &t.entries[slot]
 		if !e.valid {
@@ -62,7 +62,7 @@ func (t *DedupTable) Probe(hash uint64, src []byte, currPos int) (uint32, bool) 
 // Insert registers an aligned 64 KiB block with its 64-bit hash and block index.
 func (t *DedupTable) Insert(hash uint64, blockIdx uint32) {
 	idx := int(hash & dedupTableMask)
-	for i := 0; i < dedupProbes; i++ {
+	for i := range dedupProbes {
 		slot := (idx + i) & dedupTableMask
 		e := &t.entries[slot]
 		if !e.valid || e.hash == hash {
