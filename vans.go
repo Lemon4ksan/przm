@@ -18,7 +18,8 @@ const (
 	vansMagic1 uint8 = 0x41 // 'A'
 	vansVer1   uint8 = 0x01
 
-	vansFlag4X uint8 = 0x01 // 4-way interleaved SIMD-friendly streams
+	vansFlag4X    uint8 = 0x01 // 4-way interleaved SIMD-friendly streams
+	vansFlagSheaf uint8 = 0x02 // Étale Sheaf Vector C stream splitting applied to literals
 
 	vansM uint32 = 4096  // ANS table precision M = 2^12
 	vansL uint32 = 65536 // State lower bound L = 2^16
@@ -218,11 +219,9 @@ func NewVANSModel(m *Matrix16x16) *VANSModel {
 	return model
 }
 
-// NewVANSModelFromFreq constructs a model directly from normalized frequencies.
-func NewVANSModelFromFreq(freq [256]uint16) *VANSModel {
-	model := &VANSModel{
-		Freq: freq,
-	}
+// InitFromFreq fills an existing VANSModel in-place with normalized frequencies.
+func (model *VANSModel) InitFromFreq(freq [256]uint16) {
+	model.Freq = freq
 	cdf := uint32(0)
 	for s := range 256 {
 		model.CDF[s] = uint16(cdf)
@@ -236,7 +235,14 @@ func NewVANSModelFromFreq(freq [256]uint16) *VANSModel {
 		cdf += f
 	}
 	model.CDF[256] = uint16(cdf)
-	return model
+}
+
+// NewVANSModelFromFreq constructs a model directly from normalized frequencies.
+func NewVANSModelFromFreq(freq [256]uint16) *VANSModel {
+	var model VANSModel
+	model.InitFromFreq(freq)
+	cp := model
+	return &cp
 }
 
 // SerializeMatrix encodes the 16x16 matrix into a compact byte header.
@@ -287,10 +293,10 @@ func (model *VANSModel) SerializeMatrix() []byte {
 	return buf
 }
 
-// DeserializeMatrix decodes a compact matrix header and constructs the VANSModel.
-func DeserializeMatrix(src []byte) (*VANSModel, int, error) {
+// DeserializeMatrixTo decodes a compact matrix header into an existing VANSModel in-place without dynamic heap allocation.
+func DeserializeMatrixTo(src []byte, model *VANSModel) (int, error) {
 	if len(src) < 2 {
-		return nil, 0, ErrVANSCorrupted
+		return 0, ErrVANSCorrupted
 	}
 	rowMask := binary.LittleEndian.Uint16(src[0:2])
 	ptr := 2
@@ -303,7 +309,7 @@ func DeserializeMatrix(src []byte) (*VANSModel, int, error) {
 			continue
 		}
 		if ptr+2 > len(src) {
-			return nil, 0, ErrVANSCorrupted
+			return 0, ErrVANSCorrupted
 		}
 		colMask := binary.LittleEndian.Uint16(src[ptr : ptr+2])
 		ptr += 2
@@ -313,7 +319,7 @@ func DeserializeMatrix(src []byte) (*VANSModel, int, error) {
 				continue
 			}
 			if ptr >= len(src) {
-				return nil, 0, ErrVANSCorrupted
+				return 0, ErrVANSCorrupted
 			}
 			b0 := src[ptr]
 			ptr++
@@ -322,7 +328,7 @@ func DeserializeMatrix(src []byte) (*VANSModel, int, error) {
 				w = uint16(b0)
 			} else {
 				if ptr >= len(src) {
-					return nil, 0, ErrVANSCorrupted
+					return 0, ErrVANSCorrupted
 				}
 				b1 := src[ptr]
 				ptr++
@@ -334,10 +340,22 @@ func DeserializeMatrix(src []byte) (*VANSModel, int, error) {
 	}
 
 	if sum != vansM {
-		return nil, 0, fmt.Errorf("%w: normalized weight sum is %d, want %d", ErrVANSCorrupted, sum, vansM)
+		return 0, fmt.Errorf("%w: normalized weight sum is %d, want %d", ErrVANSCorrupted, sum, vansM)
 	}
 
-	return NewVANSModelFromFreq(freq), ptr, nil
+	model.InitFromFreq(freq)
+	return ptr, nil
+}
+
+// DeserializeMatrix decodes a compact matrix header and constructs the VANSModel.
+func DeserializeMatrix(src []byte) (*VANSModel, int, error) {
+	var model VANSModel
+	ptr, err := DeserializeMatrixTo(src, &model)
+	if err != nil {
+		return nil, 0, err
+	}
+	cp := model
+	return &cp, ptr, nil
 }
 
 // VANSEncode4x encodes raw bytes using a 4-way interleaved Vector-State ANS coder.
@@ -407,10 +425,11 @@ func VANSEncode4x(src []byte) ([]byte, error) {
 	return out, nil
 }
 
-// VANSDecode4x decodes a 4-way interleaved Vector-State ANS stream back to original bytes.
-func VANSDecode4x(src []byte) ([]byte, error) {
+// VANSDecode4xTo decodes a 4-way interleaved Vector-State ANS stream into dst using preallocated model.
+// Guarantees strictly 0 dynamic heap allocations if cap(dst) >= origLen.
+func VANSDecode4xTo(dst []byte, src []byte, model *VANSModel) ([]byte, error) {
 	if len(src) == 0 {
-		return []byte{}, nil
+		return dst[:0], nil
 	}
 	if len(src) < 8 {
 		return nil, ErrVANSCorrupted
@@ -426,12 +445,15 @@ func VANSDecode4x(src []byte) ([]byte, error) {
 	}
 
 	origLen := int(binary.LittleEndian.Uint32(src[4:8]))
+	if origLen < 0 || origLen > MaxBlockSize {
+		return nil, fmt.Errorf("%w: invalid V-ANS origLen %d", ErrVANSCorrupted, origLen)
+	}
 	if origLen == 0 {
-		return []byte{}, nil
+		return dst[:0], nil
 	}
 
-	// Deserialize 16x16 Matrix
-	model, matBytesRead, err := DeserializeMatrix(src[8:])
+	// Deserialize 16x16 Matrix into model in-place
+	matBytesRead, err := DeserializeMatrixTo(src[8:], model)
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +471,10 @@ func VANSDecode4x(src []byte) ([]byte, error) {
 	}
 
 	streamPtr := ptr
-	dst := make([]byte, origLen)
+	if cap(dst) < origLen {
+		return nil, fmt.Errorf("%w: dst capacity %d < origLen %d", ErrBufferTooSmall, cap(dst), origLen)
+	}
+	dst = dst[:origLen]
 
 	// Decode in forward order across 4 interleaved lanes
 	for i := range origLen {
@@ -477,4 +502,24 @@ func VANSDecode4x(src []byte) ([]byte, error) {
 	}
 
 	return dst, nil
+}
+
+// VANSDecode4x decodes a 4-way interleaved Vector-State ANS stream back to original bytes.
+func VANSDecode4x(src []byte) ([]byte, error) {
+	if len(src) == 0 {
+		return []byte{}, nil
+	}
+	if len(src) < 8 {
+		return nil, ErrVANSCorrupted
+	}
+	origLen := int(binary.LittleEndian.Uint32(src[4:8]))
+	if origLen < 0 || origLen > MaxBlockSize {
+		return nil, fmt.Errorf("%w: invalid V-ANS origLen %d", ErrVANSCorrupted, origLen)
+	}
+	if origLen == 0 {
+		return []byte{}, nil
+	}
+	dst := make([]byte, origLen)
+	var model VANSModel
+	return VANSDecode4xTo(dst, src, &model)
 }

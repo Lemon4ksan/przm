@@ -871,6 +871,10 @@ func DecompressSheafTrellis(src, dst []byte) ([]byte, error) {
 		return dst, nil
 	}
 
+	if mode == SheafModeSplit || mode == SheafModeSplitCascaded {
+		return DecompressSheaf(src, dst)
+	}
+
 	// SheafModeTrellisRep
 	if err := decodeTrellisPayload(src[12:], dst); err != nil {
 		return nil, err

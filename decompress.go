@@ -7,6 +7,7 @@ package przm
 import (
 	"encoding/binary"
 	"fmt"
+	"math/bits"
 	"unsafe"
 
 	"github.com/lemon4ksan/foundation/bufkit"
@@ -28,6 +29,11 @@ type decompressScratchpad struct {
 	litBuf      []byte
 	normBuf     []byte
 	scanlineBuf []byte
+	sheafSBuf   []byte
+	sheafCBuf   []byte
+	vansModelS  VANSModel
+	vansModelC  VANSModel
+	vansModel   VANSModel
 }
 
 var decScratchPool = generic.NewPool(func() *decompressScratchpad {
@@ -37,6 +43,8 @@ var decScratchPool = generic.NewPool(func() *decompressScratchpad {
 		litBuf:      bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
 		normBuf:     bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
 		scanlineBuf: bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+		sheafSBuf:   bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+		sheafCBuf:   bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
 	}
 })
 
@@ -160,12 +168,110 @@ func copyMatch(baseDst unsafe.Pointer, dstPos, srcIdx, mLen, d int) {
 	}
 }
 
-// unpackLiterals unpacks literals from Section 4, supporting both v0.2 V-ANS and v0.1 Nibble-Planes.
-func unpackLiterals(src []byte, bPtr *[]byte) ([]byte, error) {
-	if len(src) >= 8 && src[0] == vansMagic0 && src[1] == vansMagic1 && src[2] == vansVer1 {
-		return VANSDecode4x(src)
+// validateSheafMask counts 1-bits in mask for the first origLen bits and ensures unused bits are 0.
+func validateSheafMask(mask []byte, origLen, sLen int) bool {
+	if origLen < 0 || sLen < 0 || sLen > origLen {
+		return false
 	}
-	return unpackNibblePlanes(src, bPtr)
+	expectedMaskLen := (origLen + 7) / 8
+	if len(mask) < expectedMaskLen {
+		return false
+	}
+	fullBytes := origLen / 8
+	remBits := origLen % 8
+	ones := 0
+	i := 0
+	for ; i+8 <= fullBytes; i += 8 {
+		ones += bits.OnesCount64(binary.LittleEndian.Uint64(mask[i:]))
+	}
+	for ; i < fullBytes; i++ {
+		ones += bits.OnesCount8(mask[i])
+	}
+	if remBits > 0 {
+		lastByte := mask[fullBytes]
+		if (lastByte >> remBits) != 0 {
+			return false // Unused high bits in mask must be zero
+		}
+		ones += bits.OnesCount8(lastByte)
+	}
+	return ones == sLen
+}
+
+// unpackLiterals unpacks literals from Section 4, supporting Sheaf-split V-ANS, standard V-ANS, and Nibble-Planes.
+func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
+	if len(src) >= 8 && src[0] == vansMagic0 && src[1] == vansMagic1 && src[2] == vansVer1 {
+		flags := src[3]
+		if (flags & vansFlagSheaf) != 0 {
+			if len(src) < 24 {
+				return nil, fmt.Errorf("%w: truncated sheaf vans literal header", ErrCorruptedFrame)
+			}
+			origLen := int(binary.LittleEndian.Uint32(src[4:8]))
+			sLen := int(binary.LittleEndian.Uint32(src[8:12]))
+			maskLen := int(binary.LittleEndian.Uint32(src[12:16]))
+			encSLen := int(binary.LittleEndian.Uint32(src[16:20]))
+			encCLen := int(binary.LittleEndian.Uint32(src[20:24]))
+
+			if origLen < 0 || origLen > MaxBlockSize {
+				return nil, fmt.Errorf("%w: sheaf vans origLen %d exceeds MaxBlockSize", ErrCorruptedFrame, origLen)
+			}
+			expectedMaskLen := (origLen + 7) / 8
+			if maskLen != expectedMaskLen || sLen < 0 || sLen > origLen || encSLen < 0 || encCLen < 0 {
+				return nil, fmt.Errorf("%w: invalid sheaf vans literal parameters", ErrCorruptedFrame)
+			}
+			if uint64(24)+uint64(maskLen)+uint64(encSLen)+uint64(encCLen) > uint64(len(src)) {
+				return nil, fmt.Errorf("%w: truncated sheaf vans payload", ErrCorruptedFrame)
+			}
+
+			mask := src[24 : 24+maskLen]
+			if !validateSheafMask(mask, origLen, sLen) {
+				return nil, fmt.Errorf("%w: invalid sheaf mask popcount or dirty padding bits", ErrCorruptedFrame)
+			}
+
+			encS := src[24+maskLen : 24+maskLen+encSLen]
+			encC := src[24+maskLen+encSLen : 24+maskLen+encSLen+encCLen]
+			cLen := origLen - sLen
+
+			if cap(pad.sheafSBuf) < sLen+64 {
+				pad.sheafSBuf = bufkit.AlignedBytes(sLen+64, bufkit.CacheLineSize)
+			}
+			if cap(pad.sheafCBuf) < cLen+64 {
+				pad.sheafCBuf = bufkit.AlignedBytes(cLen+64, bufkit.CacheLineSize)
+			}
+			if cap(pad.litBuf) < origLen+64 {
+				pad.litBuf = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
+			}
+
+			decS, err := VANSDecode4xTo(pad.sheafSBuf[:sLen], encS, &pad.vansModelS)
+			if err != nil {
+				return nil, fmt.Errorf("%w: decoding sheaf syntax stream: %v", ErrCorruptedFrame, err)
+			}
+			if len(decS) != sLen {
+				return nil, fmt.Errorf("%w: decoded sheaf syntax stream length %d != sLen %d", ErrCorruptedFrame, len(decS), sLen)
+			}
+
+			decC, err := VANSDecode4xTo(pad.sheafCBuf[:cLen], encC, &pad.vansModelC)
+			if err != nil {
+				return nil, fmt.Errorf("%w: decoding sheaf content stream: %v", ErrCorruptedFrame, err)
+			}
+			if len(decC) != cLen {
+				return nil, fmt.Errorf("%w: decoded sheaf content stream length %d != cLen %d", ErrCorruptedFrame, len(decC), cLen)
+			}
+
+			SheafInterleave(pad.litBuf[:origLen], pad.sheafSBuf[:sLen], pad.sheafCBuf[:cLen], mask, origLen)
+			return pad.litBuf[:origLen], nil
+		}
+
+		origLen := int(binary.LittleEndian.Uint32(src[4:8]))
+		if origLen < 0 || origLen > MaxBlockSize {
+			return nil, fmt.Errorf("%w: invalid V-ANS literal origLen %d", ErrCorruptedFrame, origLen)
+		}
+		if cap(pad.litBuf) < origLen+64 {
+			pad.litBuf = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
+		}
+		return VANSDecode4xTo(pad.litBuf[:origLen], src, &pad.vansModel)
+	}
+
+	return unpackNibblePlanes(src, &pad.litBuf)
 }
 
 // unpackNibblePlanes reconstructs raw literals from the Low-Nibble and High-Nibble planes.
@@ -410,7 +516,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 		case MahlerMagic:
 			return DecompressMahler(src, dst)
 		case SheafMagic:
-			return DecompressSheafTrellis(src, dst)
+			return DecompressSheaf(src, dst)
 		case ARM64Magic:
 			return DecompressARM64(src, dst)
 		case MacroTrellisMagic:
@@ -603,7 +709,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 		if sec4Offset > len(src) {
 			return nil, fmt.Errorf("%w: corrupted section 4 offset (%d > %d)", ErrCorruptedFrame, sec4Offset, len(src))
 		}
-		unpacked, err := unpackLiterals(src[sec4Offset:], &pad.litBuf)
+		unpacked, err := unpackLiterals(src[sec4Offset:], pad)
 		if err != nil {
 			return nil, err
 		}

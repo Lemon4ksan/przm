@@ -73,7 +73,7 @@ func (s SymplecticShear) Apply4(q0, q1, p0, p1 uint8) (uint8, uint8, uint8, uint
 // TransformBlockInplace applies the symplectic shear in-place to block.
 // Length of block must be a multiple of 4 bytes.
 // Because T_S is an involution, calling this function again restores the original data.
-func (s SymplecticShear) TransformBlockInplace(block []byte) {
+func (s SymplecticShear) TransformBlockInplaceScalar(block []byte) {
 	n := len(block)
 	n4 := n &^ 3 // Align to multiple of 4
 

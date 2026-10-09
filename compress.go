@@ -44,6 +44,10 @@ type scratchpad struct {
 	splitBuf     []byte
 	normBuf      []byte
 	dedup        DedupTable
+	sheafSBuf    []byte
+	sheafCBuf    []byte
+	sheafMaskBuf []byte
+	sheafWorkBuf []byte
 }
 
 var padPool = generic.NewPool(func() *scratchpad {
@@ -57,6 +61,10 @@ var padPool = generic.NewPool(func() *scratchpad {
 		nibbleLowBuf: bufkit.AlignedBytes(initPadSize/2, bufkit.CacheLineSize)[:0],
 		splitBuf:     bufkit.AlignedBytes(initPadSize*2, bufkit.CacheLineSize)[:0],
 		normBuf:      bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+		sheafSBuf:    bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+		sheafCBuf:    bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+		sheafMaskBuf: bufkit.AlignedBytes(initPadSize/8+128, bufkit.CacheLineSize)[:0],
+		sheafWorkBuf: bufkit.AlignedBytes(initPadSize+1024, bufkit.CacheLineSize)[:0],
 	}
 })
 
@@ -147,6 +155,69 @@ func packNibblePlanes(lits []byte, out []byte, lowBuf []byte) ([]byte, bool) {
 		return out, true
 	}
 	return nil, false
+}
+
+// packSheafVANS encodes residual literals using SIMD Sheaf splitting and V-ANS.
+// Returns the packed bytes, or (nil, false) if not compressible or invalid.
+func packSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
+	n := len(lits)
+	if n < 32 {
+		return nil, false
+	}
+
+	reqCap := n + 128
+	if cap(pad.sheafSBuf) < reqCap {
+		pad.sheafSBuf = bufkit.AlignedBytes(reqCap, bufkit.CacheLineSize)
+	}
+	if cap(pad.sheafCBuf) < reqCap {
+		pad.sheafCBuf = bufkit.AlignedBytes(reqCap, bufkit.CacheLineSize)
+	}
+	maskLen := (n + 7) / 8
+	if cap(pad.sheafMaskBuf) < maskLen+128 {
+		pad.sheafMaskBuf = bufkit.AlignedBytes(maskLen+128, bufkit.CacheLineSize)
+	}
+
+	sLen, cLen := SheafSplit(lits, pad.sheafSBuf[:reqCap], pad.sheafCBuf[:reqCap], pad.sheafMaskBuf[:maskLen+128])
+	if sLen < 16 || cLen < 16 || sLen < n/32 || cLen < n/32 {
+		return nil, false
+	}
+
+	encS, errS := VANSEncode4x(pad.sheafSBuf[:sLen])
+	if errS != nil || len(encS) == 0 {
+		return nil, false
+	}
+
+	encC, errC := VANSEncode4x(pad.sheafCBuf[:cLen])
+	if errC != nil || len(encC) == 0 {
+		return nil, false
+	}
+
+	totalPayload := 24 + maskLen + len(encS) + len(encC)
+	if totalPayload >= int(float64(n)*0.95) {
+		return nil, false
+	}
+
+	if cap(pad.sheafWorkBuf) < totalPayload {
+		pad.sheafWorkBuf = bufkit.AlignedBytes(totalPayload+1024, bufkit.CacheLineSize)
+	}
+	workBuf := pad.sheafWorkBuf[:totalPayload]
+
+	workBuf[0] = vansMagic0
+	workBuf[1] = vansMagic1
+	workBuf[2] = vansVer1
+	workBuf[3] = vansFlag4X | vansFlagSheaf
+
+	binary.LittleEndian.PutUint32(workBuf[4:8], uint32(n))
+	binary.LittleEndian.PutUint32(workBuf[8:12], uint32(sLen))
+	binary.LittleEndian.PutUint32(workBuf[12:16], uint32(maskLen))
+	binary.LittleEndian.PutUint32(workBuf[16:20], uint32(len(encS)))
+	binary.LittleEndian.PutUint32(workBuf[20:24], uint32(len(encC)))
+
+	copy(workBuf[24:24+maskLen], pad.sheafMaskBuf[:maskLen])
+	copy(workBuf[24+maskLen:24+maskLen+len(encS)], encS)
+	copy(workBuf[24+maskLen+len(encS):], encC)
+
+	return workBuf[:totalPayload], true
 }
 
 // detectX86 inspects initial block bytes to determine if the payload is x86/x86_64 machine code
@@ -1634,15 +1705,31 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	}
 
-	// Try V-ANS and SIMD Nibble-Plane packing on literalBuf
-	// Try V-ANS (level >= 2) and SIMD Nibble-Plane packing on literalBuf
+	// Try Post-LZ77 Etale Sheaf (Vector C) stream splitting + V-ANS, standard V-ANS, and SIMD Nibble-Plane packing on literalBuf
 	litSection := pad.literalBuf
 	if len(pad.literalBuf) >= 32 {
 		var vansOut []byte
 		var vansBeatsRaw bool
 		if !opts.StandardStreamOnly && level >= 2 {
-			if out, err := VANSEncode4x(pad.literalBuf); err == nil && len(out) < int(float64(len(pad.literalBuf))*0.95) {
-				vansOut = out
+			sheafOut, sheafOk := packSheafVANS(pad.literalBuf, pad)
+			stdOut, stdErr := VANSEncode4x(pad.literalBuf)
+			stdOk := stdErr == nil && len(stdOut) < int(float64(len(pad.literalBuf))*0.95)
+
+			if isProbablyText(origSrc) && sheafOk {
+				vansOut = sheafOut
+				vansBeatsRaw = true
+			} else if sheafOk && stdOk {
+				if len(sheafOut) <= len(stdOut) {
+					vansOut = sheafOut
+				} else {
+					vansOut = stdOut
+				}
+				vansBeatsRaw = true
+			} else if sheafOk {
+				vansOut = sheafOut
+				vansBeatsRaw = true
+			} else if stdOk {
+				vansOut = stdOut
 				vansBeatsRaw = true
 			}
 		}
@@ -1776,3 +1863,4 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 
 	return out, nil
 }
+
