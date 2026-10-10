@@ -1,0 +1,313 @@
+.version 7.1
+.target sm_86
+.address_size 64
+
+.visible .entry przm_lz77_init_head_kernel(
+    .param .u64 d_head,
+    .param .u32 hash_size
+) {
+    ret;
+}
+
+.visible .entry przm_lz77_build_chains_kernel(
+    .param .u64 d_input,
+    .param .u64 input_len,
+    .param .u64 d_head,
+    .param .u64 d_prev,
+    .param .u32 hash_shift,
+    .param .u32 hash_mask
+) {
+    ret;
+}
+
+.visible .entry przm_lz77_search_matches_kernel(
+    .param .u64 d_input,
+    .param .u64 input_len,
+    .param .u64 d_prev,
+    .param .u64 d_matches,
+    .param .u32 window_size,
+    .param .u32 max_depth
+) {
+    .shared .align 16 .b8 s_tile[16384];
+    .shared .align 4  .u32 s_head[1024];
+
+    .reg .b64 %p_in, %len, %p_match, %tile_start, %num_tiles;
+    .reg .b64 %off64, %in_ptr, %out_ptr, %mlen64;
+    .reg .b32 %bx, %bd, %tx, %gx, %v, %num_vecs, %t, %tile_len, %off32, %rem32;
+    .reg .b32 %s_base, %s_addr, %h_base, %h_addr, %c_addr, %p_addr;
+    .reg .b32 %x, %y, %z, %w, %p, %w4, %cw, %h, %cand, %pos1, %dist;
+    .reg .b32 %mlen, %limit, %desc, %tmp, %b0, %b1, %b2, %b3;
+    .reg .b8  %sb0, %sb1, %sb2, %sb3, %scb0, %scb1;
+    .reg .pred %p0, %p1, %p2, %p3, %p4, %p5;
+
+    ld.param.u64 %p_in, [d_input];
+    ld.param.u64 %len, [input_len];
+    ld.param.u64 %p_match, [d_matches];
+
+    mov.u32 %bx, %ctaid.x;
+    mov.u32 %bd, %ntid.x;
+    mov.u32 %tx, %tid.x;
+    mov.u32 %gx, %nctaid.x;
+
+    mov.u32 %s_base, s_tile;
+    mov.u32 %h_base, s_head;
+
+    // num_tiles = (len + 16383) / 16384
+    add.u64 %off64, %len, 16383;
+    shr.u64 %num_tiles, %off64, 14;
+
+    cvt.u64.u32 %tile_start, %bx;
+    shl.b64 %tile_start, %tile_start, 14;
+
+TILE_LOOP:
+    setp.ge.u64 %p0, %tile_start, %len;
+    @%p0 bra KERNEL_DONE;
+
+    // tile_len = min(16384, len - tile_start)
+    sub.u64 %off64, %len, %tile_start;
+    cvt.u32.u64 %rem32, %off64;
+    setp.gt.u64 %p0, %off64, 16384;
+    selp.u32 %tile_len, 16384, %rem32, %p0;
+
+    // 1. Cooperative vector load of tile into s_tile (16 bytes per thread)
+    shr.u32 %num_vecs, %tile_len, 4;
+    mov.u32 %v, %tx;
+
+VEC_LOAD_LOOP:
+    setp.ge.u32 %p0, %v, %num_vecs;
+    @%p0 bra VEC_LOAD_DONE;
+
+    shl.b32 %off32, %v, 4;
+    cvt.u64.u32 %off64, %off32;
+    add.u64 %in_ptr, %p_in, %tile_start;
+    add.u64 %in_ptr, %in_ptr, %off64;
+    ld.global.v4.u32 {%x, %y, %z, %w}, [%in_ptr];
+
+    add.u32 %s_addr, %s_base, %off32;
+    st.shared.v4.u32 [%s_addr], {%x, %y, %z, %w};
+
+    add.u32 %v, %v, %bd;
+    bra VEC_LOAD_LOOP;
+
+VEC_LOAD_DONE:
+    // Tail bytes load if any
+    shl.b32 %t, %num_vecs, 4;
+    add.u32 %t, %t, %tx;
+TAIL_LOAD_LOOP:
+    setp.ge.u32 %p0, %t, %tile_len;
+    @%p0 bra TAIL_LOAD_DONE;
+    cvt.u64.u32 %off64, %t;
+    add.u64 %in_ptr, %p_in, %tile_start;
+    add.u64 %in_ptr, %in_ptr, %off64;
+    ld.global.u8 %sb0, [%in_ptr];
+    add.u32 %s_addr, %s_base, %t;
+    st.shared.u8 [%s_addr], %sb0;
+    add.u32 %t, %t, %bd;
+    bra TAIL_LOAD_LOOP;
+TAIL_LOAD_DONE:
+
+    // 2. Clear s_head (1024 words = 4096 bytes)
+    shl.b32 %off32, %tx, 2;
+    add.u32 %h_addr, %h_base, %off32;
+    st.shared.u32 [%h_addr], 0;
+    add.u32 %h_addr, %h_addr, 1024;
+    st.shared.u32 [%h_addr], 0;
+    add.u32 %h_addr, %h_addr, 1024;
+    st.shared.u32 [%h_addr], 0;
+    add.u32 %h_addr, %h_addr, 1024;
+    st.shared.u32 [%h_addr], 0;
+
+    bar.sync 0;
+
+    // 3. Process positions in tile: p = tx; p < tile_len; p += bd
+    mov.u32 %p, %tx;
+
+SEARCH_POS_LOOP:
+    setp.ge.u32 %p0, %p, %tile_len;
+    @%p0 bra SEARCH_POS_DONE;
+
+    // If p + 4 > tile_len, emit literal
+    add.u32 %tmp, %p, 4;
+    setp.gt.u32 %p0, %tmp, %tile_len;
+    @%p0 bra EMIT_LITERAL;
+
+    // Load 4 bytes from shared memory
+    add.u32 %p_addr, %s_base, %p;
+    ld.shared.u8 %sb0, [%p_addr];
+    ld.shared.u8 %sb1, [%p_addr + 1];
+    ld.shared.u8 %sb2, [%p_addr + 2];
+    ld.shared.u8 %sb3, [%p_addr + 3];
+
+    cvt.u32.u8 %w4, %sb0;
+    cvt.u32.u8 %tmp, %sb1;
+    shl.b32 %tmp, %tmp, 8;
+    or.b32 %w4, %w4, %tmp;
+    cvt.u32.u8 %tmp, %sb2;
+    shl.b32 %tmp, %tmp, 16;
+    or.b32 %w4, %w4, %tmp;
+    cvt.u32.u8 %tmp, %sb3;
+    shl.b32 %tmp, %tmp, 24;
+    or.b32 %w4, %w4, %tmp;
+
+    // Compute hash: ((w4 * prime) >> 22) & 1023
+    mul.lo.u32 %h, %w4, 506832829;
+    shr.u32 %h, %h, 22;
+    and.b32 %h, %h, 1023;
+    shl.b32 %off32, %h, 2;
+    add.u32 %h_addr, %h_base, %off32;
+
+    // Lookup previous pos in s_head and update with p+1
+    add.u32 %pos1, %p, 1;
+    atom.shared.exch.b32 %cand, [%h_addr], %pos1;
+
+    setp.le.s32 %p1, %cand, 0;
+    @%p1 bra EMIT_LITERAL;
+
+    sub.u32 %cand, %cand, 1;
+    setp.ge.u32 %p1, %cand, %p;
+    @%p1 bra EMIT_LITERAL;
+
+    sub.u32 %dist, %p, %cand;
+    setp.eq.u32 %p1, %dist, 0;
+    @%p1 bra EMIT_LITERAL;
+
+    // Check if 4 bytes match
+    add.u32 %c_addr, %s_base, %cand;
+    ld.shared.u8 %scb0, [%c_addr];
+    ld.shared.u8 %scb1, [%c_addr + 1];
+    cvt.u32.u8 %cw, %scb0;
+    cvt.u32.u8 %tmp, %scb1;
+    shl.b32 %tmp, %tmp, 8;
+    or.b32 %cw, %cw, %tmp;
+    ld.shared.u8 %scb0, [%c_addr + 2];
+    ld.shared.u8 %scb1, [%c_addr + 3];
+    cvt.u32.u8 %tmp, %scb0;
+    shl.b32 %tmp, %tmp, 16;
+    or.b32 %cw, %cw, %tmp;
+    cvt.u32.u8 %tmp, %scb1;
+    shl.b32 %tmp, %tmp, 24;
+    or.b32 %cw, %cw, %tmp;
+
+    setp.ne.u32 %p1, %cw, %w4;
+    @%p1 bra EMIT_LITERAL;
+
+    // Extend match
+    mov.u32 %mlen, 4;
+    sub.u32 %limit, %tile_len, %p;
+    setp.gt.u32 %p2, %limit, 4095;
+    selp.u32 %limit, 4095, %limit, %p2;
+
+EXTEND_LOOP:
+    setp.ge.u32 %p2, %mlen, %limit;
+    @%p2 bra EXTEND_DONE;
+
+    add.u32 %s_addr, %p_addr, %mlen;
+    ld.shared.u8 %sb0, [%s_addr];
+    add.u32 %s_addr, %c_addr, %mlen;
+    ld.shared.u8 %scb0, [%s_addr];
+
+    cvt.u32.u8 %b0, %sb0;
+    cvt.u32.u8 %b1, %scb0;
+    setp.ne.u32 %p2, %b0, %b1;
+    @%p2 bra EXTEND_DONE;
+
+    add.u32 %mlen, %mlen, 1;
+    bra EXTEND_LOOP;
+
+EXTEND_DONE:
+    // Pack descriptor: (mlen << 20) | dist
+    shl.b32 %desc, %mlen, 20;
+    and.b32 %tmp, %dist, 1048575;
+    or.b32 %desc, %desc, %tmp;
+    bra WRITE_DESC;
+
+EMIT_LITERAL:
+    mov.u32 %desc, 0;
+
+WRITE_DESC:
+    // Write to d_matches[(tile_start + p) * 4]
+    cvt.u64.u32 %off64, %p;
+    add.u64 %off64, %tile_start, %off64;
+    shl.b64 %off64, %off64, 2;
+    add.u64 %in_ptr, %p_match, %off64;
+    st.global.u32 [%in_ptr], %desc;
+
+    add.u32 %p, %p, %bd;
+    bra SEARCH_POS_LOOP;
+
+SEARCH_POS_DONE:
+    bar.sync 0;
+
+    // Next tile for this block
+    cvt.u64.u32 %off64, %gx;
+    shl.b64 %off64, %off64, 14;
+    add.u64 %tile_start, %tile_start, %off64;
+    bra TILE_LOOP;
+
+KERNEL_DONE:
+    ret;
+}
+
+.visible .entry przm_lz77_vram_bandwidth_kernel(
+    .param .u64 d_in,
+    .param .u64 d_out,
+    .param .u64 num_elements,
+    .param .u32 iterations
+) {
+    .reg .b64 %p_in, %p_out, %n_elem;
+    .reg .b64 %gid64, %stride64, %i64, %off64, %in_ptr, %out_ptr;
+    .reg .b32 %iters, %iter, %bx, %bd, %tx, %gx, %gid32, %stride32;
+    .reg .b32 %x, %y, %z, %w, %i32;
+    .reg .pred %p0, %p1;
+
+    ld.param.u64 %p_in, [d_in];
+    ld.param.u64 %p_out, [d_out];
+    ld.param.u64 %n_elem, [num_elements];
+    ld.param.u32 %iters, [iterations];
+
+    mov.u32 %bx, %ctaid.x;
+    mov.u32 %bd, %ntid.x;
+    mov.u32 %tx, %tid.x;
+    mov.u32 %gx, %nctaid.x;
+
+    mad.lo.u32 %gid32, %bx, %bd, %tx;
+    cvt.u64.u32 %gid64, %gid32;
+    mul.lo.u32 %stride32, %gx, %bd;
+    cvt.u64.u32 %stride64, %stride32;
+
+    mov.u32 %iter, 0;
+
+VRAM_ITER_LOOP:
+    setp.ge.u32 %p0, %iter, %iters;
+    @%p0 bra VRAM_DONE;
+
+    mov.u64 %i64, %gid64;
+
+VRAM_ELEM_LOOP:
+    setp.ge.u64 %p1, %i64, %n_elem;
+    @%p1 bra VRAM_ELEM_DONE;
+
+    shl.b64 %off64, %i64, 4;
+    add.u64 %in_ptr, %p_in, %off64;
+    ld.global.v4.u32 {%x, %y, %z, %w}, [%in_ptr];
+
+    cvt.u32.u64 %i32, %i64;
+    xor.b32 %x, %x, %i32;
+    add.u32 %y, %y, %x;
+    add.u32 %z, %z, %y;
+    add.u32 %w, %w, %z;
+
+    add.u64 %out_ptr, %p_out, %off64;
+    st.global.v4.u32 [%out_ptr], {%x, %y, %z, %w};
+
+    add.u64 %i64, %i64, %stride64;
+    bra VRAM_ELEM_LOOP;
+
+VRAM_ELEM_DONE:
+    add.u32 %iter, %iter, 1;
+    bra VRAM_ITER_LOOP;
+
+VRAM_DONE:
+    ret;
+}
+

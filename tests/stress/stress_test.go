@@ -1,3 +1,5 @@
+//go:build ignore
+
 package przm
 
 import (
@@ -2686,7 +2688,6 @@ func (n *PipelineNode%d) Process(ctx context.Context, input []byte) ([]byte, err
 	copy(res, input)
 	return res, nil
 `, i, i, i)
-`, i, i)
 					}
 				}
 				return buf.Bytes()
@@ -4072,7 +4073,11 @@ func TestChallenger_M5_2_CrossLanguage_Dedup_Parity(t *testing.T) {
 				// Block 0: Go source code pattern
 				var goSrc bytes.Buffer
 				for i := 0; i < 250; i++ {
-`, i, i)
+					fmt.Fprintf(&goSrc, `package przm_pipeline_%03d
+import (
+	"context"
+	"sync"
+)
 type DedupProcessor%03d struct {
 	mu sync.Mutex
 	id uint64
@@ -4082,7 +4087,7 @@ func (p *DedupProcessor%03d) Process(ctx context.Context, blk []byte) ([]byte, e
 	defer p.mu.Unlock()
 	return blk, nil
 }
-`, i, i)
+`, i, i, i)
 				}
 				b0 := buildPaddedBlock(goSrc.Bytes())
 

@@ -650,7 +650,7 @@ func CompressCellularSheaf(src []byte, level int) ([]byte, error) {
 				continue
 			}
 			M := n / W
-			if M < 2 {
+			if M < 2 || M > 65535 {
 				continue
 			}
 
