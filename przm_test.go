@@ -7,7 +7,6 @@ package przm_test
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"os"
 	"testing"
@@ -173,65 +172,6 @@ func TestPRZM_IncompressibleRandomFallback(t *testing.T) {
 	}
 }
 
-func TestPRZM_BCJ_MachineCode(t *testing.T) {
-	// Synthesize 64 KiB x86_64 machine code with relative CALL (0xE8) instructions
-	code := make([]byte, 65536)
-	i := 0
-	funcID := 0
-	for i < len(code)-32 {
-		funcID++
-		prologue := []byte{0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x20}
-		copy(code[i:], prologue)
-		i += len(prologue)
-
-		for j := 0; j < 4 && i < len(code)-16; j++ {
-			code[i] = 0x8B
-			code[i+1] = 0x45
-			code[i+2] = 0xFC
-			code[i+3] = 0x83
-			code[i+4] = 0xC0
-			code[i+5] = byte(j + 1)
-			i += 6
-
-			code[i] = 0xE8
-			rel := int32((funcID*128 + j*16) - i)
-			binary.LittleEndian.PutUint32(code[i+1:i+5], uint32(rel))
-			i += 5
-		}
-
-		if i < len(code)-2 {
-			code[i] = 0xC9
-			code[i+1] = 0xC3
-			i += 2
-		}
-	}
-
-	compressed, err := przm.Compress(code, 1)
-	if err != nil {
-		t.Fatalf("compress x86: %v", err)
-	}
-
-	hdr, err := przm.ParseFrameHeader(compressed)
-	if err != nil {
-		t.Fatalf("parse header: %v", err)
-	}
-
-	if (hdr.Flags & przm.FlagBCJ) == 0 {
-		t.Fatalf("expected FlagBCJ to be set on machine code, got flags=0x%02X", hdr.Flags)
-	}
-
-	decompressed, err := przm.Decompress(compressed)
-	if err != nil {
-		t.Fatalf("decompress x86: %v", err)
-	}
-
-	if !bytes.Equal(decompressed, code) {
-		t.Fatalf("x86 roundtrip mismatch: len=%d vs %d", len(decompressed), len(code))
-	}
-
-	ratio := float64(len(code)) / float64(len(compressed))
-	t.Logf("x86 Machine Code Compression: %d -> %d bytes (Ratio: %.2fx, Flags=0x%02X)", len(code), len(compressed), ratio, hdr.Flags)
-}
 
 func TestPRZM_CorpusRoundtrip(t *testing.T) {
 	corpus := bench.GenerateCorpus([]int{16 * 1024, 64 * 1024, 256 * 1024})

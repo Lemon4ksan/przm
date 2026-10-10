@@ -209,15 +209,11 @@ func TestCorpus_ZeroAllocations(t *testing.T) {
 		if err != nil {
 			t.Fatalf("[%d] Compress failed for %s: %v", i, item.Name, err)
 		}
-		hdr, err := przm.ParseFrameHeader(comp)
+		_, err = przm.ParseFrameHeader(comp)
 		if err != nil {
 			t.Fatalf("[%d] ParseFrameHeader failed for %s: %v", i, item.Name, err)
 		}
-		extra := 0
-		if (hdr.Flags&przm.FlagBCJ) != 0 && (hdr.Flags&przm.FlagBCJSplit) != 0 {
-			extra = 4 + 4*int(hdr.CallCount)
-		}
-		dst := bufkit.AlignedBytes(len(item.Data)+extra+64, 64)
+		dst := bufkit.AlignedBytes(len(item.Data)+64, 64)
 
 		dec, err := przm.DecompressTo(comp, dst)
 		if err != nil {
@@ -256,11 +252,8 @@ func BenchmarkCorpus_Decompress_MultiCore(b *testing.B) {
 			b.Fatalf("Failed to compress %s: %v", item.Name, err)
 		}
 		origLen := len(item.Data)
-		hdr, _ := przm.ParseFrameHeader(frame)
 		extra := 0
-		if (hdr.Flags&przm.FlagBCJ) != 0 && (hdr.Flags&przm.FlagBCJSplit) != 0 {
-			extra = 4 + 4*int(hdr.CallCount)
-		}
+
 
 		b.Run(item.Name, func(b *testing.B) {
 			b.SetBytes(int64(origLen))

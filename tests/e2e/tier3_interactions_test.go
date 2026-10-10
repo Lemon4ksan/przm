@@ -6,7 +6,6 @@ package e2e_test
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"testing"
 
@@ -126,20 +125,6 @@ func TestTier3_08_StridePeriodic_And_DeltaMask(t *testing.T) {
 	t.Logf("Stride+Delta Flags: 0x%02X, Stride=%d", hdr.Flags, hdr.Stride)
 }
 
-// 9. BCJ Split + Repeat Registers
-func TestTier3_09_BCJSplit_And_RepeatRegisters(t *testing.T) {
-	// Machine code with repeated relative CALL instructions to the same functions
-	code := generateMachineCode(32768)
-	comp := assertRoundtrip(t, code, 1)
-
-	hdr, err := przm.ParseFrameHeader(comp)
-	if err != nil {
-		t.Fatalf("parse header failed: %v", err)
-	}
-	if (hdr.Flags & przm.FlagBCJ) == 0 {
-		t.Logf("Note: FlagBCJ not set; flags=0x%02X", hdr.Flags)
-	}
-}
 
 // 10. External Dictionary + Large Window
 func TestTier3_10_Dictionary_And_LargeWindow(t *testing.T) {
@@ -215,25 +200,6 @@ func TestTier3_12_InterleavedEntropy_And_CorruptedOffset(t *testing.T) {
 	})
 }
 
-// 13. Content Router + PE Binary x86
-func TestTier3_13_ContentRouter_And_PEBinaryBCJ(t *testing.T) {
-	// Synthesize valid PE binary header + machine code sections
-	var pe bytes.Buffer
-	// DOS header: 'MZ' + 58 bytes + e_lfanew pointer (0x00000080)
-	dos := make([]byte, 64)
-	dos[0] = 'M'
-	dos[1] = 'Z'
-	binary.LittleEndian.PutUint32(dos[60:64], 0x40)
-	pe.Write(dos)
-	// PE signature
-	pe.Write([]byte{'P', 'E', 0, 0})
-	// Section code
-	code := generateMachineCode(16384)
-	pe.Write(code)
-
-	data := pe.Bytes()
-	assertRoundtrip(t, data, 1)
-}
 
 // 14. Block Dedup + Zero-Heap DecompressTo
 func TestTier3_14_BlockDedup_And_ZeroHeapDecompressTo(t *testing.T) {

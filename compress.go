@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 
 	"github.com/lemon4ksan/foundation/bufkit"
-	"github.com/lemon4ksan/foundation/codec/filter/bcj"
 	"github.com/lemon4ksan/foundation/generic"
 	"github.com/lemon4ksan/foundation/silicon/simd"
 	"github.com/lemon4ksan/przm/gpu"
@@ -219,61 +218,6 @@ func packSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 	copy(workBuf[24+maskLen+len(encS):], encC)
 
 	return workBuf[:totalPayload], true
-}
-
-// detectX86 inspects initial block bytes to determine if the payload is x86/x86_64 machine code
-// with relative CALL (0xE8) / JMP (0xE9) instructions and standard function frames.
-// Accelerated with 64-bit SWAR vector scanning (simd.IndexByteTwoSWAR).
-func detectX86(src []byte) bool {
-	sampleLen := min(len(src), 8192)
-	if sampleLen < 64 {
-		return false
-	}
-
-	callCount := 0
-	x86Markers := 0
-	limit := sampleLen - 5
-
-	for i := 0; i < limit; {
-		next := simd.IndexByteTwoSWAR(src[i:limit], 0xE8, 0xE9)
-		if next < 0 {
-			// Scan remainder for prologues / epilogues
-			for ; i < sampleLen-2; i++ {
-				if src[i] == 0x55 && src[i+1] == 0x48 && src[i+2] == 0x89 {
-					x86Markers += 2
-					i += 2
-				} else if src[i] == 0xC3 || src[i] == 0xC9 {
-					x86Markers++
-				}
-			}
-			break
-		}
-
-		pos := i + next
-		// Check for function frames in the skipped range
-		for ; i < pos; i++ {
-			if src[i] == 0x55 && i+2 < sampleLen && src[i+1] == 0x48 && src[i+2] == 0x89 {
-				x86Markers += 2
-				i += 2
-			} else if src[i] == 0xC3 || src[i] == 0xC9 {
-				x86Markers++
-			}
-		}
-
-		rel := binary.LittleEndian.Uint32(src[pos+1 : pos+5])
-		msb := byte(rel >> 24)
-		if msb == 0x00 || msb == 0xFF {
-			callCount++
-			if callCount >= 8 {
-				return true
-			}
-			i = pos + 5
-		} else {
-			i = pos + 1
-		}
-	}
-
-	return callCount >= 4 && (callCount+x86Markers) >= 8
 }
 
 // detectStride scans initial bytes to identify periodic record or column strides S in [4, 256].
@@ -1033,13 +977,8 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	origSrc := src
 	origUSize := uSize
 	highEntropy := isHighEntropy(origSrc)
-	isX86 := detectX86(src)
-
 	// Content Router: Sub-microsecond decision tree (<290 ns budget, 0 dynamic allocations)
 	route := RouteContent(origSrc)
-	if route == RoutePEBinary {
-		isX86 = true
-	}
 
 	var pwsCandidate []byte
 	var vmCandidate []byte
@@ -1080,7 +1019,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	}
 
-	if allowTransforms && !isX86 {
+	if allowTransforms {
 		// RouteSparseZero allows sparse/topological transforms:
 		if route == RouteSparseZero {
 			if level >= 3 && uSize >= 256 && isCandidateTDA(origSrc) {
@@ -1150,32 +1089,10 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	}
 	flags := uint8(0)
-	callCount := 0
-	if isX86 {
-		if cap(pad.transBuf) < uSize {
-			pad.transBuf = make([]byte, uSize)
-		} else {
-			pad.transBuf = pad.transBuf[:uSize]
-		}
-		copy(pad.transBuf, src)
-		bcj.Filter(bcj.X86, pad.transBuf, 0, true)
-		src = pad.transBuf
-		flags |= FlagBCJ
-
-		if !opts.StandardStreamOnly {
-			if splitSrc, count := splitX86(src, uSize, pad.splitBuf); count >= 8 {
-				src = splitSrc
-				uSize = len(splitSrc)
-				callCount = count
-				flags |= FlagBCJSplit
-			}
-		}
-	}
-
 	normMode := NormModeNone
 	normContractedLen := 0
 
-	if !isX86 && route != RouteContainerBypass && !highEntropy && uSize >= minNormSpanLen {
+	if route != RouteContainerBypass && !highEntropy && uSize >= minNormSpanLen {
 		if isHex, upper := IsWholeBlockHex(src); isHex {
 			cLen := len(src) / 2
 			if len(src)-cLen >= minNetSavings {
@@ -1241,12 +1158,9 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	}
 
-	stride, hasStride := 1, false
-	if !isX86 {
-		stride, hasStride = detectStride(src)
-		if hasStride {
-			flags |= FlagStride
-		}
+	stride, hasStride := detectStride(src)
+	if hasStride {
+		flags |= FlagStride
 	}
 
 	dictID := uint32(0)
@@ -1255,7 +1169,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		activeMatcher = &customDict.matcher
 		dictID = customDict.id
 		flags |= FlagDictRef
-	} else if !isX86 && !hasStride {
+	} else if !hasStride {
 		dictID = detectDictionary(src)
 		if dictID == DictIDJSON {
 			activeMatcher = &jsonMatcher
@@ -2138,9 +2052,6 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	if (flags & FlagDictRef) != 0 {
 		frameParamsSize += 4
 	}
-	if (flags&FlagBCJ) != 0 && (flags&FlagBCJSplit) != 0 {
-		frameParamsSize += 4
-	}
 
 	secDirSize := generic.Ternary((flags&FlagExtOffset) != 0, 6, 4)
 
@@ -2186,10 +2097,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		binary.LittleEndian.PutUint32(out[wOffset:wOffset+4], dictID)
 		wOffset += 4
 	}
-	if (flags&FlagBCJ) != 0 && (flags&FlagBCJSplit) != 0 {
-		binary.LittleEndian.PutUint32(out[wOffset:wOffset+4], uint32(callCount))
-		wOffset += 4
-	}
+
 
 	// Section Directory
 	if (flags & FlagExtOffset) == 0 {

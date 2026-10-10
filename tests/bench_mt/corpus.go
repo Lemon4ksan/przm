@@ -251,13 +251,7 @@ func runCorpusBenchmark(cfg Config) (*CorpusReport, error) {
 		for i, it := range items {
 			comp := compressedPayloads[i]
 			extra := 0
-			if len(comp) >= 4 && binary.LittleEndian.Uint32(comp[:4]) == przm.MagicPRZM {
-				if hdr, err := przm.ParseFrameHeader(comp); err == nil {
-					if (hdr.Flags&przm.FlagBCJ) != 0 && (hdr.Flags&przm.FlagBCJSplit) != 0 {
-						extra = 4 + 4*int(hdr.CallCount)
-					}
-				}
-			}
+
 			dstBuffers[i] = bufkit.AlignedBytes(len(it.Data)+extra+64, 64)
 		}
 

@@ -5,7 +5,6 @@
 package przm
 
 import (
-	"encoding/binary"
 	"math/bits"
 	"unsafe"
 )
@@ -20,9 +19,6 @@ const (
 
 	// RouteFastBypass is an alias for RouteDirectBypass.
 	RouteFastBypass RouteDecision = 0
-
-	// RoutePEBinary routes Windows PE, Linux ELF, and Mach-O executables to BCJ branch filtering.
-	RoutePEBinary RouteDecision = 1
 
 	// RouteContainerBypass fast-bypasses pre-compressed containers (ZIP, GZIP, PNG, JPEG, PDF).
 	RouteContainerBypass RouteDecision = 2
@@ -41,8 +37,6 @@ func (r RouteDecision) String() string {
 	switch r {
 	case RouteDirectBypass:
 		return "DirectBypass"
-	case RoutePEBinary:
-		return "PEBinary (BCJ/x86_split)"
 	case RouteContainerBypass:
 		return "ContainerBypass"
 	case RouteSparseZero:
@@ -55,7 +49,7 @@ func (r RouteDecision) String() string {
 }
 
 // ProbeHeaderMagic inspects the initial bytes (<64B) for executable or container magic signatures.
-// Returns the corresponding RouteDecision: RoutePEBinary, RouteContainerBypass, or RouteDirectBypass.
+// Returns the corresponding RouteDecision: RouteContainerBypass, or RouteDirectBypass.
 // Executes in <5 ns with strictly 0 heap allocations.
 func ProbeHeaderMagic(data []byte) RouteDecision {
 	n := len(data)
@@ -71,36 +65,6 @@ func ProbeHeaderMagic(data []byte) RouteDecision {
 	// 2. JPEG: 0xFF, 0xD8, 0xFF
 	if n >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
 		return RouteContainerBypass
-	}
-
-	// 3. PE executable verification: 'MZ' DOS header + PE signature at e_lfanew
-	if data[0] == 'M' && data[1] == 'Z' {
-		if n >= 0x40 {
-			eLfanew := int(binary.LittleEndian.Uint32(data[0x3C:0x40]))
-			if eLfanew > 0 && eLfanew+4 <= n {
-				if data[eLfanew] == 'P' && data[eLfanew+1] == 'E' && data[eLfanew+2] == 0 && data[eLfanew+3] == 0 {
-					return RoutePEBinary
-				}
-			}
-		}
-		// Notice: DOS-only or truncated headers without valid PE signature do not classify as PEBinary
-	}
-
-	if n < 4 {
-		return RouteDirectBypass
-	}
-
-	// 4. ELF executable verification: 0x7F 'E' 'L' 'F'
-	if data[0] == 0x7F && data[1] == 'E' && data[2] == 'L' && data[3] == 'F' {
-		return RoutePEBinary
-	}
-
-	// 5. Mach-O executable verification (32-bit & 64-bit LE/BE, and Universal binary)
-	m0 := binary.LittleEndian.Uint32(data[0:4])
-	if m0 == 0xFEEDFACE || m0 == 0xCEFAEDFE || // Mach-O 32-bit
-		m0 == 0xFEEDFACF || m0 == 0xCFFAEDFE || // Mach-O 64-bit
-		m0 == 0xCAFEBABE || m0 == 0xBEBAFECA { // Mach-O Universal FAT
-		return RoutePEBinary
 	}
 
 	// 6. ZIP container: 'P' 'K' 0x03 0x04
@@ -126,11 +90,6 @@ func ProbeHeaderMagic(data []byte) RouteDecision {
 func ProbeHeaderMagicDetailed(data []byte) (isPE bool, isELF bool, isContainer bool) {
 	dec := ProbeHeaderMagic(data)
 	switch dec {
-	case RoutePEBinary:
-		if len(data) >= 4 && data[0] == 0x7F && data[1] == 'E' && data[2] == 'L' && data[3] == 'F' {
-			return false, true, false
-		}
-		return true, false, false
 	case RouteContainerBypass:
 		return false, false, true
 	default:

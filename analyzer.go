@@ -256,12 +256,11 @@ func AnalyzeFrame(compressed []byte) (*ChannelBreakdown, error) {
 
 // SummaryString formats the breakdown as a human-readable table.
 func (b *ChannelBreakdown) SummaryString() string {
-	hasBCJ := (b.Flags & FlagBCJ) != 0
 	hasNibble := (b.Flags & FlagNibble) != 0
 	return fmt.Sprintf(`--- PRZM Frame Analysis ---
 Raw Size:       %d B
 Comp Size:      %d B (Ratio: %.2fx, Space Savings: %.1f%%)
-Flags:          0x%02X (Stride=%d, BCJ=%t, Nibble=%t)
+Flags:          0x%02X (Stride=%d, Nibble=%t)
 
 Channel Breakdown:
   Header & Dir: %5d B (%5.1f%%)
@@ -285,7 +284,7 @@ Literal Channel Entropy Analysis:
   Potential Ratio:        %.2fx (vs current %.2fx)
 `,
 		b.UncompressedSize, b.CompressedSize, b.Ratio, (1.0-1.0/maxFloat(1.0, b.Ratio))*100,
-		b.Flags, b.Stride, hasBCJ, hasNibble,
+		b.Flags, b.Stride, hasNibble,
 		b.HeaderSize+b.DirectorySize, b.HeaderPct,
 		b.CmdSize, b.CmdPct,
 		b.OffsetSize, b.OffsetPct,

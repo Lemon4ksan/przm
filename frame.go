@@ -34,9 +34,7 @@ const (
 	FlagUncompressed uint8 = 0x04 // Bit 2: Raw uncompressed payload
 	FlagExtOffset    uint8 = 0x08 // Bit 3: 24/32-bit offsets and section lengths
 	FlagDictRef      uint8 = 0x10 // Bit 4: External dictionary reference present
-	FlagNorm         uint8 = 0x20 // Bit 5: Base64/Hex Normalization applied (when FlagBCJ == 0)
-	FlagBCJSplit     uint8 = 0x20 // Bit 5: x86 BCJ displacement splitting applied (when FlagBCJ != 0)
-	FlagBCJ          uint8 = 0x40 // Bit 6: x86_64 BCJ relative address filter applied
+	FlagNorm         uint8 = 0x20 // Bit 5: Base64/Hex Normalization applied
 	FlagNibble       uint8 = 0x80 // Bit 7: Section 4 encoded via SIMD Nibble-Plane Splitting or V-ANS
 )
 
@@ -118,7 +116,6 @@ type FrameHeader struct {
 	UncompressedSize int
 	Stride           int    // Effective stride periodicity S (1..256)
 	DictID           uint32 // Optional dictionary identifier
-	CallCount        uint32 // Optional call count for FlagBCJSplit
 	CmdStreamSize    int    // Section 2 size in bytes
 	OffsetStreamSize int    // Section 3 size in bytes
 	DataOffset       int    // Byte offset in frame where Section 1 starts
@@ -171,14 +168,6 @@ func ParseFrameHeader(src []byte) (FrameHeader, error) {
 			return FrameHeader{}, fmt.Errorf("%w: missing dictionary identifier", ErrCorruptedFrame)
 		}
 		hdr.DictID = binary.LittleEndian.Uint32(src[offset : offset+4])
-		offset += 4
-	}
-
-	if (flags&FlagBCJ) != 0 && (flags&FlagBCJSplit) != 0 {
-		if offset+4 > len(src) {
-			return FrameHeader{}, fmt.Errorf("%w: missing call count parameter", ErrCorruptedFrame)
-		}
-		hdr.CallCount = binary.LittleEndian.Uint32(src[offset : offset+4])
 		offset += 4
 	}
 

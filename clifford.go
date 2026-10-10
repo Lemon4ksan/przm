@@ -175,8 +175,3 @@ func DecodeClifford(src []byte) ([]byte, error) {
 
 	return out, nil
 }
-
-// DecodeCliffordRotors decodes a Clifford rotor-compressed frame.
-func DecodeCliffordRotors(src []byte) ([]byte, error) {
-	return DecodeClifford(src)
-}

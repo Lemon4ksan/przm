@@ -11,7 +11,6 @@ import (
 	"unsafe"
 
 	"github.com/lemon4ksan/foundation/bufkit"
-	"github.com/lemon4ksan/foundation/codec/filter/bcj"
 	"github.com/lemon4ksan/foundation/generic"
 	"github.com/lemon4ksan/foundation/silicon/simd"
 )
@@ -526,7 +525,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 		case PoincareMagic:
 			return DecodeHyperbolicAST(src)
 		case CliffordMagic:
-			return DecodeCliffordRotors(src)
+			return DecodeClifford(src)
 		case GCTRMagic:
 			return DecompressGCTR(src, dst)
 		case IsoQuantMagic:
@@ -564,9 +563,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 	}
 
 	allocSize := uSize
-	if (hdr.Flags&FlagBCJ) != 0 && (hdr.Flags&FlagBCJSplit) != 0 {
-		allocSize = 4 + 4*int(hdr.CallCount) + uSize
-	} else if hdr.NormMode != NormModeNone {
+	if hdr.NormMode != NormModeNone {
 		contractedLen := 0
 		if hdr.DataOffset+8 <= len(src) {
 			contractedLen = int(binary.LittleEndian.Uint16(src[hdr.DataOffset+3:hdr.DataOffset+5])) |
@@ -618,13 +615,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 	var pad *decompressScratchpad
 
 	outBuf := dst
-	if (hdr.Flags&FlagBCJ) != 0 && (hdr.Flags&FlagBCJSplit) != 0 {
-		if cap(dst) < allocSize+64 {
-			dst = bufkit.AlignedBytes(allocSize+64, bufkit.CacheLineSize)
-		}
-		dst = dst[:allocSize]
-		outBuf = dst
-	} else if hdr.NormMode != NormModeNone {
+	if hdr.NormMode != NormModeNone {
 		if pad == nil {
 			pad = decScratchPool.Get()
 			defer decScratchPool.Put(pad)
@@ -1314,19 +1305,6 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			return nil, fmt.Errorf("%w: unknown norm mode %d", ErrCorruptedFrame, hdr.NormMode)
 		}
 		return dst[:uSize], nil
-	}
-
-	if (hdr.Flags&FlagBCJ) != 0 && (hdr.Flags&FlagBCJSplit) != 0 {
-		if pad == nil {
-			pad = decScratchPool.Get()
-			defer decScratchPool.Put(pad)
-		}
-		unsplitX86(dst, uSize, int(hdr.CallCount), pad.litBuf)
-		return dst[:uSize], nil
-	}
-
-	if (hdr.Flags & FlagBCJ) != 0 {
-		bcj.Filter(bcj.X86, dst[:uSize], 0, false)
 	}
 
 	return dst[:uSize], nil

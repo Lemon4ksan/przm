@@ -6374,11 +6374,7 @@ func TestChallengerZD_M3_1_ZeroAlloc_DecompressTo_Strict(t *testing.T) {
 		extra := 0
 		hdr, err := ParseFrameHeader(compressed)
 		t.Logf("[%s] compLen=%d, magic=0x%08X, hdr=%+v, err=%v", tc.name, len(compressed), binary.LittleEndian.Uint32(compressed[:4]), hdr, err)
-		if err == nil {
-			if (hdr.Flags&FlagBCJ) != 0 && (hdr.Flags&FlagBCJSplit) != 0 {
-				extra = 4 + 4*int(hdr.CallCount)
-			}
-		}
+
 
 		outBuf := make([]byte, sz+extra+64)
 		allocs := testing.AllocsPerRun(100, func() {
