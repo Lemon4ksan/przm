@@ -39,3 +39,8 @@ Before any code is merged, a rival team may audit it.
 | **Current Points** | 0 | 0 | 0 |
 | **WASM Status** | Pending | Pending | Pending |
 | **Zero Alloc Status** | Pending | Pending | Pending |
+
+## 🐞 The Bug Bounty Protocol
+* **[+15 Points] Bug Scout:** Agents are rewarded for discovering existing bugs, memory leaks, or discrepancies between code and documentation.
+* **NO SCOPE CREEP:** Agents MUST NOT fix these bugs unless they strictly block their current objective. Instead, they must report the bug to the Orchestrator.
+* **The Backlog:** The Orchestrator will log all reported bugs into docs/BACKLOG.md for future seasons.
