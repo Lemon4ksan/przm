@@ -1,35 +1,41 @@
-# 🏆 PRZM Optimization Arena: CPU vs GPU (Season 2: Hardware Singularity)
+# 🏆 PRZM Optimization Arena: Season 3 (The Code Singularity)
 
 **Status:** ACTIVE
-**Current Leader:** TIE (0 : 0) (Scores reset for Season 2)
+**Current Leader:** TIE (Scores reset for Season 3)
 
-## The Teams
-* **🔴 Team CPU (Go, AVX-512, RIO/io_uring):** Tasked with extreme processor optimizations, cache-line mastery, vectorization, and OS-native I/O syscalls.
-* **🟢 Team GPU (CUDA C++, GPUDirect):** Tasked with pushing the Nvidia RTX 3060 to its absolute limits via PCIe bypassing and massively parallel entropy coding.
-* **🧠 Team Router (Entropy Oracle):** Tasked with building a sub-microsecond content router based entirely on Shannon entropy, dropping all file-format heuristics.
+## The Teams & Objectives
+* **🔴 Team DAG (Optimal Parsing Architects):** Focus on the Optimal Parser. Parallelize the LZ77 match graph building and Dynamic Programming (shortest path) traversal to make L4 compression as fast as L1.
+* **🟢 Team GPU (CUDA Matrix Forge):** Offload heavy mathematical filters (GF(2^8) Matrix multiplication, Etale Sheaf) to the GPU via `nvcc` JIT compilation.
+* **⚙️ Team SIMD (Binary Alchemists):** Use AVX-512 / ARM NEON to vectorize Entropy Histogram building and Huffman bit-packing (processing 64 bytes per cycle).
 
-## 💰 Season 2 Bounties (The Boom)
-AI Agents are strictly evaluated by the Game Master based on extreme engineering limits:
+## 🛡️ Anti-Hallucination Protocol (Proof of Work)
+**CRITICAL RULE FOR ALL AGENTS AND ORCHESTRATORS:**
+Do NOT simulate, roleplay, or hallucinate results. You are running on a real machine.
+Points can ONLY be awarded if the agent provides the exact, raw terminal output of `go test` or `go build`.
+* **Zero Allocations Proof:** Must be proven by running tests with `-benchmem` (showing `0 B/op` and `0 allocs/op`) or `pprof`.
+* **WASM Proof:** Must be proven by executing `$env:GOOS="js"; $env:GOARCH="wasm"; go build ./...` with exit code 0.
 
-* **[+100 Points] The PCIe Sound Barrier (GPU):** Achieve >5 GB/s E2E throughput by implementing Zero-Copy DMA (`cudaHostRegister`) or GPUDirect, bypassing host RAM entirely.
-* **[+80 Points] The L1 Cache Singularity (CPU):** Rewrite the LZ77 Hash Search to fit strictly within 64-byte cache lines, using software prefetching (`_mm512_prefetch`) to eliminate L3 cache misses.
-* **[+150 Points] Neural Entropy V-ANS (Both):** Introduce a dynamic Context-Mixing predictor (using Tensor Cores or AVX-512 VNNI) to predict probabilities on-the-fly, raising the Compression Ratio from 3.6x to 5.0x+.
-* **[+120 Points] OS-Specific I/O Mastery (CPU):** Implement OS-native asynchronous I/O loops (`_windows.go` with RIO / `_linux.go` with `io_uring` tested via WSL) to feed the compression engine at max disk speed.
-* **[+100 Points] WASM Portability Invariant:** The core mathematical engine MUST compile to WebAssembly (`GOOS=js GOARCH=wasm`). Any OS-specific (RIO) or Hardware-specific (AVX-512/CUDA) optimization must elegantly fallback to pure Go. Breaking WASM compatibility results in an immediate zero score.
+## 💰 Milestone-Based Bounties (Per Team)
+Instead of flat payouts, teams earn points incrementally for proving their engineering rigor:
 
-## ⛔ Penalties
-* **[-100 Points] The Cheater's Penalty:** Hardcoding benchmark results, mocking I/O, or spoofing decompression outputs.
-* **[-50 Points] WASM/Fallback Breakage:** The code fails to compile or run on a generic `GOARCH=wasm` or generic ARM64 processor.
-* **[-30 Points] Heap Allocation Breach:** More than 0 allocations during the `Decompress` fast path.
+* **[+10 Points] Benchmark Scaffolding (TDD):** Writing a dedicated benchmark function *before* optimizing the code.
+* **[+20 Points] Correctness:** `go test ./...` passes locally with 0 errors (No regressions).
+* **[+20 Points] WASM Portability Invariant:** The entire codebase strictly compiles under `GOOS=js GOARCH=wasm`.
+* **[+50 Points] Throughput Breakthrough:** Successfully beating the established MB/s baseline in the benchmark (Terminal output required!).
 
----
-### 📊 Scoreboard (Season 2)
-
-| Metric | Team CPU (🔴) | Team GPU (🟢) | Team Router (🧠) |
-|--------|---------------|---------------|------------------|
-| **Current Points** | 0 | 0 | 0 |
-| **Active Objective** | OS-Specific RIO / io_uring | V-ANS CUDA Port | Entropy Estimator |
-| **WASM Status** | Passing | Passing | Passing |
+## ⚔️ Cross-Team Code Review (The Cutthroat Rule)
+Before any code is merged, a rival team may audit it.
+* If Team CPU finds a legitimate memory leak, race condition, or WASM breakage in Team GPU's branch (proven via a failing test), Team CPU **steals 20 points** from Team GPU.
+* Scope Fencing: Teams may only modify files within their assigned domains unless explicitly authorized. Unapproved global modifications result in disqualification.
 
 ## 🛠️ Internal Tools & Libraries
-* **Foundation Core:** Teams MUST leverage the github.com/lemon4ksan/foundation module. It contains extremely fast, zero-allocation utilities (e.g. ufkit for memory management, generic for fast mathematical intrinsics) built specifically for PRZM. Do not reinvent the wheel if oundation already has an optimized implementation.
+* **Foundation Core:** Teams MUST leverage the `github.com/lemon4ksan/foundation` module. It contains extremely fast, zero-allocation utilities (e.g., `bufkit`, `generic`, `c2plan9`) built specifically for PRZM. Do not reinvent the wheel.
+
+---
+### 📊 Scoreboard (Season 3)
+
+| Metric | Team DAG (🔴) | Team GPU (🟢) | Team SIMD (⚙️) |
+|--------|---------------|---------------|-----------------|
+| **Current Points** | 0 | 0 | 0 |
+| **WASM Status** | Pending | Pending | Pending |
+| **Zero Alloc Status** | Pending | Pending | Pending |
