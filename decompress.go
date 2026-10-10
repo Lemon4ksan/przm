@@ -396,12 +396,12 @@ func getFrameUncompressedSize(src []byte) (int, error) {
 			return 0, ErrCorruptedFrame
 		}
 		return int(binary.LittleEndian.Uint32(src[4:8])), nil
-	case MobiusMagic, MargolusMagic, HeisenbergMagic, CellularSheafMagic:
+	case MobiusMagic, MargolusMagic, HeisenbergMagic, CellularSheafMagic, HodgeMagic:
 		if len(src) < 8 {
 			return 0, ErrCorruptedFrame
 		}
 		return int(binary.LittleEndian.Uint32(src[4:8])), nil
-	case SymplecticMagic, ARM64Magic, SheafMagic, MahlerMagic, IsoQuantMagic:
+	case SymplecticMagic, ARM64Magic, SheafMagic, MahlerMagic, IsoQuantMagic, PadicMagic:
 		if len(src) < 12 {
 			return 0, ErrCorruptedFrame
 		}
@@ -536,6 +536,10 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			return DecompressMobiusTo(src, dst)
 		case MargolusMagic:
 			return DecompressMargolusTo(src, dst)
+		case PadicMagic:
+			return DecompressPadic(src, dst)
+		case HodgeMagic:
+			return DecompressHodge(src, dst)
 		}
 
 		// 3-byte versioned ISA formats (Zero-Schema VM, PWS, GGTC)

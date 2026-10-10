@@ -1001,6 +1001,8 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	var cellularSheafCandidate []byte
 	var mobiusCandidate []byte
 	var margolusCandidate []byte
+	var padicCandidate []byte
+	var hodgeCandidate []byte
 
 	// Fast bypass: only evaluate heavy mathematical transforms if router classified as SparseZero or SmoothDelta
 	allowTransforms := (route == RouteSparseZero || route == RouteSmoothDelta) && !highEntropy && level >= 2
@@ -1008,7 +1010,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		allowTransforms = false
 	}
 
-	// Specialized Protobuf/ARM64 filters
+	// Specialized filters: Protobuf, ARM64, p-Adic Hensel lifting, and Hodge Étale Sheaves
 	if !opts.StandardStreamOnly && opts.Dict == nil && !highEntropy && level >= 2 && uSize >= 64 {
 		if isProtobuf := DetectProtobufTLV(origSrc); isProtobuf {
 			if depOut := CompressDependentSheaf(origSrc); len(depOut) > 0 && len(depOut) < origUSize {
@@ -1018,6 +1020,17 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		if isARM64 := DetectARM64(origSrc); isARM64 {
 			if arm64Out := CompressARM64(origSrc); len(arm64Out) > 0 && len(arm64Out) < origUSize {
 				arm64Candidate = arm64Out
+			}
+		}
+		if padicOut, err := CompressPadic(origSrc, level); err == nil && len(padicOut) > 0 && len(padicOut) < origUSize {
+			padicCandidate = padicOut
+		}
+		if hodgeOut, err := CompressHodge(origSrc); err == nil && len(hodgeOut) > 0 && len(hodgeOut) < origUSize {
+			hodgeCandidate = hodgeOut
+		}
+		if hasChannelCorrelation4(origSrc) || isCandidateShaderOrVec4(origSrc) || (uSize >= 64 && uSize%8 == 0 && EstimateOptimalSymplecticShear8(origSrc) > 0.05) {
+			if sympOut := CompressSymplectic(origSrc); len(sympOut) > 0 && len(sympOut) < origUSize {
+				symplecticCandidate = sympOut
 			}
 		}
 	}
@@ -2199,7 +2212,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	totalCompressedSize := HeaderSize + frameParamsSize + secDirSize + sec1Size + len(cmdSection) + len(offSection) + len(litSection)
 
 	// Pareto selection between candidates
-	bestCandidate := MinNonEmpty(pwsCandidate, vmCandidate, tdaCandidate, hypCandidate, spectralCandidate, hmdsCandidate, gctrCandidate, symplecticCandidate, mahlerCandidate, sheafCandidate, arm64Candidate, macroCandidate, depCandidate, isoquantCandidate, heisenbergCandidate, cellularSheafCandidate, mobiusCandidate, margolusCandidate)
+	bestCandidate := MinNonEmpty(pwsCandidate, vmCandidate, tdaCandidate, hypCandidate, spectralCandidate, hmdsCandidate, gctrCandidate, symplecticCandidate, mahlerCandidate, sheafCandidate, arm64Candidate, macroCandidate, depCandidate, isoquantCandidate, heisenbergCandidate, cellularSheafCandidate, mobiusCandidate, margolusCandidate, padicCandidate, hodgeCandidate)
 
 	if !opts.StandardStreamOnly && len(bestCandidate) > 0 && len(bestCandidate) < totalCompressedSize {
 		return bestCandidate, nil

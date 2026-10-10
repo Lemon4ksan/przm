@@ -21,8 +21,9 @@ const (
 	SymplecticModeShear      uint8 = 1 // Sp(4, F_{2^8}) Involutive Transvection T_S
 	SymplecticModeTwistor    uint8 = 2 // Projective Twistor Dyad Collimation
 	SymplecticModeCompressed uint8 = 3 // Sp(4, F_{2^8}) Shear cascaded with PWS AVX-Wave
-	SymplecticModeSp8        uint8 = 4 // Sp(8, F_{2^8}) 8-channel AVX2 Involutive Transvection
-	SymplecticModeDirectSum  uint8 = 5 // Sp(4) ⊕ Sp(4) Direct Sum Symplectic Transvection
+	SymplecticModeSp8           uint8 = 4 // Sp(8, F_{2^8}) 8-channel AVX2 Involutive Transvection
+	SymplecticModeDirectSum     uint8 = 5 // Sp(4) ⊕ Sp(4) Direct Sum Symplectic Transvection
+	SymplecticModeSp8Compressed uint8 = 6 // Sp(8) Transvection cascaded with PWS/LZ77
 )
 
 var (
@@ -205,11 +206,37 @@ var symplecticPool = sync.Pool{
 	},
 }
 
+// EstimateOptimalSymplecticShear8 evaluates whether 8D symplectic transvection
+// creates significant zero-ratio gain on 8-byte aligned phase data.
+func EstimateOptimalSymplecticShear8(data []byte) float64 {
+	n := len(data)
+	sampleLen := min(n, 2048) &^ 7
+	if sampleLen < 64 {
+		return 0
+	}
+	baseZeros := 0
+	for i := 0; i < sampleLen; i++ {
+		if data[i] == 0 {
+			baseZeros++
+		}
+	}
+	var tmp [2048]byte
+	copy(tmp[:sampleLen], data[:sampleLen])
+	TransformBlock8Inplace(tmp[:sampleLen])
+	newZeros := 0
+	for i := 0; i < sampleLen; i++ {
+		if tmp[i] == 0 {
+			newZeros++
+		}
+	}
+	return float64(newZeros-baseZeros) / float64(sampleLen)
+}
+
 // CompressSymplectic encodes src using optimal symplectic phase-space shear transvection.
 // Returns encoded byte slice with self-describing 12-byte header:
 //
 //	[0..4]  Magic 'SYMP'
-//	[4]     Mode (SymplecticModeShear / SymplecticModeRaw / SymplecticModeCompressed)
+//	[4]     Mode (SymplecticModeShear / SymplecticModeRaw / SymplecticModeCompressed / SymplecticModeSp8)
 //	[5]     S00
 //	[6]     S01
 //	[7]     S11
@@ -223,6 +250,37 @@ func CompressSymplectic(src []byte) []byte {
 		binary.LittleEndian.PutUint32(dst[8:12], uint32(n))
 		copy(dst[12:], src)
 		return dst
+	}
+
+	// 1. Check for 8-channel Sp(8, F_{2^8}) symplectic correlation
+	if n >= 64 && (n%8 == 0) {
+		if gain8 := EstimateOptimalSymplecticShear8(src); gain8 > 0.05 {
+			transformed := make([]byte, n)
+			copy(transformed, src)
+			TransformBlock8Inplace(transformed)
+
+			if packed, err := PWSEncode(transformed); err == nil && len(packed)+12 < n {
+				dst := make([]byte, 12+len(packed))
+				binary.LittleEndian.PutUint32(dst[0:4], SymplecticMagic)
+				dst[4] = SymplecticModeSp8Compressed
+				dst[5] = 1
+				dst[6] = 0
+				dst[7] = 1
+				binary.LittleEndian.PutUint32(dst[8:12], uint32(n))
+				copy(dst[12:], packed)
+				return dst
+			}
+
+			dst := make([]byte, 12+n)
+			binary.LittleEndian.PutUint32(dst[0:4], SymplecticMagic)
+			dst[4] = SymplecticModeSp8
+			dst[5] = 1
+			dst[6] = 0
+			dst[7] = 1
+			binary.LittleEndian.PutUint32(dst[8:12], uint32(n))
+			copy(dst[12:], transformed)
+			return dst
+		}
 	}
 
 	shear, gain := EstimateOptimalSymplecticShear(src)
@@ -341,6 +399,31 @@ func DecompressSymplectic(src, dst []byte) ([]byte, error) {
 		}
 		copy(dst, payload[:origLen])
 		// By Theorem 8A / Theorem 9A (Involution), applying the 8D transvection decodes the stream losslessly!
+		TransformBlock8Inplace(dst)
+		return dst, nil
+	}
+
+	if mode == SymplecticModeSp8Compressed {
+		if cap(dst) < origLen+64 {
+			dst = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)[:origLen]
+		}
+		var innerDec []byte
+		var err error
+		if len(payload) >= 3 && payload[0] == pwsMagic0 && payload[1] == pwsMagic1 && payload[2] == pwsVer1 {
+			innerDec, err = PWSDecodeTo(dst, payload)
+		} else {
+			innerDec, err = DecompressTo(payload, dst)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(innerDec) < origLen {
+			return nil, ErrSymplecticCorrupt
+		}
+		if len(dst) > 0 && len(innerDec) > 0 && &dst[0] != &innerDec[0] {
+			copy(dst, innerDec[:origLen])
+		}
+		// Inverse 8D transvection (involution)
 		TransformBlock8Inplace(dst)
 		return dst, nil
 	}
