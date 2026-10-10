@@ -52,7 +52,7 @@ type scratchpad struct {
 
 var padPool = generic.NewPool(func() *scratchpad {
 	return &scratchpad{
-		head:         make([]int32, hashTableSize*2),
+		head:         make([]int32, hashTableSize*4),
 		cmdBuf:       bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
 		offsetBuf:    bufkit.AlignedBytes(initPadSize/2, bufkit.CacheLineSize)[:0],
 		literalBuf:   bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
@@ -1452,11 +1452,13 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			}
 		}
 
-		// 1. Hash table lookup (2-way bucket) - Most likely and longest exact matches
+		// 1. Hash table lookup (4-way bucket) - Most likely and longest exact matches
 		h := (binary.LittleEndian.Uint32(src[pos:pos+4]) * 0x1E35A7BD) >> 16
 		h &= hashTableMask
-		p0 := pad.head[h*2]
-		p1 := pad.head[h*2+1]
+		p0 := pad.head[h*4]
+		p1 := pad.head[h*4+1]
+		p2 := pad.head[h*4+2]
+		p3 := pad.head[h*4+3]
 
 		d0 := 0
 		if p0 > 0 {
@@ -1475,6 +1477,32 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 		if p1 > 0 {
 			prevPos := int(p1 - 1)
+			d := pos - prevPos
+			if d > 0 && d < windowSize && d != d0 {
+				cand := evalCandidate(pos, d, maxBlockLen)
+				if cand.score > best.score {
+					best = cand
+				}
+				if level >= 3 && cand.score < 12 {
+					checkDelta(d, -1)
+				}
+			}
+		}
+		if p2 > 0 {
+			prevPos := int(p2 - 1)
+			d := pos - prevPos
+			if d > 0 && d < windowSize && d != d0 {
+				cand := evalCandidate(pos, d, maxBlockLen)
+				if cand.score > best.score {
+					best = cand
+				}
+				if level >= 3 && cand.score < 12 {
+					checkDelta(d, -1)
+				}
+			}
+		}
+		if p3 > 0 {
+			prevPos := int(p3 - 1)
 			d := pos - prevPos
 			if d > 0 && d < windowSize && d != d0 {
 				cand := evalCandidate(pos, d, maxBlockLen)
@@ -1590,8 +1618,10 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		if p+4 <= uSize {
 			h := (binary.LittleEndian.Uint32(src[p:p+4]) * 0x1E35A7BD) >> 16
 			h &= hashTableMask
-			pad.head[h*2+1] = pad.head[h*2]
-			pad.head[h*2] = int32(p + 1)
+			pad.head[h*4+3] = pad.head[h*4+2]
+			pad.head[h*4+2] = pad.head[h*4+1]
+			pad.head[h*4+1] = pad.head[h*4]
+			pad.head[h*4] = int32(p + 1)
 
 			if level >= 3 {
 				switch windowLog {

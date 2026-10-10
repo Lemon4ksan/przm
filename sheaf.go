@@ -103,14 +103,14 @@ func branchlessSplit(src []byte, table *[256]uint8, sBuf, cBuf, maskBuf []byte) 
 		b6 := *(*byte)(unsafe.Add(pSrc, i+6))
 		b7 := *(*byte)(unsafe.Add(pSrc, i+7))
 
-		s0 := table[b0] & 1
-		s1 := table[b1] & 1
-		s2 := table[b2] & 1
-		s3 := table[b3] & 1
-		s4 := table[b4] & 1
-		s5 := table[b5] & 1
-		s6 := table[b6] & 1
-		s7 := table[b7] & 1
+		s0 := table[b0]
+		s1 := table[b1]
+		s2 := table[b2]
+		s3 := table[b3]
+		s4 := table[b4]
+		s5 := table[b5]
+		s6 := table[b6]
+		s7 := table[b7]
 
 		mask := s0 | (s1 << 1) | (s2 << 2) | (s3 << 3) | (s4 << 4) | (s5 << 5) | (s6 << 6) | (s7 << 7)
 		*(*byte)(unsafe.Add(pM, mPos)) = mask
@@ -162,7 +162,7 @@ func branchlessSplit(src []byte, table *[256]uint8, sBuf, cBuf, maskBuf []byte) 
 		bit := 0
 		for ; i < n; i++ {
 			b := *(*byte)(unsafe.Add(pSrc, i))
-			s := table[b] & 1
+			s := table[b]
 			mask |= s << bit
 			bit++
 

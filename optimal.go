@@ -185,8 +185,10 @@ func insertHashPRZM(src []byte, p, uSize int, pad *scratchpad, windowLog int, sp
 	if p+4 <= uSize {
 		h := (binary.LittleEndian.Uint32(src[p:p+4]) * 0x1E35A7BD) >> 16
 		h &= hashTableMask
-		pad.head[h*2+1] = pad.head[h*2]
-		pad.head[h*2] = int32(p + 1)
+		pad.head[h*4+3] = pad.head[h*4+2]
+		pad.head[h*4+2] = pad.head[h*4+1]
+		pad.head[h*4+1] = pad.head[h*4]
+		pad.head[h*4] = int32(p + 1)
 		if windowLog <= WindowLog64K {
 			HenselInsert(&pad.hensel, p, src, uSize)
 		} else {
@@ -336,8 +338,10 @@ func compressBlockOptimal(
 		if pos+4 <= uSize {
 			h := (binary.LittleEndian.Uint32(src[pos:pos+4]) * 0x1E35A7BD) >> 16
 			h &= hashTableMask
-			p0 := int(pad.head[h*2]) - 1
-			p1 := int(pad.head[h*2+1]) - 1
+			p0 := int(pad.head[h*4]) - 1
+			p1 := int(pad.head[h*4+1]) - 1
+			p2 := int(pad.head[h*4+2]) - 1
+			p3 := int(pad.head[h*4+3]) - 1
 			if p0 >= 0 {
 				d0 := pos - p0
 				if d0 > 0 && d0 <= windowSize {
@@ -350,6 +354,20 @@ func compressBlockOptimal(
 				if d1 > 0 && d1 <= windowSize {
 					l1 := HenselLCPPos(src, pos, p1, maxL)
 					updateBracket(d1, l1)
+				}
+			}
+			if p2 >= 0 && p2 != p0 && p2 != p1 {
+				d2 := pos - p2
+				if d2 > 0 && d2 <= windowSize {
+					l2 := HenselLCPPos(src, pos, p2, maxL)
+					updateBracket(d2, l2)
+				}
+			}
+			if p3 >= 0 && p3 != p0 && p3 != p1 && p3 != p2 {
+				d3 := pos - p3
+				if d3 > 0 && d3 <= windowSize {
+					l3 := HenselLCPPos(src, pos, p3, maxL)
+					updateBracket(d3, l3)
 				}
 			}
 

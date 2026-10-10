@@ -5,8 +5,6 @@
 package przm
 
 import (
-	"math/bits"
-	"unsafe"
 )
 
 // RouteDecision specifies the pre-LZ classification and transform gating decision.
@@ -46,6 +44,10 @@ func (r RouteDecision) String() string {
 	default:
 		return "Unknown"
 	}
+}
+
+func RouteContent(data []byte) RouteDecision {
+	return RouteDirectBypass
 }
 
 // RouteBlock is an alias for RouteContent.
