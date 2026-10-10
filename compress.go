@@ -1009,7 +1009,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	}
 
 	// Specialized Protobuf/ARM64 filters
-	if !opts.StandardStreamOnly && !highEntropy && level >= 2 && uSize >= 64 {
+	if !opts.StandardStreamOnly && opts.Dict == nil && !highEntropy && level >= 2 && uSize >= 64 {
 		if isProtobuf := DetectProtobufTLV(origSrc); isProtobuf {
 			if depOut := CompressDependentSheaf(origSrc); len(depOut) > 0 && len(depOut) < origUSize {
 				depCandidate = depOut

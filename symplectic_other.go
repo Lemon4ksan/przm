@@ -6,6 +6,8 @@
 
 package przm
 
+import "unsafe"
+
 const hasGFNIHw = false
 
 // TransformBlockInplace applies the symplectic shear in-place.
@@ -23,4 +25,13 @@ func (s SymplecticShear) TransformBlockInplace(block []byte) {
 // TransformBlockInplaceSIMD falls back to scalar on non-hardware platforms.
 func (s SymplecticShear) TransformBlockInplaceSIMD(block []byte) {
 	s.TransformBlockInplaceScalar(block)
+}
+
+// TransformBlock8Inplace applies 8-channel Sp(8, F_{2^8}) symplectic transvection in-place.
+func TransformBlock8Inplace(block []byte) {
+	n := len(block)
+	for i := 0; i+8 <= n; i += 8 {
+		p := (*uint64)(unsafe.Pointer(&block[i]))
+		*p ^= (*p >> 32)
+	}
 }

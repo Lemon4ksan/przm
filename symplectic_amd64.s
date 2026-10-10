@@ -142,6 +142,63 @@ doneSIMD:
 done:
 	RET
 
+// func transformBlock8AVX2(data unsafe.Pointer, n int)
+TEXT ·transformBlock8AVX2(SB), NOSPLIT, $0-16
+	MOVQ data+0(FP), DI
+	MOVQ n+8(FP), SI
+	XORQ R9, R9
+
+	CMPQ SI, $128
+	JL tail32
+
+	MOVQ SI, AX
+	ANDQ $~127, AX
+
+loop128:
+	VMOVDQU 0(DI)(R9*1), Y0
+	VMOVDQU 32(DI)(R9*1), Y1
+	VMOVDQU 64(DI)(R9*1), Y2
+	VMOVDQU 96(DI)(R9*1), Y3
+
+	VPSRLQ $32, Y0, Y4
+	VPSRLQ $32, Y1, Y5
+	VPSRLQ $32, Y2, Y6
+	VPSRLQ $32, Y3, Y7
+
+	VPXOR Y4, Y0, Y0
+	VPXOR Y5, Y1, Y1
+	VPXOR Y6, Y2, Y2
+	VPXOR Y7, Y3, Y3
+
+	VMOVDQU Y0, 0(DI)(R9*1)
+	VMOVDQU Y1, 32(DI)(R9*1)
+	VMOVDQU Y2, 64(DI)(R9*1)
+	VMOVDQU Y3, 96(DI)(R9*1)
+
+	ADDQ $128, R9
+	CMPQ R9, AX
+	JL loop128
+
+tail32:
+	MOVQ SI, AX
+	ANDQ $~31, AX
+
+loop32:
+	CMPQ R9, AX
+	JGE doneSIMD8
+
+	VMOVDQU 0(DI)(R9*1), Y0
+	VPSRLQ $32, Y0, Y4
+	VPXOR Y4, Y0, Y0
+	VMOVDQU Y0, 0(DI)(R9*1)
+
+	ADDQ $32, R9
+	JMP loop32
+
+doneSIMD8:
+	VZEROUPPER
+	RET
+
 // func cpuid(eax, ecx uint32) (a, b, c, d uint32)
 TEXT ·cpuid(SB), NOSPLIT, $0-24
 	MOVL eax+0(FP), AX

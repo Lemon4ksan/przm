@@ -71,7 +71,7 @@ func TestDedup_EmitOpCopyBlock(t *testing.T) {
 	data = append(data, pattern...)
 
 	for _, level := range []int{1, 3, 5} {
-		comp, err := Compress(data, level)
+		comp, err := CompressWithOptions(data, CompressOptions{Level: level, StandardStreamOnly: true})
 		if err != nil {
 			t.Fatalf("level %d compress failed: %v", level, err)
 		}

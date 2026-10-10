@@ -136,7 +136,7 @@ func TestDict_UnknownDictError(t *testing.T) {
 		t.Fatalf("NewDictionary error: %v", err)
 	}
 
-	payload := []byte("temporary_token_alpha data temporary_token_beta")
+	payload := bytes.Repeat([]byte("temporary_token_alpha data temporary_token_beta "), 10)
 	compressed, err := CompressWithDict(payload, 2, dict)
 	if err != nil {
 		t.Fatalf("CompressWithDict error: %v", err)

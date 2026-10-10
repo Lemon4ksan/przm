@@ -7,7 +7,7 @@ package «przm» where
   keywords := #["compression", "galois-field", "topology", "clifford-algebra", "lean4"]
 
 lean_lib «PRZM» where
-  -- Root library containing all 25 modules and 40 theorems
-  roots := #[`PRZM, `przm_theorems]
+  -- Root library containing all core modules and tournament-proven theorems
+  roots := #[`PRZM, `przm_theorems, `symplectic_invariant, `padic_singularity, `hodge_cohomology]
 
 
