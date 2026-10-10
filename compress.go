@@ -917,11 +917,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		return nil, ErrExceedsMaxBlock
 	}
 
-	if level >= ModeArchival && isPNG(src) {
-		if pngArchOut, err := CompressArchivalPNG(src, level); err == nil && len(pngArchOut) > 0 {
-			return pngArchOut, nil
-		}
-	}
+
 
 	windowLog := opts.WindowLog
 	if windowLog == 0 {
@@ -1320,7 +1316,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	}
 
-	var approxIdx *ApproxSubChunkIndex
+
 
 	findBest := func(pos, bEnd int) matchCandidate {
 		if pos+minMatch > bEnd {
@@ -1585,26 +1581,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			}
 		}
 
-		if level >= ModeArchival && approxIdx != nil && best.length < 16 {
-			cand := approxIdx.FindMatch(src, pos, bEnd, rep0, rep1, rep2, windowSize, calcOffCost)
-			if cand.Found && cand.Score > best.score {
-				mType := 5
-				if cand.RingK >= 0 {
-					mType = 6
-				}
-				best = matchCandidate{
-					mType:      mType,
-					length:     cand.Length,
-					distance:   cand.Distance,
-					ringK:      cand.RingK,
-					cost:       cand.Cost,
-					score:      cand.Score,
-					mismatches: cand.Mismatches,
-					diffOffs:   cand.DiffOffs,
-					diffXORs:   cand.DiffXORs,
-				}
-			}
-		}
+
 
 		return best
 	}
@@ -1615,9 +1592,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			h &= hashTableMask
 			pad.head[h*2+1] = pad.head[h*2]
 			pad.head[h*2] = int32(p + 1)
-			if level >= ModeArchival && approxIdx != nil {
-				approxIdx.Insert(src, p)
-			}
+
 			if level >= 3 {
 				switch windowLog {
 				case WindowLog8M:
@@ -1637,12 +1612,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 
 	compressBlockGreedy := func(bStart, bSize int) {
 		if level >= ModeArchival {
-			approxIdx = approxPool.Get()
-			defer func() {
-				approxPool.Put(approxIdx)
-				approxIdx = nil
-			}()
-			approxIdx.Reset()
+			// approxIdx removed
 		}
 
 		pos := bStart

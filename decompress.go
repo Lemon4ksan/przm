@@ -498,9 +498,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			return dst[:totalUSize], nil
 		}
 
-		if magic == ArchivalPNGMagic {
-			return unpackArchivalPNG(src, dst)
-		}
+
 
 		// 32-bit magic formats (h-MDS, TDA, Spectral, Poincare, Clifford, GCTR, Heisenberg)
 		switch magic {
