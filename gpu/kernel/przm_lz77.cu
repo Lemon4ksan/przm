@@ -41,15 +41,7 @@ __device__ __forceinline__ uint32_t przm_gpu_lcp_shared(
         uint32_t vb = *reinterpret_cast<const uint32_t*>(s_b + match_len);
         uint32_t diff = va ^ vb;
         if (diff != 0) {
-            if ((diff & 0x000000FFU) != 0) {
-                return match_len;
-            } else if ((diff & 0x0000FF00U) != 0) {
-                return match_len + 1;
-            } else if ((diff & 0x00FF0000U) != 0) {
-                return match_len + 2;
-            } else {
-                return match_len + 3;
-            }
+            return match_len + (__ffs(diff) - 1) / 8;
         }
         match_len += 4;
     }

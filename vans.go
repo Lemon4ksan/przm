@@ -11,6 +11,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"unsafe"
 )
 
 const (
@@ -476,28 +477,18 @@ func VANSDecode4xTo(dst []byte, src []byte, model *VANSModel) ([]byte, error) {
 	}
 	dst = dst[:origLen]
 
-	// Decode in forward order across 4 interleaved lanes
-	for i := range origLen {
-		lane := i & 3
-
-		slot := x[lane] & (vansM - 1)
-		entry := model.DecodeTable[slot]
-		s := byte(entry)
-		dst[i] = s
-
-		slot_minus_c := (entry >> 8) & 0xFFF
-		f := (entry >> 20) + 1
-
-		// Inverse state transition
-		x[lane] = f*(x[lane]>>12) + slot_minus_c
-
-		// Renormalization: restore bytes while x[lane] < vansL
-		for x[lane] < vansL {
-			if streamPtr >= len(src) {
-				return nil, fmt.Errorf("%w: unexpected EOF in bitstream at byte %d/%d", ErrVANSCorrupted, i, origLen)
-			}
-			x[lane] = (x[lane] << 8) | uint32(src[streamPtr])
-			streamPtr++
+	if origLen > 0 && len(src) > 0 {
+		endPtr := int(decode_vans4x(
+			uint64(uintptr(unsafe.Pointer(&dst[0]))),
+			uint64(uintptr(unsafe.Pointer(&src[0]))),
+			uint64(streamPtr),
+			uint64(origLen),
+			uint64(uintptr(unsafe.Pointer(&model.DecodeTable[0]))),
+			uint64(uintptr(unsafe.Pointer(&x[0]))),
+			uint64(len(src)),
+		))
+		if endPtr > len(src) {
+			return nil, fmt.Errorf("%w: unexpected EOF in bitstream at byte %d", ErrVANSCorrupted, origLen)
 		}
 	}
 
