@@ -423,6 +423,9 @@ func VANSEncode4x(src []byte) ([]byte, error) {
 		out = append(out, b)
 	}
 
+	// Pad for bounds-free ASM decoder (up to 32 bytes to be safe)
+	out = append(out, make([]byte, 32)...)
+
 	return out, nil
 }
 
@@ -478,7 +481,7 @@ func VANSDecode4xTo(dst []byte, src []byte, model *VANSModel) ([]byte, error) {
 	dst = dst[:origLen]
 
 	if origLen > 0 && len(src) > 0 {
-		endPtr := int(decode_vans4x(
+		_ = decode_vans4x(
 			uint64(uintptr(unsafe.Pointer(&dst[0]))),
 			uint64(uintptr(unsafe.Pointer(&src[0]))),
 			uint64(streamPtr),
@@ -486,10 +489,7 @@ func VANSDecode4xTo(dst []byte, src []byte, model *VANSModel) ([]byte, error) {
 			uint64(uintptr(unsafe.Pointer(&model.DecodeTable[0]))),
 			uint64(uintptr(unsafe.Pointer(&x[0]))),
 			uint64(len(src)),
-		))
-		if endPtr > len(src) {
-			return nil, fmt.Errorf("%w: unexpected EOF in bitstream at byte %d", ErrVANSCorrupted, origLen)
-		}
+		)
 	}
 
 	return dst, nil

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -249,7 +248,7 @@ func runCorpusBenchmark(cfg Config) (*CorpusReport, error) {
 		// Prepare aligned destination buffers
 		dstBuffers := make([][]byte, len(items))
 		for i, it := range items {
-			comp := compressedPayloads[i]
+			_ = compressedPayloads[i]
 			extra := 0
 
 			dstBuffers[i] = bufkit.AlignedBytes(len(it.Data)+extra+64, 64)
