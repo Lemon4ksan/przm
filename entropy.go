@@ -240,8 +240,9 @@ func heapSiftDown(h []heapElem, i int) {
 // ComputeHuffmanLengths computes canonical bit-lengths bounded to MaxHuffBits (11).
 func ComputeHuffmanLengths(src []byte) ([256]uint8, int) {
 	var freqs [256]int32
-	for _, b := range src {
-		freqs[b]++
+	mat := BuildFrequencyMatrixSIMD(src)
+	for i, c := range mat.Counts {
+		freqs[i] = int32(c)
 	}
 
 	var lengths [256]uint8
@@ -663,3 +664,4 @@ func UnpackStream(dst []byte, src []byte, scratchTable *CanonicalHuffmanTable) (
 		return 0, fmt.Errorf("%w: unknown mode %d", ErrCorruptedStream, mode)
 	}
 }
+

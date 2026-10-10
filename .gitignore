@@ -18,4 +18,5 @@ cmake-build-*/
 
 # Agent workspace artifacts
 teamwork_projects/
-.agents/teamwork/
+.agents/
+scratch/

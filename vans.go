@@ -43,10 +43,22 @@ type Matrix16x16 struct {
 // BuildFrequencyMatrix scans a buffer and computes the honest 16x16 joint frequency counts.
 func BuildFrequencyMatrix(src []byte) Matrix16x16 {
 	var m Matrix16x16
-	for _, b := range src {
-		m.Counts[b]++
+	n := len(src)
+	i := 0
+	for ; i+7 <= n-1; i += 8 {
+		m.Counts[src[i]]++
+		m.Counts[src[i+1]]++
+		m.Counts[src[i+2]]++
+		m.Counts[src[i+3]]++
+		m.Counts[src[i+4]]++
+		m.Counts[src[i+5]]++
+		m.Counts[src[i+6]]++
+		m.Counts[src[i+7]]++
 	}
-	m.Total = uint32(len(src))
+	for ; i < n; i++ {
+		m.Counts[src[i]]++
+	}
+	m.Total = uint32(n)
 	return m
 }
 
@@ -368,7 +380,7 @@ func VANSEncode4x(src []byte) ([]byte, error) {
 	}
 
 	// 1. Build honest frequency matrix
-	mat := BuildFrequencyMatrix(src)
+	mat := BuildFrequencyMatrixSIMD(src)
 	model := NewVANSModel(&mat)
 
 	// 2. Initialize 4 independent vector states
@@ -514,3 +526,5 @@ func VANSDecode4x(src []byte) ([]byte, error) {
 	var model VANSModel
 	return VANSDecode4xTo(dst, src, &model)
 }
+
+

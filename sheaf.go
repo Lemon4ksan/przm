@@ -465,8 +465,9 @@ func CalculateShannonEntropy(data []byte) float64 {
 		return 0.0
 	}
 	var counts [256]int
-	for _, b := range data {
-		counts[b]++
+	mat := BuildFrequencyMatrixSIMD(data)
+	for i, c := range mat.Counts {
+		counts[i] = int(c)
 	}
 	total := float64(n)
 	entropy := 0.0
@@ -493,3 +494,4 @@ func CalculateSheafEntropy(s, c, mask []byte, origLen int) (entropyS, entropyC, 
 	aggregate = totalBits / float64(origLen)
 	return entropyS, entropyC, entropyM, aggregate
 }
+

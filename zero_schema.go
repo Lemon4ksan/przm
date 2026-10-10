@@ -139,8 +139,9 @@ func computeEntropy8(data []byte) float64 {
 	}
 
 	var hist [256]int
-	for _, b := range data {
-		hist[b]++
+	mat := BuildFrequencyMatrixSIMD(data)
+	for i, c := range mat.Counts {
+		hist[i] = int(c)
 	}
 
 	entropy := 0.0
@@ -438,3 +439,4 @@ func SynthesizeStructure(src []byte) (*SynthesizedSchema, error) {
 		Confidence:      conf,
 	}, nil
 }
+

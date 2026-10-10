@@ -49,13 +49,11 @@ func computeSampleEntropy(src []byte) (float64, float64) {
 		return 0, 0
 	}
 	var hist [256]int
-	zeroCount := 0
-	for _, b := range src {
-		hist[b]++
-		if b == 0 {
-			zeroCount++
-		}
+	mat := BuildFrequencyMatrixSIMD(src)
+	for i, c := range mat.Counts {
+		hist[i] = int(c)
 	}
+	zeroCount := int(mat.Counts[0])
 	entropy := 0.0
 	fN := float64(n)
 	for _, count := range hist {
@@ -469,3 +467,4 @@ func DecompressGCTR(src []byte, dst []byte) ([]byte, error) {
 	// Invert the superoptimized Galois operator (Theorem 30)
 	return ApplyGCTRInverse(innerDec, dst[:0], opID)
 }
+
