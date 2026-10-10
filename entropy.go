@@ -620,6 +620,8 @@ func PackStream(src []byte, prefMode uint8) ([]byte, error) {
 	var err error
 
 	switch prefMode {
+	case ModeFlat:
+		err = fmt.Errorf("forced flat")
 	case ModeHuffman4X:
 		packed, err = EncodeHuffman4X(src)
 	default:

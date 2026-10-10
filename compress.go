@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/lemon4ksan/foundation/bufkit"
 	"github.com/lemon4ksan/foundation/generic"
@@ -807,7 +808,11 @@ func tryCompressGPU(src []byte, opts CompressOptions, pad *scratchpad) (out []by
 			}
 		}
 
-		nibbleOut, nibbleOk := packNibblePlanes(pad.literalBuf, pad.nibbleBuf, pad.nibbleLowBuf)
+		var nibbleOut []byte
+		var nibbleOk bool
+		if level > 3 {
+			nibbleOut, nibbleOk = packNibblePlanes(pad.literalBuf, pad.nibbleBuf, pad.nibbleLowBuf)
+		}
 		if vansBeatsRaw && (!nibbleOk || len(vansOut) <= len(nibbleOut)) {
 			litSection = vansOut
 			flags |= FlagNibble
@@ -817,11 +822,15 @@ func tryCompressGPU(src []byte, opts CompressOptions, pad *scratchpad) (out []by
 		}
 	}
 
-	cmdSection, err := PackStream(pad.cmdBuf, ModeHuffman4X)
+	cmdMode := uint8(ModeHuffman4X)
+	if level <= 3 {
+		cmdMode = ModeFlat
+	}
+	cmdSection, err := PackStream(pad.cmdBuf, cmdMode)
 	if err != nil {
 		return nil, false
 	}
-	offSection, err := PackStream(pad.offsetBuf, ModeHuffman4X)
+	offSection, err := PackStream(pad.offsetBuf, cmdMode)
 	if err != nil {
 		return nil, false
 	}
@@ -916,8 +925,6 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	if uSize > MaxBlockSize {
 		return nil, ErrExceedsMaxBlock
 	}
-
-
 
 	windowLog := opts.WindowLog
 	if windowLog == 0 {
@@ -1142,7 +1149,10 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 				flags |= FlagNorm
 			}
 		} else {
-			plan := DetectNormSpans(src)
+			var plan NormPlan
+			if level >= 4 {
+				plan = DetectNormSpans(src)
+			}
 			if plan.NetSavings >= minNetSavings && len(plan.Spans) > 0 {
 				pad.normBuf = EncodeNormSpans(src, plan, pad.normBuf)
 				src = pad.normBuf
@@ -1315,8 +1325,6 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			score:    mLen - cost,
 		}
 	}
-
-
 
 	findBest := func(pos, bEnd int) matchCandidate {
 		if pos+minMatch > bEnd {
@@ -1609,8 +1617,6 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			}
 		}
 
-
-
 		return best
 	}
 
@@ -1637,6 +1643,132 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					HenselInsert(&pad.hensel, p, src, uSize)
 				}
 			}
+		}
+	}
+
+	compressBlockFast := func(bStart, bSize int) {
+		pos := bStart
+		bEnd := bStart + bSize
+		if bEnd > len(src) {
+			return
+		}
+
+		srcPtr := unsafe.Pointer(&src[0])
+
+		litStart := bStart
+		misses := 0
+
+		for pos+4 <= bEnd {
+			maxBlockLen := bEnd - pos
+			if maxBlockLen > 65535 {
+				maxBlockLen = 65535
+			}
+			u32 := *(*uint32)(unsafe.Pointer(uintptr(srcPtr) + uintptr(pos)))
+			h1 := ((u32 * 0x1E35A7BD) >> 16) & hashTableMask
+			h2 := ((u32 * 0x7FEB352D) >> 15) & hashTableMask
+
+			p0 := pad.head[h1*4]
+			p1 := pad.head[h2*4+1]
+
+			pad.head[h1*4] = int32(pos + 1)
+			pad.head[h2*4+1] = int32(pos + 1)
+
+			d := 0
+			mLen := 0
+			if p0 > 0 {
+				prevPos := int(p0 - 1)
+				dist := pos - prevPos
+				if dist > 0 && dist < windowSize && prevPos+4 <= len(src) {
+					if *(*uint32)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos))) == u32 {
+						d = dist
+						mLen = 4
+						for pos+mLen+8 <= len(src) && mLen+8 <= maxBlockLen {
+							diff := *(*uint64)(unsafe.Pointer(uintptr(srcPtr) + uintptr(pos+mLen))) ^ *(*uint64)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos+mLen)))
+							if diff != 0 {
+								mLen += (bits.TrailingZeros64(diff) >> 3)
+								break
+							}
+							mLen += 8
+						}
+						for pos+mLen < len(src) && mLen < maxBlockLen && *(*byte)(unsafe.Pointer(uintptr(srcPtr) + uintptr(pos+mLen))) == *(*byte)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos+mLen))) {
+							mLen++
+						}
+					}
+				}
+			}
+			if p1 > 0 && mLen < 8 {
+				prevPos := int(p1 - 1)
+				dist := pos - prevPos
+				if dist > 0 && dist < windowSize && prevPos+4 <= len(src) {
+					if *(*uint32)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos))) == u32 {
+						mLen2 := 4
+						for pos+mLen2+8 <= len(src) && mLen2+8 <= maxBlockLen {
+							diff := *(*uint64)(unsafe.Pointer(uintptr(srcPtr) + uintptr(pos+mLen2))) ^ *(*uint64)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos+mLen2)))
+							if diff != 0 {
+								mLen2 += (bits.TrailingZeros64(diff) >> 3)
+								break
+							}
+							mLen2 += 8
+						}
+						for pos+mLen2 < len(src) && mLen2 < maxBlockLen && *(*byte)(unsafe.Pointer(uintptr(srcPtr) + uintptr(pos+mLen2))) == *(*byte)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos+mLen2))) {
+							mLen2++
+						}
+						if mLen2 > mLen {
+							mLen = mLen2
+							d = dist
+						}
+					}
+				}
+			}
+
+			if mLen >= minMatch {
+				litLen := pos - litStart
+				if litLen > 3 {
+					flushLiterals(src[litStart : pos-3])
+					litStart = pos - 3
+					litLen = 3
+				}
+				baseLen := mLen - 4
+				if baseLen > 14 {
+					baseLen = 15
+				}
+				op := OpcodeFlagFusedExt | uint8(litLen<<4) | uint8(baseLen)
+				pad.cmdBuf = append(pad.cmdBuf, op)
+				if baseLen == 15 {
+					var varBuf [8]byte
+					n := binary.PutUvarint(varBuf[:], uint64(mLen-19))
+					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
+				}
+				if litLen > 0 {
+					pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
+				}
+
+				if d < 0x80 {
+					pad.offsetBuf = append(pad.offsetBuf, byte(d))
+				} else if d < 0x4000 {
+					pad.offsetBuf = append(pad.offsetBuf, byte(d|0x80), byte(d>>7))
+				} else {
+					var buf [8]byte
+					n := binary.PutUvarint(buf[:], uint64(d))
+					pad.offsetBuf = append(pad.offsetBuf, buf[:n]...)
+				}
+
+				rep2 = rep1
+				rep1 = rep0
+				rep0 = d
+
+				pos += mLen
+				litStart = pos
+				misses = 0
+			} else {
+				misses++
+				step := 1 + (misses >> 3)
+				pos += step
+			}
+		}
+
+		if litStart < bEnd {
+			flushLiterals(src[litStart:bEnd])
 		}
 	}
 
@@ -1927,7 +2059,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	if uSize >= 131072 {
 		pad.dedup.Reset()
 		var dpPad *dpScratchpad
-		if level >= 3 && level < ModeArchival && customDict == nil && dictID == 0 {
+		if level >= 4 && level < ModeArchival && customDict == nil && dictID == 0 {
 			dpPad = dpScratchPool.Get()
 			defer dpScratchPool.Put(dpPad)
 			clear(dpPad.table3[:])
@@ -1950,14 +2082,14 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 				if dpPad != nil {
 					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M)
 				} else {
-					compressBlockGreedy(bStart, bSize)
+					generic.Ternary[func(int, int)](level <= 3, compressBlockFast, compressBlockGreedy)(bStart, bSize)
 				}
 				pad.dedup.Insert(h, blockIdx)
 			} else if bSize == DedupBlockSize && blockIdx == 0 {
 				if dpPad != nil {
 					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M)
 				} else {
-					compressBlockGreedy(bStart, bSize)
+					generic.Ternary[func(int, int)](level <= 3, compressBlockFast, compressBlockGreedy)(bStart, bSize)
 				}
 				h := Hash64KBlock(src[bStart : bStart+DedupBlockSize])
 				pad.dedup.Insert(h, 0)
@@ -1966,7 +2098,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 				if dpPad != nil {
 					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M)
 				} else {
-					compressBlockGreedy(bStart, bSize)
+					generic.Ternary[func(int, int)](level <= 3, compressBlockFast, compressBlockGreedy)(bStart, bSize)
 				}
 			}
 			bStart += bSize
@@ -1974,7 +2106,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	} else {
 		// Under 128 KiB: bypass deduplication entirely
-		if level >= 3 && level < ModeArchival && customDict == nil && dictID == 0 {
+		if level >= 4 && level < ModeArchival && customDict == nil && dictID == 0 {
 			dpPad := dpScratchPool.Get()
 			defer dpScratchPool.Put(dpPad)
 			clear(dpPad.table3[:])
@@ -1986,7 +2118,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 				bStart += bSize
 			}
 		} else {
-			compressBlockGreedy(0, uSize)
+			generic.Ternary[func(int, int)](level <= 3, compressBlockFast, compressBlockGreedy)(0, uSize)
 		}
 	}
 
@@ -2019,7 +2151,11 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			}
 		}
 
-		nibbleOut, nibbleOk := packNibblePlanes(pad.literalBuf, pad.nibbleBuf, pad.nibbleLowBuf)
+		var nibbleOut []byte
+		var nibbleOk bool
+		if level > 3 {
+			nibbleOut, nibbleOk = packNibblePlanes(pad.literalBuf, pad.nibbleBuf, pad.nibbleLowBuf)
+		}
 
 		if vansBeatsRaw && (!nibbleOk || len(vansOut) <= len(nibbleOut)) {
 			litSection = vansOut
@@ -2031,11 +2167,15 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	}
 
 	// Pack Section 2 (Commands) and Section 3 (Offsets) via 4-Stream Canonical Huffman
-	cmdSection, err := PackStream(pad.cmdBuf, ModeHuffman4X)
+	cmdMode := uint8(ModeHuffman4X)
+	if level <= 3 {
+		cmdMode = ModeFlat
+	}
+	cmdSection, err := PackStream(pad.cmdBuf, cmdMode)
 	if err != nil {
 		return nil, err
 	}
-	offSection, err := PackStream(pad.offsetBuf, ModeHuffman4X)
+	offSection, err := PackStream(pad.offsetBuf, cmdMode)
 	if err != nil {
 		return nil, err
 	}
@@ -2098,7 +2238,6 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		wOffset += 4
 	}
 
-
 	// Section Directory
 	if (flags & FlagExtOffset) == 0 {
 		binary.LittleEndian.PutUint16(out[wOffset:wOffset+2], uint16(len(cmdSection)))
@@ -2142,4 +2281,3 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 
 	return out, nil
 }
-
