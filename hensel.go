@@ -106,6 +106,32 @@ func (sp *HenselScratchpad8M) PrevSlice() []int32 {
 	return sp.prev[:]
 }
 
+// HenselScratchpadL6 encapsulates multi-tier ultrametric search tables for Level 6 (~69.25 MiB total).
+type HenselScratchpadL6 struct {
+	head24    [HashSize1M]int32    // 1,024 KiB (262,144 entries)
+	head32    [HashSize8M]int32    // 4,096 KiB (1,048,576 entries)
+	macroHead [65536]int32         // 256 KiB (65,536 entries)
+	prev      [WindowSize8M]int32  // 32,768 KiB (8,388,608 entries)
+	fp32      [WindowSize8M]uint32 // 32,768 KiB (8,388,608 entries)
+}
+
+// Reset clears only the head arrays (~100 µs) bypassing zeroing of prev and fp32.
+func (sp *HenselScratchpadL6) Reset() {
+	clear(sp.head24[:])
+	clear(sp.head32[:])
+	clear(sp.macroHead[:])
+}
+
+// HeadSlice returns a slice view of the 32-bit bucket heads for oracle inspection.
+func (sp *HenselScratchpadL6) HeadSlice() []int32 {
+	return sp.head32[:]
+}
+
+// PrevSlice returns a slice view of the collision chains for oracle inspection.
+func (sp *HenselScratchpadL6) PrevSlice() []int32 {
+	return sp.prev[:]
+}
+
 var (
 	// PoolHensel64K reuses 768 KiB scratchpads
 	PoolHensel64K = generic.NewPool(func() *HenselScratchpad {
@@ -120,6 +146,11 @@ var (
 	// PoolHensel8M reuses full-coverage ~68.0 MiB scratchpads
 	PoolHensel8M = generic.NewPool(func() *HenselScratchpad8M {
 		return new(HenselScratchpad8M)
+	})
+
+	// PoolHenselL6 reuses full-coverage ~69.25 MiB multi-tier scratchpads
+	PoolHenselL6 = generic.NewPool(func() *HenselScratchpadL6 {
+		return new(HenselScratchpadL6)
 	})
 )
 
@@ -820,4 +851,185 @@ func HenselFindMatch8M(
 		WindowSize8M, WindowMask8M, HashBits8M, HashMask8M,
 		sp.head[:], sp.prev[:], sp.fp32[:],
 	)
+}
+
+// HenselInsertL6 registers position p into the 3-tier Level 6 Hensel search tables.
+//
+//go:nosplit
+func HenselInsertL6(sp *HenselScratchpadL6, p int, src []byte, uSize int) {
+	if sp == nil || p+3 > uSize {
+		return
+	}
+	srcPtr := unsafe.Pointer(unsafe.SliceData(src))
+	slot := p & WindowMask8M
+
+	// Tier 1: 3-byte hash
+	b0 := uint32(*(*byte)(unsafe.Add(srcPtr, p)))
+	b1 := uint32(*(*byte)(unsafe.Add(srcPtr, p+1)))
+	b2 := uint32(*(*byte)(unsafe.Add(srcPtr, p+2)))
+	h24 := ((b0 | (b1 << 8) | (b2 << 16)) * HenselHashPrime) >> (32 - HashBits1M)
+	sp.head24[h24&HashMask1M] = int32(p + 1)
+
+	// Tier 2: 4-byte hash
+	if p+4 <= uSize {
+		w4 := *(*uint32)(unsafe.Add(srcPtr, p))
+		h32 := (w4 * HenselHashPrime) >> (32 - HashBits8M)
+		hIdx := int(h32) & HashMask8M
+		sp.prev[slot] = sp.head32[hIdx]
+		sp.head32[hIdx] = int32(p + 1)
+
+		if p+8 <= uSize {
+			sp.fp32[slot] = *(*uint32)(unsafe.Add(srcPtr, p+4))
+		} else {
+			sp.fp32[slot] = 0
+		}
+	}
+
+	// Tier 3: Macro-hash (sample every 8 bytes)
+	if (p&7) == 0 && p+8 <= uSize {
+		w8 := *(*uint64)(unsafe.Add(srcPtr, p))
+		mHash := uint32((w8 ^ (w8 >> 32)) * 0x9E3779B9) >> 16
+		sp.macroHead[mHash&0xFFFF] = int32(p + 1)
+	}
+}
+
+// HenselFindMatchL6 performs ultrametric multi-tier match search up to maxDepth with Theorem HL-2 pruning.
+//
+//go:nosplit
+func HenselFindMatchL6(
+	src []byte,
+	pos int,
+	uSize int,
+	maxDepth int,
+	minLen int,
+	sp *HenselScratchpadL6,
+) (bestDist, bestLen int) {
+	if sp == nil || pos+3 > uSize {
+		return 0, 0
+	}
+	srcPtr := unsafe.Pointer(unsafe.SliceData(src))
+	maxSearchLen := uSize - pos
+
+	// 1. Tier 3: Macro Anchor check (for big structural blocks >= 16 bytes)
+	if pos+8 <= uSize {
+		w8 := *(*uint64)(unsafe.Add(srcPtr, pos))
+		mHash := uint32((w8 ^ (w8 >> 32)) * 0x9E3779B9) >> 16
+		candMacro := int(sp.macroHead[mHash&0xFFFF]) - 1
+		if candMacro >= 0 && candMacro < pos {
+			d := pos - candMacro
+			if d < WindowSize8M && d > 0 {
+				mLen := HenselLCPPos(src, pos, candMacro, maxSearchLen)
+				if mLen >= 16 {
+					bestLen = mLen
+					bestDist = d
+				}
+			}
+		}
+	}
+
+	// 2. Tier 2: 4-byte hash table with Theorem HL-2 ultrametric pruning
+	if pos+4 <= uSize {
+		w4 := *(*uint32)(unsafe.Add(srcPtr, pos))
+		h32 := (w4 * HenselHashPrime) >> (32 - HashBits8M)
+		cand := int(sp.head32[h32&HashMask8M]) - 1
+
+		if cand >= 0 {
+			has8 := pos+8 <= uSize
+			var targetFP32 uint32
+			if has8 {
+				targetFP32 = *(*uint32)(unsafe.Add(srcPtr, pos+4))
+			}
+
+			depth := 0
+			for cand >= 0 && depth < maxDepth {
+				candSlot := cand & WindowMask8M
+
+				if cand >= pos {
+					nextCand := int(sp.prev[candSlot]) - 1
+					if nextCand >= cand || nextCand < 0 {
+						break
+					}
+					cand = nextCand
+					continue
+				}
+
+				d := pos - cand
+				if d >= WindowSize8M || d <= 0 {
+					break
+				}
+
+				// Theorem HL-2 ultrametric pruning
+				hasDiff := false
+				var maxLift int
+				if has8 && bestLen >= 4 {
+					diff := sp.fp32[candSlot] ^ targetFP32
+					if diff != 0 {
+						maxLift = 4 + (bits.TrailingZeros32(diff) >> 3)
+						if maxLift <= bestLen {
+							nextCand := int(sp.prev[candSlot]) - 1
+							if nextCand >= cand || nextCand < 0 {
+								break
+							}
+							cand = nextCand
+							depth++
+							continue
+						}
+						hasDiff = true
+					}
+				}
+
+				if *(*uint32)(unsafe.Add(srcPtr, cand)) == w4 {
+					if hasDiff {
+						bestLen = maxLift
+						bestDist = d
+					} else {
+						mLen := HenselLCPPos(src, pos, cand, maxSearchLen)
+						if mLen > bestLen {
+							bestLen = mLen
+							bestDist = d
+							if bestLen >= 1024 {
+								break
+							}
+						}
+					}
+				}
+
+				nextCand := int(sp.prev[candSlot]) - 1
+				if nextCand >= cand || nextCand < 0 {
+					break
+				}
+				cand = nextCand
+				depth++
+			}
+		}
+	}
+
+	// 3. Tier 1: If minLen <= 3 and no match found >= 3 bytes, check head24
+	if bestLen < 3 && minLen <= 3 {
+		b0 := uint32(*(*byte)(unsafe.Add(srcPtr, pos)))
+		b1 := uint32(*(*byte)(unsafe.Add(srcPtr, pos+1)))
+		b2 := uint32(*(*byte)(unsafe.Add(srcPtr, pos+2)))
+		h24 := ((b0 | (b1 << 8) | (b2 << 16)) * HenselHashPrime) >> (32 - HashBits1M)
+		cand24 := int(sp.head24[h24&HashMask1M]) - 1
+		if cand24 >= 0 && cand24 < pos {
+			d := pos - cand24
+			if d < WindowSize8M && d > 0 {
+				c0 := *(*byte)(unsafe.Add(srcPtr, cand24))
+				c1 := *(*byte)(unsafe.Add(srcPtr, cand24+1))
+				c2 := *(*byte)(unsafe.Add(srcPtr, cand24+2))
+				if c0 == byte(b0) && c1 == byte(b1) && c2 == byte(b2) {
+					mLen := HenselLCPPos(src, pos, cand24, maxSearchLen)
+					if mLen > bestLen {
+						bestLen = mLen
+						bestDist = d
+					}
+				}
+			}
+		}
+	}
+
+	if bestLen < minLen {
+		return 0, 0
+	}
+	return bestDist, bestLen
 }

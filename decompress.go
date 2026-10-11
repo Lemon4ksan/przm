@@ -167,6 +167,37 @@ func copyMatch(baseDst unsafe.Pointer, dstPos, srcIdx, mLen, d int) {
 	}
 }
 
+// execMatch safely executes a match copy, transparently handling positive offsets in outBuf
+// and negative offsets into the raw prefix dictionary buffer.
+func execMatch(baseDst unsafe.Pointer, outBuf []byte, rawDict []byte, dstPos, d, mLen int) error {
+	if d <= 0 || dstPos+mLen > len(outBuf) {
+		return fmt.Errorf("%w: invalid match bounds (d=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, dstPos, mLen)
+	}
+	srcIdx := dstPos - d
+	if srcIdx >= 0 {
+		copyMatch(baseDst, dstPos, srcIdx, mLen, d)
+		return nil
+	}
+	if len(rawDict) == 0 {
+		return fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+	}
+	dictOffset := len(rawDict) + srcIdx
+	if dictOffset < 0 || dictOffset >= len(rawDict) {
+		return fmt.Errorf("%w: dictionary offset %d out of bounds (dictLen=%d)", ErrCorruptedFrame, dictOffset, len(rawDict))
+	}
+	dictAvail := len(rawDict) - dictOffset
+	copyFromDict := min(mLen, dictAvail)
+	copy(outBuf[dstPos:dstPos+copyFromDict], rawDict[dictOffset:dictOffset+copyFromDict])
+	if mLen > copyFromDict {
+		remLen := mLen - copyFromDict
+		copyStart := dstPos + copyFromDict
+		for i := 0; i < remLen; i++ {
+			outBuf[copyStart+i] = outBuf[i]
+		}
+	}
+	return nil
+}
+
 // validateSheafMask counts 1-bits in mask for the first origLen bits and ensures unused bits are 0.
 func validateSheafMask(mask []byte, origLen, sLen int) bool {
 	if origLen < 0 || sLen < 0 || sLen > origLen {
@@ -422,9 +453,20 @@ func getFrameUncompressedSize(src []byte) (int, error) {
 	}
 }
 
+// DecompressOptions defines optional parameters for decompression.
+type DecompressOptions struct {
+	Dict    *Dictionary
+	RawDict []byte
+}
+
 // Decompress decodes a PRZM-compressed byte slice back to original uncompressed bytes.
 func Decompress(src []byte) ([]byte, error) {
 	return DecompressTo(src, nil)
+}
+
+// DecompressWithOptions decodes a PRZM frame with optional dictionary overrides.
+func DecompressWithOptions(src []byte, opts DecompressOptions) ([]byte, error) {
+	return decompressWithDictToEx(src, nil, opts.Dict, opts.RawDict)
 }
 
 // DecompressTo decodes a PRZM-compressed frame into a destination buffer dst.
@@ -434,6 +476,10 @@ func DecompressTo(src, dst []byte) ([]byte, error) {
 }
 
 func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, error) {
+	return decompressWithDictToEx(src, dst, customDict, nil)
+}
+
+func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRawDict []byte) ([]byte, error) {
 	if len(src) == 0 {
 		if src == nil {
 			return nil, ErrCorruptedFrame
@@ -485,7 +531,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 					return nil, ErrCorruptedFrame
 				}
 
-				_, err = decompressWithDictTo(chunkSrc, dst[dstPos:dstPos+chunkUSize], customDict)
+				_, err = decompressWithDictToEx(chunkSrc, dst[dstPos:dstPos+chunkUSize], customDict, explicitRawDict)
 				if err != nil {
 					return nil, err
 				}
@@ -731,15 +777,22 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 
 	dstPos := 0
 
+	minMatchBase := 4
+	if (hdr.Flags & FlagMinMatch3) != 0 {
+		minMatchBase = 3
+	}
+
 	var activeDict [][]byte
+	rawDict := explicitRawDict
 	if (hdr.Flags & FlagDictRef) != 0 {
+		if len(rawDict) == 0 {
+			rawDict = GetRawDictionary(hdr.DictID)
+		}
 		if customDict != nil && hdr.DictID == customDict.id {
 			activeDict = customDict.tokens
-		} else if hdr.DictID == DictIDJSON {
-			activeDict = jsonMatcher.tokens
 		} else if d := GetDictionary(hdr.DictID); d != nil {
 			activeDict = d.tokens
-		} else {
+		} else if len(rawDict) == 0 {
 			return nil, fmt.Errorf("%w: DictID 0x%08X is not registered", ErrUnknownDict, hdr.DictID)
 		}
 	}
@@ -751,7 +804,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 		if op < 0x80 {
 			// Fast path 1: Fused Repeat Token (00 LLL MM KK)
 			litLen := int((op >> 4) & 0x07)
-			mLen := int((op>>2)&0x03) + 4
+			mLen := int((op>>2)&0x03) + minMatchBase
 			k := int(op & 0x03)
 
 			if litLen > 0 {
@@ -784,32 +837,35 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			}
 
 			srcIdx := dstPos - d
-			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
-				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
-			}
-			if d >= 8 || d >= mLen {
-				*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Add(baseDst, srcIdx))
-			} else if d == 1 {
-				pattern := simd.RepeatByte0x01 * uint64(*(*byte)(unsafe.Add(baseDst, srcIdx)))
-				*(*uint64)(unsafe.Add(baseDst, dstPos)) = pattern
-			} else if d == 2 {
-				w := uint64(*(*uint16)(unsafe.Add(baseDst, srcIdx)))
-				pattern := w | (w << 16) | (w << 32) | (w << 48)
-				*(*uint64)(unsafe.Add(baseDst, dstPos)) = pattern
-			} else if d == 4 {
-				w := uint64(*(*uint32)(unsafe.Add(baseDst, srcIdx)))
-				pattern := w | (w << 32)
-				*(*uint64)(unsafe.Add(baseDst, dstPos)) = pattern
-			} else if d == 3 {
-				pS := unsafe.Add(baseDst, srcIdx)
-				b0 := uint64(*(*byte)(pS))
-				b1 := uint64(*(*byte)(unsafe.Add(pS, 1)))
-				b2 := uint64(*(*byte)(unsafe.Add(pS, 2)))
-				pattern := b0 | (b1 << 8) | (b2 << 16) | (b0 << 24) | (b1 << 32) | (b2 << 40) | (b0 << 48) | (b1 << 56)
-				*(*uint64)(unsafe.Add(baseDst, dstPos)) = pattern
+			if d > 0 && srcIdx >= 0 && dstPos+mLen <= len(outBuf) {
+				if d >= 8 || d >= mLen {
+					*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Add(baseDst, srcIdx))
+				} else if d == 1 {
+					pattern := simd.RepeatByte0x01 * uint64(*(*byte)(unsafe.Add(baseDst, srcIdx)))
+					*(*uint64)(unsafe.Add(baseDst, dstPos)) = pattern
+				} else if d == 2 {
+					w := uint64(*(*uint16)(unsafe.Add(baseDst, srcIdx)))
+					pattern := w | (w << 16) | (w << 32) | (w << 48)
+					*(*uint64)(unsafe.Add(baseDst, dstPos)) = pattern
+				} else if d == 4 {
+					w := uint64(*(*uint32)(unsafe.Add(baseDst, srcIdx)))
+					pattern := w | (w << 32)
+					*(*uint64)(unsafe.Add(baseDst, dstPos)) = pattern
+				} else if d == 3 {
+					pS := unsafe.Add(baseDst, srcIdx)
+					b0 := uint64(*(*byte)(pS))
+					b1 := uint64(*(*byte)(unsafe.Add(pS, 1)))
+					b2 := uint64(*(*byte)(unsafe.Add(pS, 2)))
+					pattern := b0 | (b1 << 8) | (b2 << 16) | (b0 << 24) | (b1 << 32) | (b2 << 40) | (b0 << 48) | (b1 << 56)
+					*(*uint64)(unsafe.Add(baseDst, dstPos)) = pattern
+				} else {
+					for i := range mLen {
+						*(*byte)(unsafe.Add(baseDst, dstPos+i)) = *(*byte)(unsafe.Add(baseDst, srcIdx+i))
+					}
+				}
 			} else {
-				for i := range mLen {
-					*(*byte)(unsafe.Add(baseDst, dstPos+i)) = *(*byte)(unsafe.Add(baseDst, srcIdx+i))
+				if err := execMatch(baseDst, outBuf, rawDict, dstPos, d, mLen); err != nil {
+					return nil, err
 				}
 			}
 			dstPos += mLen
@@ -820,7 +876,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			// Fast path 2: Fused Extended Match (10 LL MMMM)
 			litLen := int((op >> 4) & 0x03)
 			baseLen := int(op & 0x0F)
-			mLen := baseLen + 4
+			mLen := baseLen + minMatchBase
 			if baseLen == 15 {
 				var extra int
 				var err error
@@ -828,7 +884,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 				if err != nil {
 					return nil, err
 				}
-				mLen = 19 + extra
+				mLen = 15 + minMatchBase + extra
 			}
 
 			if litLen > 0 {
@@ -855,11 +911,9 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			rep1 = rep0
 			rep0 = d
 
-			srcIdx := dstPos - d
-			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
-				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+			if err := execMatch(baseDst, outBuf, rawDict, dstPos, d, mLen); err != nil {
+				return nil, err
 			}
-			copyMatch(baseDst, dstPos, srcIdx, mLen, d)
 			dstPos += mLen
 			continue
 		}
@@ -876,7 +930,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			cmdPtr++
 			litLen := int((token >> 4) & 0x0F)
 			baseLen := int(token & 0x0F)
-			mLen := baseLen + 4
+			mLen := baseLen + minMatchBase
 			if baseLen == 15 {
 				var extra int
 				var err error
@@ -884,7 +938,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 				if err != nil {
 					return nil, err
 				}
-				mLen = 19 + extra
+				mLen = 15 + minMatchBase + extra
 			}
 
 			if litLen > 0 {
@@ -920,11 +974,9 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 				return nil, fmt.Errorf("%w: invalid long repeat index %d", ErrCorruptedFrame, k)
 			}
 
-			srcIdx := dstPos - d
-			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
-				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+			if err := execMatch(baseDst, outBuf, rawDict, dstPos, d, mLen); err != nil {
+				return nil, err
 			}
-			copyMatch(baseDst, dstPos, srcIdx, mLen, d)
 			dstPos += mLen
 
 		case op >= 0xD0 && op <= 0xD7:
@@ -936,7 +988,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			token := cmds[cmdPtr]
 			cmdPtr++
 			litLen := int((token >> 4) & 0x0F)
-			mLen := int(token&0x0F) + 4
+			mLen := int(token&0x0F) + minMatchBase
 
 			if litLen > 0 {
 				if litPtr+litLen > len(lits) || dstPos+litLen > len(outBuf) {
@@ -952,11 +1004,9 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			rep1 = rep0
 			rep0 = d
 
-			srcIdx := dstPos - d
-			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
-				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+			if err := execMatch(baseDst, outBuf, rawDict, dstPos, d, mLen); err != nil {
+				return nil, err
 			}
-			copyMatch(baseDst, dstPos, srcIdx, mLen, d)
 			dstPos += mLen
 
 		case op >= 0xE0 && op <= 0xE7:
@@ -967,7 +1017,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			}
 			baseLen := int(cmds[cmdPtr])
 			cmdPtr++
-			mLen := baseLen + 4
+			mLen := baseLen + minMatchBase
 			if baseLen == 255 {
 				var extra int
 				var err error
@@ -975,7 +1025,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 				if err != nil {
 					return nil, err
 				}
-				mLen = 259 + extra
+				mLen = 255 + minMatchBase + extra
 			}
 
 			var d int
@@ -995,11 +1045,9 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 				return nil, fmt.Errorf("%w: invalid delta locality index %d", ErrCorruptedFrame, k)
 			}
 
-			srcIdx := dstPos - d
-			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
-				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+			if err := execMatch(baseDst, outBuf, rawDict, dstPos, d, mLen); err != nil {
+				return nil, err
 			}
-			copyMatch(baseDst, dstPos, srcIdx, mLen, d)
 
 			if litPtr >= len(lits) {
 				return nil, fmt.Errorf("%w: literal stream truncated", ErrCorruptedFrame)
@@ -1066,7 +1114,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			}
 			baseLen := int(cmds[cmdPtr])
 			cmdPtr++
-			mLen := baseLen + 4
+			mLen := baseLen + minMatchBase
 			if baseLen == 255 {
 				var extra int
 				var err error
@@ -1074,7 +1122,7 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 				if err != nil {
 					return nil, err
 				}
-				mLen = 259 + extra
+				mLen = 255 + minMatchBase + extra
 			}
 
 			var d int
@@ -1088,11 +1136,9 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 			rep1 = rep0
 			rep0 = d
 
-			srcIdx := dstPos - d
-			if d <= 0 || srcIdx < 0 || dstPos+mLen > len(outBuf) {
-				return nil, fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+			if err := execMatch(baseDst, outBuf, rawDict, dstPos, d, mLen); err != nil {
+				return nil, err
 			}
-			copyMatch(baseDst, dstPos, srcIdx, mLen, d)
 
 			if litPtr >= len(lits) {
 				return nil, fmt.Errorf("%w: literal stream truncated", ErrCorruptedFrame)
@@ -1150,6 +1196,54 @@ func decompressWithDictTo(src, dst []byte, customDict *Dictionary) ([]byte, erro
 					}
 				}
 			}
+			dstPos += mLen
+
+		case op == OpcodePrefixRawDict:
+			// Direct Raw Dictionary Match (offset inside rawDict)
+			if len(rawDict) == 0 {
+				return nil, fmt.Errorf("%w: raw dict match opcode without raw dictionary", ErrCorruptedFrame)
+			}
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated command stream", ErrCorruptedFrame)
+			}
+			token := cmds[cmdPtr]
+			cmdPtr++
+			litLen := int((token >> 4) & 0x0F)
+			baseLen := int(token & 0x0F)
+			mLen := baseLen + minMatchBase
+			if baseLen == 15 {
+				var extra int
+				var err error
+				extra, cmdPtr, err = fastReadVarint(cmds, cmdPtr)
+				if err != nil {
+					return nil, err
+				}
+				mLen = 15 + minMatchBase + extra
+			}
+
+			if litLen > 0 {
+				if litPtr+litLen > len(lits) || dstPos+litLen > len(outBuf) {
+					return nil, fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
+				}
+				if litLen <= 8 && litPtr+8 <= len(lits) && dstPos+8 <= len(outBuf) {
+					*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Pointer(&lits[litPtr]))
+				} else {
+					copy(outBuf[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
+				}
+				litPtr += litLen
+				dstPos += litLen
+			}
+
+			var dictOff int
+			var err error
+			dictOff, offPtr, err = fastReadVarint(offs, offPtr)
+			if err != nil {
+				return nil, err
+			}
+			if dictOff < 0 || dictOff+mLen > len(rawDict) || dstPos+mLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: raw dict offset out of bounds (off=%d, mLen=%d, dictLen=%d)", ErrCorruptedFrame, dictOff, mLen, len(rawDict))
+			}
+			copy(outBuf[dstPos:dstPos+mLen], rawDict[dictOff:dictOff+mLen])
 			dstPos += mLen
 
 		case op == 0xF0:

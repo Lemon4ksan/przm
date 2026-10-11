@@ -35,6 +35,7 @@ const (
 	FlagExtOffset    uint8 = 0x08 // Bit 3: 24/32-bit offsets and section lengths
 	FlagDictRef      uint8 = 0x10 // Bit 4: External dictionary reference present
 	FlagNorm         uint8 = 0x20 // Bit 5: Base64/Hex Normalization applied
+	FlagMinMatch3    uint8 = 0x40 // Bit 6: MinMatch=3 mode (baseLen + 3)
 	FlagNibble       uint8 = 0x80 // Bit 7: Section 4 encoded via SIMD Nibble-Plane Splitting or V-ANS
 )
 
@@ -67,6 +68,7 @@ const (
 	OpcodePrefixShortDict  uint8 = 0xD8 // 0xD8 .. 0xDF: Top-8 direct 1-byte schema tokens
 	OpcodePrefixDeltaRing  uint8 = 0xE0 // 0xE0 .. 0xE7
 	OpcodePrefixDeltaExpl  uint8 = 0xE8
+	OpcodePrefixRawDict    uint8 = 0xE9 // 0xE9: Direct Raw Dictionary Match (offset inside rawDict)
 	OpcodePrefixLiteral    uint8 = 0xF0
 	OpcodePrefixRLE        uint8 = 0xF1
 	OpcodePrefixDictToken  uint8 = 0xF2 // 0xF2 <tokenID>: 2-byte schema token from active DictID
@@ -102,6 +104,7 @@ const (
 // Compression Modes / Levels
 const (
 	ModeArchival = 5
+	ModeL6       = 6
 )
 
 // Specialized Container Signatures

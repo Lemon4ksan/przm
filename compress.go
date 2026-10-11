@@ -402,12 +402,16 @@ func isCandidateTDA(src []byte) bool {
 type CompressOptions struct {
 	Level              int         // 1..5
 	WindowLog          int         // 16 (64K), 20 (1M), 23 (8M), or 0 (auto)
-	Dict               *Dictionary // Optional external dictionary
+	Dict               *Dictionary // Optional external schema dictionary
+	RawDict            []byte      // Optional raw prefix history dictionary buffer
+	DictID             uint32      // Optional dictionary ID for RawDict
 	ArchivalMode       bool        // Explicit toggle for --mode=archival
 	StandardStreamOnly bool        // Ensure canonical PRZM stream format (MagicPRZM = 0x4D5A5250)
 	Threads            int         // 0 = auto (runtime.GOMAXPROCS(0)), 1 = single-threaded, >1 = explicit worker count
 	ChunkSize          int         // 0 = auto (default 2 MiB), >0 = explicit chunk uncompressed byte size
 	GPUAcceleration    bool        // Offload LZ77 dictionary search to NVIDIA Ampere GPU via CUDA Driver API
+	MinMatch           int         // Minimum match length: 3 or 4 (default 4; 3 enables FlagMinMatch3)
+	CompactDict        bool        // Enable dedicated OpcodePrefixRawDict (0xE9) for constant raw dictionary offsets
 }
 
 // Option configures CompressOptions.
@@ -438,7 +442,7 @@ func resolveConcurrencyOptions(opts CompressOptions) (threads int, chunkSize int
 }
 
 func shouldUseMultiChunk(srcLen int, opts CompressOptions) bool {
-	if opts.StandardStreamOnly {
+	if opts.StandardStreamOnly || len(opts.RawDict) > 0 || opts.DictID != 0 {
 		return false
 	}
 	threads, chunkSize := resolveConcurrencyOptions(opts)
@@ -914,6 +918,13 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	}
 	customDict := opts.Dict
 
+	rawDict := opts.RawDict
+	dictID := opts.DictID
+	if len(rawDict) == 0 && dictID != 0 {
+		rawDict = GetRawDictionary(dictID)
+	}
+	dictLen := len(rawDict)
+
 	uSize := len(src)
 	if uSize == 0 {
 		hdr := [HeaderSize]byte{}
@@ -928,9 +939,12 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 
 	windowLog := opts.WindowLog
 	if windowLog == 0 {
-		if uSize <= 64*1024 {
+		totalSpan := uSize + dictLen
+		if level >= 6 {
+			windowLog = WindowLog8M
+		} else if totalSpan <= 64*1024 {
 			windowLog = WindowLog64K
-		} else if uSize > 1024*1024 || level >= 3 {
+		} else if totalSpan > 1024*1024 || level >= 3 {
 			windowLog = WindowLog8M
 		} else {
 			windowLog = WindowLog1M
@@ -949,7 +963,12 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	clear(pad.head)
 	var sp1M *HenselScratchpad1M
 	var sp8M *HenselScratchpad8M
-	if level >= 3 {
+	var spL6 *HenselScratchpadL6
+	if level >= 6 {
+		spL6 = PoolHenselL6.Get()
+		defer PoolHenselL6.Put(spL6)
+		spL6.Reset()
+	} else if level >= 3 {
 		switch windowLog {
 		case WindowLog8M:
 			sp8M = PoolHensel8M.Get()
@@ -963,11 +982,21 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			pad.hensel.Reset()
 		}
 	}
-	pad.cmdBuf = ensureBufCap(pad.cmdBuf, uSize)
-	pad.offsetBuf = ensureBufCap(pad.offsetBuf, uSize/2)
-	pad.literalBuf = ensureBufCap(pad.literalBuf, uSize)
+	origSrc := src
+	origUSize := uSize
+	pad.cmdBuf = ensureBufCap(pad.cmdBuf, origUSize)
+	pad.offsetBuf = ensureBufCap(pad.offsetBuf, origUSize/2)
+	pad.literalBuf = ensureBufCap(pad.literalBuf, origUSize)
 
-	if opts.GPUAcceleration {
+	if dictLen > 0 {
+		fullSrc := make([]byte, dictLen+origUSize)
+		copy(fullSrc[:dictLen], rawDict)
+		copy(fullSrc[dictLen:], origSrc)
+		src = fullSrc
+		uSize = len(fullSrc)
+	}
+
+	if opts.GPUAcceleration && dictLen == 0 {
 		if comp, ok := tryCompressGPU(src, opts, pad); ok {
 			return comp, nil
 		}
@@ -977,8 +1006,6 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		pad.literalBuf = pad.literalBuf[:0]
 	}
 
-	origSrc := src
-	origUSize := uSize
 	highEntropy := isHighEntropy(origSrc)
 	// Content Router: Sub-microsecond decision tree (<290 ns budget, 0 dynamic allocations)
 	route := RouteContent(origSrc)
@@ -1005,13 +1032,13 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	var hodgeCandidate []byte
 
 	// Fast bypass: only evaluate heavy mathematical transforms if router classified as SparseZero or SmoothDelta
-	allowTransforms := (route == RouteSparseZero || route == RouteSmoothDelta) && !highEntropy && level >= 2
+	allowTransforms := (route == RouteSparseZero || route == RouteSmoothDelta) && !highEntropy && level >= 2 && dictLen == 0
 	if opts.StandardStreamOnly {
 		allowTransforms = false
 	}
 
 	// Specialized filters: Protobuf, ARM64, p-Adic Hensel lifting, and Hodge Étale Sheaves
-	if !opts.StandardStreamOnly && opts.Dict == nil && !highEntropy && level >= 2 && uSize >= 64 {
+	if !opts.StandardStreamOnly && opts.Dict == nil && dictLen == 0 && !highEntropy && level >= 2 && origUSize >= 64 {
 		if isProtobuf := DetectProtobufTLV(origSrc); isProtobuf {
 			if depOut := CompressDependentSheaf(origSrc); len(depOut) > 0 && len(depOut) < origUSize {
 				depCandidate = depOut
@@ -1108,7 +1135,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	normMode := NormModeNone
 	normContractedLen := 0
 
-	if route != RouteContainerBypass && !highEntropy && uSize >= minNormSpanLen {
+	if dictLen == 0 && route != RouteContainerBypass && !highEntropy && origUSize >= minNormSpanLen {
 		if isHex, upper := IsWholeBlockHex(src); isHex {
 			cLen := len(src) / 2
 			if len(src)-cLen >= minNetSavings {
@@ -1177,24 +1204,36 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	}
 
-	stride, hasStride := detectStride(src)
-	if hasStride {
-		flags |= FlagStride
+	stride := 1
+	hasStride := false
+	if dictLen == 0 {
+		stride, hasStride = detectStride(src)
+		if hasStride {
+			flags |= FlagStride
+		}
 	}
 
-	dictID := uint32(0)
 	var activeMatcher *dictMatcher
 	if customDict != nil {
 		activeMatcher = &customDict.matcher
 		dictID = customDict.id
 		flags |= FlagDictRef
-	} else if !hasStride {
-		dictID = detectDictionary(src)
-		if dictID == DictIDJSON {
-			activeMatcher = &jsonMatcher
-			flags |= FlagDictRef
+	} else if dictID != 0 {
+		if d := GetDictionary(dictID); d != nil {
+			activeMatcher = &d.matcher
 		}
+		flags |= FlagDictRef
+	} else if dictLen > 0 {
+		flags |= FlagDictRef
 	}
+
+	minMatch := 4
+	if opts.MinMatch == 3 || (level >= 6 && opts.MinMatch != 4) {
+		minMatch = 3
+		flags |= FlagMinMatch3
+	}
+	minMatchBase := minMatch
+	compactDict := opts.CompactDict && dictLen > 0
 
 	if uSize > 65535 || windowLog > WindowLog64K {
 		flags |= FlagExtOffset
@@ -1256,6 +1295,14 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 
 	extendMatch := func(pos, d, maxLen int) int {
 		mLen := 4
+		if minMatch == 3 {
+			mLen = 3
+			if pos+3 < uSize && pos-d+3 < uSize && src[pos+3] == src[pos-d+3] {
+				mLen = 4
+			} else {
+				return 3
+			}
+		}
 		for pos+mLen+8 <= uSize && mLen+8 <= maxLen {
 			diff := binary.LittleEndian.Uint64(src[pos+mLen:pos+mLen+8]) ^ binary.LittleEndian.Uint64(src[pos-d+mLen:pos-d+mLen+8])
 			if diff != 0 {
@@ -1276,14 +1323,47 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	}
 
 	evalCandidate := func(pos, d, maxLen int) matchCandidate {
-		if d <= 0 || pos < d || pos+4 > uSize {
+		if d <= 0 || pos < d || pos+minMatch > uSize {
 			return matchCandidate{}
 		}
-		if binary.LittleEndian.Uint32(src[pos:pos+4]) != binary.LittleEndian.Uint32(src[pos-d:pos-d+4]) {
-			return matchCandidate{}
+		if minMatch == 3 {
+			if pos+4 <= uSize && pos-d+4 <= uSize {
+				if (binary.LittleEndian.Uint32(src[pos:pos+4]) & 0x00FFFFFF) != (binary.LittleEndian.Uint32(src[pos-d:pos-d+4]) & 0x00FFFFFF) {
+					return matchCandidate{}
+				}
+			} else {
+				if src[pos] != src[pos-d] || src[pos+1] != src[pos-d+1] || src[pos+2] != src[pos-d+2] {
+					return matchCandidate{}
+				}
+			}
+		} else {
+			if pos+4 > uSize || pos-d+4 > uSize || binary.LittleEndian.Uint32(src[pos:pos+4]) != binary.LittleEndian.Uint32(src[pos-d:pos-d+4]) {
+				return matchCandidate{}
+			}
 		}
 		mLen := extendMatch(pos, d, maxLen)
 		if mLen < minMatch {
+			return matchCandidate{}
+		}
+
+		mPos := pos - d
+		if compactDict && mPos < dictLen {
+			dictOff := mPos
+			offCost := calcOffCost(dictOff)
+			cost := 2 + offCost
+			if mLen > 14+minMatchBase {
+				cost += uvarintLen(uint64(mLen - (15 + minMatchBase)))
+			}
+			score := mLen - cost
+			if score >= 1 {
+				return matchCandidate{
+					mType:   9,
+					length:  mLen,
+					dictTok: dictOff,
+					cost:    cost,
+					score:   score,
+				}
+			}
 			return matchCandidate{}
 		}
 
@@ -1297,7 +1377,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 
 		if ringK >= 0 {
-			if ringK <= 2 && mLen <= 7 {
+			if ringK <= 2 && mLen <= 3+minMatchBase {
 				return matchCandidate{
 					mType:    1,
 					length:   mLen,
@@ -1308,8 +1388,8 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 				}
 			}
 			cost := 2
-			if mLen > 18 {
-				cost += uvarintLen(uint64(mLen - 19))
+			if mLen > 14+minMatchBase {
+				cost += uvarintLen(uint64(mLen - (15 + minMatchBase)))
 			}
 			return matchCandidate{
 				mType:    3,
@@ -1323,12 +1403,12 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 
 		// Explicit Extended Match
 		offCost := calcOffCost(d)
-		if mLen < 4 || (mLen < 5 && d >= 128) {
+		if mLen < minMatchBase || (mLen < minMatchBase+1 && d >= 128) {
 			return matchCandidate{}
 		}
 		cost := 1 + offCost
-		if mLen > 18 {
-			cost += uvarintLen(uint64(mLen - 19))
+		if mLen > 14+minMatchBase {
+			cost += uvarintLen(uint64(mLen - (15 + minMatchBase)))
 		}
 		return matchCandidate{
 			mType:    4,
@@ -1345,12 +1425,15 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 
 		maxBlockLen := min(bEnd-pos, 65535)
+		if level >= 6 {
+			maxBlockLen = bEnd - pos
+		}
 
 		best := matchCandidate{}
 
 		if activeMatcher != nil {
 			tokIdx, tokLen := activeMatcher.match(src, pos)
-			if tokLen >= 5 && tokLen <= maxBlockLen {
+			if tokLen >= 3 && tokLen <= maxBlockLen {
 				var cost int
 				var mType int
 				if tokIdx < 8 {
@@ -1361,7 +1444,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					mType = 8 // OpcodePrefixDictToken
 				}
 				score := tokLen - cost
-				if score > best.score {
+				if score > best.score && score >= 1 {
 					best = matchCandidate{
 						mType:   mType,
 						length:  tokLen,
@@ -1474,8 +1557,13 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 
 		// 1. Hash table lookup (4-way bucket) - Most likely and longest exact matches
-		h := (binary.LittleEndian.Uint32(src[pos:pos+4]) * 0x1E35A7BD) >> 16
-		h &= hashTableMask
+		var h uint32
+		if minMatch == 3 {
+			h3 := uint32(src[pos]) | (uint32(src[pos+1]) << 8) | (uint32(src[pos+2]) << 16)
+			h = ((h3 * 0x1E35A7BD) >> 16) & hashTableMask
+		} else {
+			h = ((binary.LittleEndian.Uint32(src[pos:pos+4]) * 0x1E35A7BD) >> 16) & hashTableMask
+		}
 		p0 := pad.head[h*4]
 		p1 := pad.head[h*4+1]
 		p2 := pad.head[h*4+2]
@@ -1536,8 +1624,19 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			}
 		}
 
-		// Hensel Ultrametric Match Finding for Level >= 3 (depth 16 on Level 3, depth 64 on Level 4)
-		if level >= 3 {
+		// Hensel Ultrametric Match Finding for Level >= 3 (depth 16 on L3, depth 64 on L4/L5, depth 256 multi-tier on L6)
+		if level >= 6 && spL6 != nil {
+			hDist, hLen := HenselFindMatchL6(src, pos, uSize, 256, minMatch, spL6)
+			if hDist > 0 && hLen >= minMatch {
+				cand := evalCandidate(pos, hDist, maxBlockLen)
+				if cand.score > best.score {
+					best = cand
+				}
+				if cand.score < 12 {
+					checkDelta(hDist, -1)
+				}
+			}
+		} else if level >= 3 {
 			maxDepth := 16
 			if level >= 4 {
 				maxDepth = 64
@@ -1634,15 +1733,22 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	}
 
 	insertHash := func(p int) {
-		if p+4 <= uSize {
-			h := (binary.LittleEndian.Uint32(src[p:p+4]) * 0x1E35A7BD) >> 16
-			h &= hashTableMask
+		if p+minMatch <= uSize {
+			var h uint32
+			if minMatch == 3 {
+				h3 := uint32(src[p]) | (uint32(src[p+1]) << 8) | (uint32(src[p+2]) << 16)
+				h = ((h3 * 0x1E35A7BD) >> 16) & hashTableMask
+			} else {
+				h = ((binary.LittleEndian.Uint32(src[p:p+4]) * 0x1E35A7BD) >> 16) & hashTableMask
+			}
 			pad.head[h*4+3] = pad.head[h*4+2]
 			pad.head[h*4+2] = pad.head[h*4+1]
 			pad.head[h*4+1] = pad.head[h*4]
 			pad.head[h*4] = int32(p + 1)
 
-			if level >= 3 {
+			if level >= 6 && spL6 != nil {
+				HenselInsertL6(spL6, p, src, uSize)
+			} else if level >= 3 {
 				switch windowLog {
 				case WindowLog8M:
 					if sp8M != nil {
@@ -1654,6 +1760,48 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					}
 				default:
 					HenselInsert(&pad.hensel, p, src, uSize)
+				}
+			}
+		}
+	}
+
+	if dictLen > 0 {
+		for p := 0; p+minMatch <= dictLen; p++ {
+			var h uint32
+			var u32 uint32
+			if minMatch == 3 {
+				h3 := uint32(src[p]) | (uint32(src[p+1]) << 8) | (uint32(src[p+2]) << 16)
+				h = ((h3 * 0x1E35A7BD) >> 16) & hashTableMask
+				u32 = h3
+			} else {
+				u32 = binary.LittleEndian.Uint32(src[p : p+4])
+				h = ((u32 * 0x1E35A7BD) >> 16) & hashTableMask
+			}
+
+			pad.head[h*4+3] = pad.head[h*4+2]
+			pad.head[h*4+2] = pad.head[h*4+1]
+			pad.head[h*4+1] = pad.head[h*4]
+			pad.head[h*4] = int32(p + 1)
+
+			if level <= 3 {
+				h2 := ((u32 * 0x7FEB352D) >> 15) & hashTableMask
+				pad.head[h2*4+1] = int32(p + 1)
+			} else {
+				if level >= 6 && spL6 != nil {
+					HenselInsertL6(spL6, p, src, uSize)
+				} else {
+					switch windowLog {
+					case WindowLog8M:
+						if sp8M != nil {
+							HenselInsert8M(sp8M, p, src, uSize)
+						}
+					case WindowLog1M:
+						if sp1M != nil {
+							HenselInsert1M(sp1M, p, src, uSize)
+						}
+					default:
+						HenselInsert(&pad.hensel, p, src, uSize)
+					}
 				}
 			}
 		}
@@ -1848,14 +1996,14 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 				}
 
 				// Backward match extension into uncommitted literals!
-				if best.mType != 5 && best.mType != 6 && best.mType != 7 && best.mType != 8 {
-					for pos > litStart && pos-best.distance > 0 && src[pos-1] == src[pos-best.distance-1] && best.length < 65530 {
+				if best.mType != 5 && best.mType != 6 && best.mType != 7 && best.mType != 8 && best.mType != 9 {
+					for pos > litStart && pos-best.distance > 0 && src[pos-1] == src[pos-best.distance-1] && (level >= 6 || best.length < 65530) {
 						pos--
 						best.length++
-						if best.mType == 1 && (best.length > 7 || best.ringK > 2) {
+						if best.mType == 1 && (best.length > 3+minMatchBase || best.ringK > 2) {
 							best.mType = 3
 						}
-						if best.mType == 2 && best.length > 19 {
+						if best.mType == 2 && best.length > 15+minMatchBase {
 							pos++
 							best.length--
 							break
@@ -1866,13 +2014,13 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 				litLen := pos - litStart
 
 				switch best.mType {
-				case 1: // Fused Repeat (k <= 2, length 4..7)
+				case 1: // Fused Repeat (k <= 2, length minMatchBase..minMatchBase+3)
 					if litLen > 7 {
 						flushLiterals(src[litStart : pos-7])
 						litStart = pos - 7
 						litLen = 7
 					}
-					op := uint8((litLen << 4) | ((best.length - 4) << 2) | best.ringK)
+					op := uint8((litLen << 4) | ((best.length - minMatchBase) << 2) | best.ringK)
 					pad.cmdBuf = append(pad.cmdBuf, op)
 					if litLen > 0 {
 						pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
@@ -1888,14 +2036,14 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						rep0 = best.distance
 					}
 
-				case 2: // Stride (m 1..8, length 4..19)
+				case 2: // Stride (m 1..8, length minMatchBase..minMatchBase+15)
 					if litLen > 15 {
 						flushLiterals(src[litStart : pos-15])
 						litStart = pos - 15
 						litLen = 15
 					}
 					op := OpcodePrefixStride | uint8(best.strideM-1)
-					token := uint8((litLen << 4) | (best.length - 4))
+					token := uint8((litLen << 4) | (best.length - minMatchBase))
 					pad.cmdBuf = append(pad.cmdBuf, op, token)
 					if litLen > 0 {
 						pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
@@ -1904,13 +2052,13 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					rep1 = rep0
 					rep0 = best.distance
 
-				case 3: // Long Repeat (k 0..2, length 4..N) with Fused Literals
+				case 3: // Long Repeat (k 0..2, length minMatchBase..N) with Fused Literals
 					if litLen > 15 {
 						flushLiterals(src[litStart : pos-15])
 						litStart = pos - 15
 						litLen = 15
 					}
-					baseLen := best.length - 4
+					baseLen := best.length - minMatchBase
 					if baseLen > 14 {
 						baseLen = 15
 					}
@@ -1919,7 +2067,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					pad.cmdBuf = append(pad.cmdBuf, op, token)
 					if baseLen == 15 {
 						var varBuf [8]byte
-						n := binary.PutUvarint(varBuf[:], uint64(best.length-19))
+						n := binary.PutUvarint(varBuf[:], uint64(best.length-(15+minMatchBase)))
 						pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
 					}
 					if litLen > 0 {
@@ -1936,13 +2084,13 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						rep0 = best.distance
 					}
 
-				case 4: // Fused Extended Match (length 4..N, explicit offset)
+				case 4: // Fused Extended Match (length minMatchBase..N, explicit offset)
 					if litLen > 3 {
 						flushLiterals(src[litStart : pos-3])
 						litStart = pos - 3
 						litLen = 3
 					}
-					baseLen := best.length - 4
+					baseLen := best.length - minMatchBase
 					if baseLen > 14 {
 						baseLen = 15
 					}
@@ -1950,7 +2098,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					pad.cmdBuf = append(pad.cmdBuf, op)
 					if baseLen == 15 {
 						var varBuf [8]byte
-						n := binary.PutUvarint(varBuf[:], uint64(best.length-19))
+						n := binary.PutUvarint(varBuf[:], uint64(best.length-(15+minMatchBase)))
 						pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
 					}
 					if litLen > 0 {
@@ -1967,11 +2115,11 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					}
 					flags |= FlagDeltaMask
 					pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixDeltaExpl)
-					baseLen := best.length - 4
+					baseLen := best.length - minMatchBase
 					if baseLen >= 255 {
 						pad.cmdBuf = append(pad.cmdBuf, 255)
 						var varBuf [8]byte
-						n := binary.PutUvarint(varBuf[:], uint64(best.length-259))
+						n := binary.PutUvarint(varBuf[:], uint64(best.length-(255+minMatchBase)))
 						pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
 					} else {
 						pad.cmdBuf = append(pad.cmdBuf, uint8(baseLen))
@@ -1999,11 +2147,11 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					flags |= FlagDeltaMask
 					op := OpcodePrefixDeltaRing | uint8(best.ringK)
 					pad.cmdBuf = append(pad.cmdBuf, op)
-					baseLen := best.length - 4
+					baseLen := best.length - minMatchBase
 					if baseLen >= 255 {
 						pad.cmdBuf = append(pad.cmdBuf, 255)
 						var varBuf [8]byte
-						n := binary.PutUvarint(varBuf[:], uint64(best.length-259))
+						n := binary.PutUvarint(varBuf[:], uint64(best.length-(255+minMatchBase)))
 						pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
 					} else {
 						pad.cmdBuf = append(pad.cmdBuf, uint8(baseLen))
@@ -2042,10 +2190,37 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						flushLiterals(src[litStart:pos])
 					}
 					pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixDictToken, uint8(best.dictTok))
+
+				case 9: // OpcodePrefixRawDict (0xE9) - Direct raw dictionary match
+					if litLen > 15 {
+						flushLiterals(src[litStart : pos-15])
+						litStart = pos - 15
+						litLen = 15
+					}
+					baseLen := best.length - minMatchBase
+					if baseLen > 14 {
+						baseLen = 15
+					}
+					op := OpcodePrefixRawDict
+					token := uint8((litLen << 4) | baseLen)
+					pad.cmdBuf = append(pad.cmdBuf, op, token)
+					if baseLen == 15 {
+						var varBuf [8]byte
+						n := binary.PutUvarint(varBuf[:], uint64(best.length-(15+minMatchBase)))
+						pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
+					}
+					if litLen > 0 {
+						pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
+					}
+					writeOffset(best.dictTok)
 				}
 
 				insertHash(pos)
-				if best.length > 2 && pos+best.length-1+4 <= uSize {
+				if level >= 5 && best.length <= 16 {
+					for p := pos + 1; p < pos+best.length; p++ {
+						insertHash(p)
+					}
+				} else if best.length > 2 && pos+best.length-1+4 <= uSize {
 					insertHash(pos + best.length - 1)
 				}
 				pos += best.length
@@ -2056,9 +2231,13 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 
 			insertHash(pos)
 			misses++
-			step := min(1+(misses>>6), 32)
+			step := 1
 			if level <= 2 {
 				step = min(1+(misses>>4), 32)
+			} else if level <= 3 {
+				step = min(1+(misses>>6), 16)
+			} else if level == 4 {
+				step = min(1+(misses>>7), 4)
 			}
 			pos += step
 		}
@@ -2069,7 +2248,10 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	}
 
-	if uSize >= 131072 {
+	useFast := level <= 3 && opts.MinMatch != 3
+	if dictLen > 0 {
+		generic.Ternary[func(int, int)](useFast, compressBlockFast, compressBlockGreedy)(dictLen, origUSize)
+	} else if uSize >= 131072 {
 		pad.dedup.Reset()
 		var dpPad *dpScratchpad
 		if level >= 4 && level < ModeArchival && customDict == nil && dictID == 0 {
@@ -2131,7 +2313,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 				bStart += bSize
 			}
 		} else {
-			generic.Ternary[func(int, int)](level <= 3, compressBlockFast, compressBlockGreedy)(0, uSize)
+			generic.Ternary[func(int, int)](useFast, compressBlockFast, compressBlockGreedy)(0, uSize)
 		}
 	}
 

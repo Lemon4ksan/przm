@@ -492,3 +492,54 @@ func workerLoop%d(in <-chan Task, out chan<- Result) error {
 		}
 	}
 }
+
+func TestHensel_L6_MultiTierMatch(t *testing.T) {
+	sp := przm.PoolHenselL6.Get()
+	defer przm.PoolHenselL6.Put(sp)
+	sp.Reset()
+
+	data := make([]byte, 128*1024)
+	for i := range data {
+		data[i] = byte((i * 17) % 251)
+	}
+
+	// 1. Insert distant repetition (macro match: 2000 bytes)
+	copy(data[0:2000], []byte("SPECIAL_LONG_DISTANT_REPETITIVE_MACRO_PAYLOAD_FOR_HENSEL_L6_"))
+	for i := 60; i < 2000; i++ {
+		data[i] = byte(i % 127)
+	}
+	copy(data[50000:52000], data[0:2000])
+
+	// 2. Short 3-byte match where 4th byte differs (outside macro range)
+	data[2100] = 'X'
+	data[2101] = 'Y'
+	data[2102] = 'Z'
+	data[2103] = '1'
+
+	data[2200] = 'X'
+	data[2201] = 'Y'
+	data[2202] = 'Z'
+	data[2203] = '2'
+
+	// Index 0..2150
+	for p := 0; p < 2150; p++ {
+		przm.HenselInsertL6(sp, p, data, len(data))
+	}
+
+	// Match at 2200 with minLen=3
+	dist3, len3 := przm.HenselFindMatchL6(data, 2200, len(data), 256, 3, sp)
+	if len3 < 3 || dist3 != (2200-2100) {
+		t.Fatalf("expected 3-byte match with dist 100, got dist=%d, len=%d", dist3, len3)
+	}
+
+	// Index up to 50000
+	for p := 2150; p < 50000; p++ {
+		przm.HenselInsertL6(sp, p, data, len(data))
+	}
+
+	// Macro match at 50000
+	distMacro, lenMacro := przm.HenselFindMatchL6(data, 50000, len(data), 256, 4, sp)
+	if lenMacro < 2000 || distMacro != 50000 {
+		t.Fatalf("expected macro match of >= 2000 bytes at dist 50000, got dist=%d, len=%d", distMacro, lenMacro)
+	}
+}

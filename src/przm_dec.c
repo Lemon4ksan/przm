@@ -297,88 +297,13 @@ int przm_heisenberg_unfoliate_inplace(uint8_t* dst, size_t len, uint8_t stride) 
 }
 
 /* ============================================================================
- * 4. Built-in Schema Dictionaries (DictID 1: JSON, DictID 2: Code)
+ * 4. Schema Dictionaries (Explicit External Dictionaries)
  * ============================================================================ */
-
-static const char* const g_dict_json_tokens[64] = {
-    /* 0..7: Top 8 Direct 1-byte Opcode Tokens (0xD8 .. 0xDF) */
-    ",\"status\":",
-    ",\"level\":\"INFO\"",
-    ",\"method\":\"",
-    ",\"uri\":\"",
-    ",\"duration_ms\":",
-    ",\"bytes_sent\":",
-    ",\"client_ip\":\"",
-    "{\"ts\":",
-
-    /* 8..63: Extended 2-byte Opcode Tokens (0xF2 <tokenID>) */
-    ",\"status\":200",
-    ",\"status\":201",
-    ",\"status\":204",
-    ",\"status\":400",
-    ",\"status\":401",
-    ",\"status\":404",
-    ",\"status\":500",
-    ",\"method\":\"GET\"",
-    ",\"method\":\"POST\"",
-    ",\"method\":\"PUT\"",
-    ",\"method\":\"DELETE\"",
-    ",\"client_ip\":\"192.168.1.",
-    ",\"uri\":\"/api/v1/",
-    "\"/api/v1/auth/login\"",
-    "\"/api/v1/users/profile\"",
-    "\"/api/v1/inventory/items\"",
-    "\"/api/v1/billing/checkout\"",
-    "\"/healthz\"",
-    "\"/metrics\"",
-    ",\"trace_id\":\"e4d8",
-    ",\"trace_id\":\"",
-    "{\"id\":",
-    ",\"id\":",
-    ",\"user_id\":",
-    ",\"name\":\"",
-    ",\"type\":\"",
-    ",\"message\":\"",
-    ",\"error\":\"",
-    ",\"timestamp\":",
-    ",\"created_at\":\"",
-    ",\"updated_at\":\"",
-    ",\"description\":\"",
-    ",\"action\":\"",
-    ",\"event\":\"",
-    "{\"event\":\"",
-    "{\"data\":",
-    ",\"data\":",
-    ",\"count\":",
-    ",\"value\":",
-    ",\"code\":",
-    ",\"metric\":\"",
-    ",\"sensor_id\":\"",
-    ",\"resp\":200",
-    ",\"status\":\"ok\"",
-    "true,",
-    "false,",
-    "null,",
-    ",\"ts\":",
-    ",\"level\":\"WARN\"",
-    ",\"level\":\"ERROR\"",
-    ",\"level\":\"DEBUG\"",
-    ",\"action\":\"scroll\"",
-    ",\"action\":\"click\"",
-    ",\"sensor_id\":\"temp-",
-    ",\"metric\":\"temperature\""
-};
 
 PRZM_INLINE const char* get_schema_token(uint32_t dict_id, uint8_t token_idx,
                                          const przm_dictionary_t* ext_dict,
                                          size_t* out_len) {
-    if (dict_id == PRZM_DICT_ID_JSON) {
-        if (token_idx < (uint8_t)(sizeof(g_dict_json_tokens) / sizeof(g_dict_json_tokens[0]))) {
-            const char* str = g_dict_json_tokens[token_idx];
-            *out_len = strlen(str);
-            return str;
-        }
-    } else if (ext_dict != NULL && ext_dict->dict_id == dict_id) {
+    if (ext_dict != NULL && ext_dict->dict_id == dict_id) {
         if (token_idx < ext_dict->num_tokens) {
             *out_len = ext_dict->tokens[token_idx].len;
             return ext_dict->tokens[token_idx].str;

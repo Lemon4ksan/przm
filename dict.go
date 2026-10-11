@@ -13,86 +13,11 @@ import (
 	"sync"
 )
 
-var jsonTokensRaw = []string{
-	// Top 8 Direct 1-byte Opcode Tokens (0xD8 .. 0xDF)
-	`,"status":`,
-	`,"level":"INFO"`,
-	`,"method":"`,
-	`,"uri":"`,
-	`,"duration_ms":`,
-	`,"bytes_sent":`,
-	`,"client_ip":"`,
-	`{"ts":`,
-
-	// Extended 2-byte Opcode Tokens (0xF2 <tokenID>)
-	`,"status":200`,
-	`,"status":201`,
-	`,"status":204`,
-	`,"status":400`,
-	`,"status":401`,
-	`,"status":404`,
-	`,"status":500`,
-	`,"method":"GET"`,
-	`,"method":"POST"`,
-	`,"method":"PUT"`,
-	`,"method":"DELETE"`,
-	`,"client_ip":"192.168.1.`,
-	`,"uri":"/api/v1/`,
-	`"/api/v1/auth/login"`,
-	`"/api/v1/users/profile"`,
-	`"/api/v1/inventory/items"`,
-	`"/api/v1/billing/checkout"`,
-	`"/healthz"`,
-	`"/metrics"`,
-	`,"trace_id":"e4d8`,
-	`,"trace_id":"`,
-	`{"id":`,
-	`,"id":`,
-	`,"user_id":`,
-	`,"name":"`,
-	`,"type":"`,
-	`,"message":"`,
-	`,"error":"`,
-	`,"timestamp":`,
-	`,"created_at":"`,
-	`,"updated_at":"`,
-	`,"description":"`,
-	`,"action":"`,
-	`,"event":"`,
-	`{"event":"`,
-	`{"data":`,
-	`,"data":`,
-	`,"count":`,
-	`,"value":`,
-	`,"code":`,
-	`,"metric":"`,
-	`,"sensor_id":"`,
-	`,"resp":200`,
-	`,"status":"ok"`,
-	`true,`,
-	`false,`,
-	`null,`,
-	`,"ts":`,
-	`,"level":"WARN"`,
-	`,"level":"ERROR"`,
-	`,"level":"DEBUG"`,
-	`,"action":"scroll"`,
-	`,"action":"click"`,
-	`,"sensor_id":"temp-`,
-	`,"metric":"temperature"`,
-}
-
 type dictMatcher struct {
 	id     uint32
 	tokens [][]byte
 	head   [65536]int16
 	chain  [256]int16
-}
-
-var jsonMatcher dictMatcher
-
-func init() {
-	initMatcher(&jsonMatcher, DictIDJSON, jsonTokensRaw)
 }
 
 func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
@@ -116,15 +41,6 @@ func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
 	}
 }
 
-func getBuiltinDictBytes(dictID uint32) [][]byte {
-	switch dictID {
-	case DictIDJSON:
-		return jsonMatcher.tokens
-	default:
-		return nil
-	}
-}
-
 func (m *dictMatcher) match(src []byte, pos int) (bestIdx int, bestLen int) {
 	uSize := len(src)
 	if pos+4 > uSize {
@@ -145,31 +61,6 @@ func (m *dictMatcher) match(src []byte, pos int) (bestIdx int, bestLen int) {
 		}
 	}
 	return bestIdx, bestLen
-}
-
-// detectDictionary inspects initial block payload to determine if a well-known schema dictionary
-// can compress repetitive grammar constructs with 0-overhead token opcodes.
-func detectDictionary(src []byte) uint32 {
-	sampleLen := min(len(src), 2048)
-	if sampleLen < 64 {
-		return DictIDNone
-	}
-	sample := src[:sampleLen]
-
-	// JSON detection: count common delimiter pairs
-	jsonHits := 0
-	for i := 0; i+1 < sampleLen; i++ {
-		b0 := sample[i]
-		b1 := sample[i+1]
-		if (b0 == '"' && b1 == ':') || (b0 == '"' && b1 == ',') || (b0 == '{' && b1 == '"') {
-			jsonHits++
-		}
-	}
-	if jsonHits >= 8 {
-		return DictIDJSON
-	}
-
-	return DictIDNone
 }
 
 // PRZMDMagic defines the 32-bit container magic for external dictionaries ('PRZD').
@@ -390,3 +281,222 @@ func CompressWithDict(src []byte, level int, dict *Dictionary) ([]byte, error) {
 func DecompressWithDict(src []byte, dict *Dictionary) ([]byte, error) {
 	return decompressWithDictTo(src, nil, dict)
 }
+
+var (
+	rawDictMu       sync.RWMutex
+	rawDictRegistry = make(map[uint32][]byte)
+)
+
+// RegisterRawDictionary registers a raw prefix dictionary buffer under a 32-bit dictID.
+func RegisterRawDictionary(id uint32, data []byte) {
+	rawDictMu.Lock()
+	defer rawDictMu.Unlock()
+	rawDictRegistry[id] = data
+}
+
+// UnregisterRawDictionary removes a raw dictionary from the registry.
+func UnregisterRawDictionary(id uint32) {
+	rawDictMu.Lock()
+	defer rawDictMu.Unlock()
+	delete(rawDictRegistry, id)
+}
+
+// GetRawDictionary retrieves a registered raw dictionary buffer by id.
+func GetRawDictionary(id uint32) []byte {
+	rawDictMu.RLock()
+	defer rawDictMu.RUnlock()
+	return rawDictRegistry[id]
+}
+
+// DictIDBrotliWeb defines the 32-bit PRZM dictionary ID for the RFC 7932 Brotli-derived external web dictionary.
+const DictIDBrotliWeb uint32 = 0x4252544C // "BRTL"
+
+var webTokensRaw = []string{
+	// 0..7: Top-8 Direct 1-byte Opcode Tokens (0xD8 .. 0xDF)
+	"</div>",
+	"<div class=\"",
+	"</span>",
+	"<span class=\"",
+	"</a>",
+	"<li class=\"",
+	"</li>",
+	"class=\"",
+
+	// 8..: Extended 2-byte Opcode Tokens (0xF2 <tokenID>)
+	// HTML5 Structural Blocks
+	"<!DOCTYPE html>",
+	"<html lang=\"en\"",
+	"<head><meta charset=\"utf-8\">",
+	"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">",
+	"<title>",
+	"</title>",
+	"<link rel=\"stylesheet\" href=\"",
+	"<script src=\"",
+	" defer></script>",
+	"</script>",
+	"</head>",
+	"<body class=\"",
+	"</div></body></html>",
+	"<header class=\"",
+	"</header>",
+	"<main class=\"",
+	"<main>",
+	"</main>",
+	"<section class=\"",
+	"<section>",
+	"</section>",
+	"<article class=\"",
+	"</article>",
+	"<nav class=\"",
+	"<nav>",
+	"</nav>",
+	"<ul class=\"",
+	"<ul>",
+	"</ul>",
+	"<li>",
+	"<a href=\"",
+	"<button class=\"",
+	"<button type=\"",
+	"</button>",
+	"<input type=\"",
+	"<footer>",
+	"</footer>",
+	"<svg class=\"",
+	"\" fill=\"currentColor\" viewBox=\"0 0 24 24\">",
+	"<path d=\"",
+	"\"/></svg>",
+	"<div class=\"min-h-full flex flex-col\">",
+	"<div class=\"max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 ",
+	"h-16 flex items-center justify-between\">",
+	"<div class=\"flex items-center space-x-",
+	"flex items-center space-x-2 ",
+	"<nav class=\"hidden md:flex space-x-4\">",
+	"text-slate-600 hover:text-indigo-600 px-3 py-2 text-sm font-medium\">",
+	"inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700\">",
+	"<div class=\"grid grid-cols-1 md:grid-cols-3 gap-6 mb-8\">",
+	"<div class=\"bg-white overflow-hidden shadow rounded-lg p-5\">",
+	"<dt class=\"text-sm font-medium text-slate-500 truncate\">",
+	"<dd class=\"mt-1 text-3xl font-semibold text-slate-900\">",
+	"</dd></div>",
+	"Total Ingress Throughput",
+	"Mean Edge Latency (p99)",
+	"Active Global Replicas",
+	"CloudScale Infrastructure Control Plane",
+	"px-4 sm:px-6 lg:px-8 py-8\">",
+	"sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200\">",
+	"h-full font-sans antialiased text-slate-800\">",
+	"class=\"h-full bg-slate-50\"><head>",
+	"<a href=\"/overview\"",
+	"<a href=\"/clusters\"",
+	"<a href=\"/edge\"",
+	"<a href=\"/metrics\"",
+	"Kubernetes",
+	"Edge Nodes",
+	"Observability",
+	"Deploy Service",
+
+	// JavaScript & React Runtime Blocks
+	"\"use strict\";",
+	"!function(e,t){",
+	"\"object\"==typeof exports&&\"object\"==typeof module?module.exports=t():",
+	"\"function\"==typeof define&&define.amd?define([],t):",
+	"\"object\"==typeof exports?exports.App=t():e.App=t()}(self,(function(){",
+	"return function(e){var t={};function n(r){",
+	"if(t[r])return t[r].exports;",
+	"var o=t[r]={i:r,l:!1,exports:{}};",
+	"return e[r].call(o.exports,o,o.exports,n),o.l=!0,o.exports}",
+	"return n.m=e,n.c=t,n.d=function(e,t,r){",
+	"n.o(e,t)||Object.defineProperty(e,t,{enumerable:!0,get:r})},",
+	"n.r=function(e){",
+	"\"undefined\"!=typeof Symbol&&Symbol.toStringTag&&Object.defineProperty(e,Symbol.toStringTag,{value:\"Module\"}),",
+	"Object.defineProperty(e,\"__esModule\",{value:!0})},",
+	"n.t=function(e,t){",
+	"if(1&t&&(e=n(e)),8&t)return e;",
+	"if(4&t&&\"object\"==typeof e&&e&&e.__esModule)return e;",
+	"var r=Object.create(null);",
+	"if(n.r(r),Object.defineProperty(r,\"default\",{enumerable:!0,value:e}),2&t&&\"string\"!=typeof e)",
+	"for(var o in e)n.d(r,o,function(t){return e[t]}.bind(null,o));return r},",
+	"n.n=function(e){var t=e&&e.__esModule?function(){return e.default}:function(){return e};return n.d(t,\"a\",t),t},",
+	"n.o=function(e,t){return Object.prototype.hasOwnProperty.call(e,t)},n.p=\"\",n(n.s=102)}([",
+	"function(e,t,n){\"use strict\";",
+	"var r=n(1);Object.defineProperty(t,\"__esModule\",{value:!0}),",
+	"t.StateController=function(e,t){return{dispatch:function(n){",
+	"e.setState((function(e){return Object.assign({},e,n)}))},",
+	"subscribe:function(e){return t.listeners.push(e),function(){",
+	"t.listeners=t.listeners.filter((function(t){return t!==e}))}}}}]);",
+	"import React, { useState, useEffect } from 'react';",
+	"export default function ",
+	"export const ",
+	"const [state, setState] = useState(",
+	"useEffect(() => {",
+	"return () => {",
+	"onClick={() => ",
+	"onChange={(e) => ",
+	"className=\"",
+	"<React.Fragment>",
+	"</React.Fragment>",
+	"console.log(",
+	"JSON.stringify(",
+	"JSON.parse(",
+
+	// CSS & Tailwind
+	"display: flex;",
+	"display: grid;",
+	"display: none;",
+	"display: block;",
+	"flex-direction: column;",
+	"align-items: center;",
+	"justify-content: center;",
+	"justify-content: space-between;",
+	"position: relative;",
+	"position: absolute;",
+	"position: fixed;",
+	"margin: 0;",
+	"padding: 0;",
+	"box-sizing: border-box;",
+	"font-family: ",
+	"background-color: ",
+	"color: ",
+	"border: 1px solid ",
+	"border-radius: ",
+	"font-size: ",
+	"font-weight: ",
+	"cursor: pointer;",
+	"width: 100%;",
+	"height: 100%;",
+	"@media (min-width: 640px)",
+	"@media (min-width: 768px)",
+	"@media (min-width: 1024px)",
+	"@media (min-width: 1280px)",
+
+	// Technical Markdown & API Telemetry
+	"## Architecture Overview",
+	"## Table of Contents",
+	"### Specification",
+	"| Parameter | Type | Description |",
+	"| :--- | :--- | :--- |",
+	"{\"status\":\"ok\",",
+	"\"server\":\"edge-router-04\",",
+	"\"timestamp\":\"",
+	"\"roles\":[\"admin\",\"billing_manager\"]",
+	"\"organization\":\"Acme Systems International LLC\"",
+	"{\"id\":",
+	",\"name\":\"",
+	",\"type\":\"",
+	",\"status\":200",
+	",\"status\":\"success\"",
+	",\"error\":null",
+	",\"data\":[",
+	",\"message\":\"",
+	"https://schema.org/",
+	"application/json",
+	"text/html; charset=utf-8",
+}
+
+func init() {
+	if webDict, err := NewDictionary(DictIDBrotliWeb, webTokensRaw); err == nil {
+		_ = RegisterDictionary(webDict)
+	}
+}
+
+
