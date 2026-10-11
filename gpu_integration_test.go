@@ -201,3 +201,78 @@ func TestGPUMultiChunkIntegration(t *testing.T) {
 		t.Fatalf("MultiChunk lossless roundtrip mismatch: len got %d, want %d", len(decomp), len(data))
 	}
 }
+
+func TestGPULargePayloadCompressionRoundtrip(t *testing.T) {
+	if !gpu.IsAvailable() {
+		t.Skip("NVIDIA Ampere+ CUDA GPU not available on this machine")
+	}
+
+	sizes := []int{4 * 1024 * 1024, 8 * 1024 * 1024, 16 * 1024 * 1024, 32 * 1024 * 1024, 64 * 1024 * 1024}
+
+	for _, size := range sizes {
+		name := fmt.Sprintf("%dMB", size/(1024*1024))
+		t.Run(name, func(t *testing.T) {
+			data := make([]byte, size)
+			for i := range data {
+				data[i] = byte((i*37 + (i/2048)*19) & 0xFF)
+			}
+			pattern := []byte("PRZM_GPU_RADIX_STRIKE_LONG_DISTANCE_COMPRESSION_VALIDATION_STRING_1234567890!")
+			for off := 0; off+len(pattern) <= size; off += 128 * 1024 {
+				copy(data[off:], pattern)
+			}
+
+			opts := przm.CompressOptions{
+				GPUAcceleration: true,
+			}
+
+			comp, err := przm.CompressWithOptions(data, opts)
+			if err != nil {
+				t.Fatalf("[%s] CompressWithOptions failed: %v", name, err)
+			}
+
+			ratio := float64(len(data)) / float64(len(comp))
+			t.Logf("[%s] Compressed from %d bytes to %d bytes (Ratio: %.2fx)", name, len(data), len(comp), ratio)
+
+			decomp, err := przm.Decompress(comp)
+			if err != nil {
+				t.Fatalf("[%s] CPU Decompress failed: %v", name, err)
+			}
+
+			if !bytes.Equal(decomp, data) {
+				t.Fatalf("[%s] Lossless roundtrip mismatch: got %d bytes, want %d bytes", name, len(decomp), len(data))
+			}
+			t.Logf("[%s] Lossless roundtrip verified bit-exact on CPU decompressor!", name)
+		})
+	}
+}
+
+func BenchmarkGPUCompression(b *testing.B) {
+	if !gpu.IsAvailable() {
+		b.Skip("NVIDIA Ampere+ CUDA GPU not available")
+	}
+
+	size := 4 * 1024 * 1024
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte((i*37 + (i/2048)*19) & 0xFF)
+	}
+	pattern := []byte("PRZM_GPU_RADIX_STRIKE_BENCHMARK_PAYLOAD_BLOCK_1234567890!")
+	for off := 0; off+len(pattern) <= size; off += 128 * 1024 {
+		copy(data[off:], pattern)
+	}
+
+	opts := przm.CompressOptions{
+		GPUAcceleration: true,
+	}
+
+	b.SetBytes(int64(size))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		comp, err := przm.CompressWithOptions(data, opts)
+		if err != nil {
+			b.Fatalf("CompressWithOptions failed: %v", err)
+		}
+		_ = comp
+	}
+}

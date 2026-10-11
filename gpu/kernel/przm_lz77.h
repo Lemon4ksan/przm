@@ -44,7 +44,13 @@ extern "C" {
  */
 typedef uint32_t przm_match_desc32_t;
 
-static inline przm_match_desc32_t przm_pack_match32(uint16_t length, uint32_t offset) {
+#if defined(__CUDACC__) || defined(__CUDA_ARCH__)
+#define PRZM_HD __host__ __device__
+#else
+#define PRZM_HD
+#endif
+
+static inline PRZM_HD przm_match_desc32_t przm_pack_match32(uint16_t length, uint32_t offset) {
     if (length < PRZM_MIN_MATCH_LEN || offset == 0) {
         return 0; /* Literal */
     }
@@ -53,15 +59,15 @@ static inline przm_match_desc32_t przm_pack_match32(uint16_t length, uint32_t of
     return (l << 20) | o;
 }
 
-static inline uint16_t przm_unpack_length32(przm_match_desc32_t desc) {
+static inline PRZM_HD uint16_t przm_unpack_length32(przm_match_desc32_t desc) {
     return (uint16_t)(desc >> 20);
 }
 
-static inline uint32_t przm_unpack_offset32(przm_match_desc32_t desc) {
+static inline PRZM_HD uint32_t przm_unpack_offset32(przm_match_desc32_t desc) {
     return desc & 0x000FFFFFU;
 }
 
-static inline int przm_is_match32(przm_match_desc32_t desc) {
+static inline PRZM_HD int przm_is_match32(przm_match_desc32_t desc) {
     return (desc >> 20) >= PRZM_MIN_MATCH_LEN;
 }
 
@@ -100,6 +106,12 @@ typedef struct {
     uint64_t total_vram_bytes;
 } przm_gpu_profile_t;
 
+#define PRZM_RADIX_STRIKE_NUM_BUCKETS 2097152U
+#define PRZM_RADIX_STRIKE_STRIDE      8
+
+#define PRZM_COMPACT_BLOCK_SIZE 256
+#define PRZM_COMPACT_NUM_WARPS  (PRZM_COMPACT_BLOCK_SIZE / 32)
+
 /**
  * Host C wrapper entry points.
  */
@@ -108,6 +120,27 @@ int cuda_lz77_match_batch(
     size_t input_len,
     uint32_t* d_matches,
     size_t window_size,
+    void* stream
+);
+
+int cuda_lz77_radix_strike_batch(
+    const uint8_t* d_input,
+    size_t input_len,
+    uint32_t* d_radix_table,
+    uint32_t* d_matches,
+    size_t window_size,
+    void* stream
+);
+
+int cuda_lz77_compact_stream(
+    const uint32_t* d_matches,
+    uint32_t n,
+    uint32_t* d_block_counts,
+    uint32_t* d_block_offsets,
+    uint32_t* d_total_count,
+    uint32_t* d_compact_pos,
+    uint32_t* d_compact_desc,
+    uint32_t num_blocks,
     void* stream
 );
 

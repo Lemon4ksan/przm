@@ -62,8 +62,10 @@ type GPUProfile struct {
 	EgressDMATimeMs           float64
 	EgressDMABandwidthGBps    float64
 	TotalRoundTripMs          float64
+	EndToEndBandwidthGBps     float64
 	PCIeOverheadPercent       float64
 	DeviceName                string
 	SMCount                   int
 	TotalVRAMBytes            uint64
+	PipelinedChunks           int
 }
