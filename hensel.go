@@ -897,6 +897,42 @@ func HenselInsertL6(sp *HenselScratchpadL6, p int, src []byte, uSize int) {
 	}
 }
 
+func evalHenselCandidateScore(d, mLen, minLen int) int {
+	if mLen < minLen {
+		return -1000
+	}
+	var cost int
+	if d < 128 {
+		cost = 2
+	} else if d < 1024 {
+		cost = 4
+		if mLen < minLen+1 {
+			return -1000
+		}
+	} else if d < 16384 {
+		cost = 5
+		if mLen < minLen+2 {
+			return -1000
+		}
+	} else if d < 65536 {
+		cost = 7
+		if mLen < minLen+3 {
+			return -1000
+		}
+	} else if d < 2097152 {
+		cost = 8
+		if mLen < minLen+3 {
+			return -1000
+		}
+	} else {
+		cost = 9
+		if mLen < minLen+4 {
+			return -1000
+		}
+	}
+	return mLen - cost
+}
+
 // HenselFindMatchL6 performs ultrametric multi-tier match search up to maxDepth with Theorem HL-2 pruning.
 //
 //go:nosplit
@@ -913,6 +949,7 @@ func HenselFindMatchL6(
 	}
 	srcPtr := unsafe.Pointer(unsafe.SliceData(src))
 	maxSearchLen := uSize - pos
+	bestScore := -1000
 
 	// 1. Tier 3: Macro Anchor check (for big structural blocks >= 16 bytes)
 	if pos+8 <= uSize {
@@ -924,8 +961,12 @@ func HenselFindMatchL6(
 			if d < WindowSize8M && d > 0 {
 				mLen := HenselLCPPos(src, pos, candMacro, maxSearchLen)
 				if mLen >= 16 {
-					bestLen = mLen
-					bestDist = d
+					candScore := evalHenselCandidateScore(d, mLen, minLen)
+					if candScore > bestScore || (candScore == bestScore && mLen >= bestLen && d < bestDist) {
+						bestScore = candScore
+						bestLen = mLen
+						bestDist = d
+					}
 				}
 			}
 		}
@@ -965,11 +1006,11 @@ func HenselFindMatchL6(
 				// Theorem HL-2 ultrametric pruning
 				hasDiff := false
 				var maxLift int
-				if has8 && bestLen >= 4 {
+				if has8 && bestScore > -500 {
 					diff := sp.fp32[candSlot] ^ targetFP32
 					if diff != 0 {
 						maxLift = 4 + (bits.TrailingZeros32(diff) >> 3)
-						if maxLift <= bestLen {
+						if maxLift-2 <= bestScore {
 							nextCand := int(sp.prev[candSlot]) - 1
 							if nextCand >= cand || nextCand < 0 {
 								break
@@ -983,17 +1024,17 @@ func HenselFindMatchL6(
 				}
 
 				if *(*uint32)(unsafe.Add(srcPtr, cand)) == w4 {
-					if hasDiff {
-						bestLen = maxLift
+					mLen := maxLift
+					if !hasDiff {
+						mLen = HenselLCPPos(src, pos, cand, maxSearchLen)
+					}
+					candScore := evalHenselCandidateScore(d, mLen, minLen)
+					if candScore > bestScore || (candScore == bestScore && mLen >= bestLen && d < bestDist) {
+						bestScore = candScore
+						bestLen = mLen
 						bestDist = d
-					} else {
-						mLen := HenselLCPPos(src, pos, cand, maxSearchLen)
-						if mLen > bestLen {
-							bestLen = mLen
-							bestDist = d
-							if bestLen >= 1024 {
-								break
-							}
+						if bestLen >= 1024 {
+							break
 						}
 					}
 				}
@@ -1026,7 +1067,9 @@ func HenselFindMatchL6(
 					c2 := *(*byte)(unsafe.Add(srcPtr, cand24+2))
 					if c0 == byte(b0) && c1 == byte(b1) && c2 == byte(b2) {
 						mLen := HenselLCPPos(src, pos, cand24, maxSearchLen)
-						if mLen > bestLen {
+						candScore := evalHenselCandidateScore(d, mLen, minLen)
+						if candScore > bestScore || (candScore == bestScore && mLen >= bestLen && d < bestDist) {
+							bestScore = candScore
 							bestLen = mLen
 							bestDist = d
 							if bestLen >= 32 {
