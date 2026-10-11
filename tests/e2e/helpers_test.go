@@ -156,7 +156,7 @@ func generateOverlappingMatchData(length int) []byte {
 }
 
 // Data generator: dense short 2-byte and 3-byte repetitions.
-func generateShortRepeatData(length int, tokenLen int) []byte {
+func generateShortRepeatData(length, tokenLen int) []byte {
 	buf := make([]byte, length)
 	tokens := [][]byte{
 		[]byte("AB"), []byte("CD"), []byte("EF"), []byte("XY"), // 2-byte
@@ -190,7 +190,7 @@ func generateHexPayload(rawSize int) []byte {
 }
 
 // Data generator: duplicate 64 KiB blocks to exercise cross-block deduplication.
-func generateDuplicate64KBlocks(numBlocks int, corruptDelta int) []byte {
+func generateDuplicate64KBlocks(numBlocks, corruptDelta int) []byte {
 	const blockSize = 65536
 	block := make([]byte, blockSize)
 	for i := range block {

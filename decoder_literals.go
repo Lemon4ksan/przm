@@ -80,7 +80,7 @@ func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 				pad.sheafSBuf = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
 			}
 
-			f0 := pad.sheafSBuf[0 : fLen0]
+			f0 := pad.sheafSBuf[0:fLen0]
 			f1 := pad.sheafSBuf[fLen0 : fLen0+fLen1]
 			f2 := pad.sheafSBuf[fLen0+fLen1 : fLen0+fLen1+fLen2]
 			f3 := pad.sheafSBuf[fLen0+fLen1+fLen2 : origLen]
@@ -91,7 +91,7 @@ func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 					return nil, ErrCorruptedFrame
 				}
 				if _, err := VANSDecode4xTo(f0, src[off:off+encLen0], &pad.vansModels[0]); err != nil {
-					return nil, fmt.Errorf("%w: decoding fiber 0: %v", ErrCorruptedFrame, err)
+					return nil, fmt.Errorf("%w: decoding fiber 0: %w", ErrCorruptedFrame, err)
 				}
 				off += encLen0
 			}
@@ -100,7 +100,7 @@ func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 					return nil, ErrCorruptedFrame
 				}
 				if _, err := VANSDecode4xTo(f1, src[off:off+encLen1], &pad.vansModels[1]); err != nil {
-					return nil, fmt.Errorf("%w: decoding fiber 1: %v", ErrCorruptedFrame, err)
+					return nil, fmt.Errorf("%w: decoding fiber 1: %w", ErrCorruptedFrame, err)
 				}
 				off += encLen1
 			}
@@ -109,7 +109,7 @@ func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 					return nil, ErrCorruptedFrame
 				}
 				if _, err := VANSDecode4xTo(f2, src[off:off+encLen2], &pad.vansModels[2]); err != nil {
-					return nil, fmt.Errorf("%w: decoding fiber 2: %v", ErrCorruptedFrame, err)
+					return nil, fmt.Errorf("%w: decoding fiber 2: %w", ErrCorruptedFrame, err)
 				}
 				off += encLen2
 			}
@@ -118,9 +118,8 @@ func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 					return nil, ErrCorruptedFrame
 				}
 				if _, err := VANSDecode4xTo(f3, src[off:off+encLen3], &pad.vansModels[3]); err != nil {
-					return nil, fmt.Errorf("%w: decoding fiber 3: %v", ErrCorruptedFrame, err)
+					return nil, fmt.Errorf("%w: decoding fiber 3: %w", ErrCorruptedFrame, err)
 				}
-				off += encLen3
 			}
 
 			dst := pad.litBuf[:origLen]
@@ -169,18 +168,28 @@ func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 
 			decS, err := VANSDecode4xTo(pad.sheafSBuf[:sLen], encS, &pad.vansModelS)
 			if err != nil {
-				return nil, fmt.Errorf("%w: decoding sheaf syntax stream: %v", ErrCorruptedFrame, err)
+				return nil, fmt.Errorf("%w: decoding sheaf syntax stream: %w", ErrCorruptedFrame, err)
 			}
 			if len(decS) != sLen {
-				return nil, fmt.Errorf("%w: decoded sheaf syntax stream length %d != sLen %d", ErrCorruptedFrame, len(decS), sLen)
+				return nil, fmt.Errorf(
+					"%w: decoded sheaf syntax stream length %d != sLen %d",
+					ErrCorruptedFrame,
+					len(decS),
+					sLen,
+				)
 			}
 
 			decC, err := VANSDecode4xTo(pad.sheafCBuf[:cLen], encC, &pad.vansModelC)
 			if err != nil {
-				return nil, fmt.Errorf("%w: decoding sheaf content stream: %v", ErrCorruptedFrame, err)
+				return nil, fmt.Errorf("%w: decoding sheaf content stream: %w", ErrCorruptedFrame, err)
 			}
 			if len(decC) != cLen {
-				return nil, fmt.Errorf("%w: decoded sheaf content stream length %d != cLen %d", ErrCorruptedFrame, len(decC), cLen)
+				return nil, fmt.Errorf(
+					"%w: decoded sheaf content stream length %d != cLen %d",
+					ErrCorruptedFrame,
+					len(decC),
+					cLen,
+				)
 			}
 
 			SheafInterleave(pad.litBuf[:origLen], pad.sheafSBuf[:sLen], pad.sheafCBuf[:cLen], mask, origLen)
@@ -257,9 +266,9 @@ func unpackNibblePlanes(src []byte, bPtr *[]byte) ([]byte, error) {
 		p6 := *(*byte)(unsafe.Add(lowPlanePtr, j+6))
 		p7 := *(*byte)(unsafe.Add(lowPlanePtr, j+7))
 
-		d0 := (uint64(p0 >> 4)) | (uint64(p0&0x0F) << 8) | (uint64(p1>>4) << 16) | (uint64(p1&0x0F) << 24) |
+		d0 := uint64(p0>>4) | (uint64(p0&0x0F) << 8) | (uint64(p1>>4) << 16) | (uint64(p1&0x0F) << 24) |
 			(uint64(p2>>4) << 32) | (uint64(p2&0x0F) << 40) | (uint64(p3>>4) << 48) | (uint64(p3&0x0F) << 56)
-		d1 := (uint64(p4 >> 4)) | (uint64(p4&0x0F) << 8) | (uint64(p5>>4) << 16) | (uint64(p5&0x0F) << 24) |
+		d1 := uint64(p4>>4) | (uint64(p4&0x0F) << 8) | (uint64(p5>>4) << 16) | (uint64(p5&0x0F) << 24) |
 			(uint64(p6>>4) << 32) | (uint64(p6&0x0F) << 40) | (uint64(p7>>4) << 48) | (uint64(p7&0x0F) << 56)
 
 		*(*uint64)(unsafe.Add(dstPtr, 2*j)) |= d0

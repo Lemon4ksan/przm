@@ -25,7 +25,9 @@ func TestGPUCompressionRoundtrip(t *testing.T) {
 		"structured_json": []byte(`{"status":"success","code":200,"records":[` +
 			strings.Repeat(`{"event":"heartbeat","stream":"archival","seq":9999,"active":true},`, 150) +
 			`{"id":1,"name":"alpha","val":100}]}`),
-		"source_code": []byte(strings.Repeat("func BenchmarkKernel(b *testing.B) { for i := 0; i < b.N; i++ { run(); } }\n", 100)),
+		"source_code": []byte(
+			strings.Repeat("func BenchmarkKernel(b *testing.B) { for i := 0; i < b.N; i++ { run(); } }\n", 100),
+		),
 		"mixed_binary": func() []byte {
 			b := make([]byte, 64*1024)
 			for i := range b {

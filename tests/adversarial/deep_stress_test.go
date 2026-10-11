@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/lemon4ksan/foundation/bufkit"
+
 	"github.com/lemon4ksan/przm"
 	"github.com/lemon4ksan/przm/bench"
 )
@@ -92,7 +93,12 @@ func TestAdversarial_TropicalAssociativity_Exhaustive(t *testing.T) {
 		prefixes := make([]przm.TropicalMatrix4, n)
 		przm.BlellochPrefixScan(mats, prefixes, tree)
 		if prefixes[n-1] != expected {
-			t.Fatalf("Blelloch prefix scan last element mismatch for N=%d:\nexpected=%+v\ngot=%+v", n, expected, prefixes[n-1])
+			t.Fatalf(
+				"Blelloch prefix scan last element mismatch for N=%d:\nexpected=%+v\ngot=%+v",
+				n,
+				expected,
+				prefixes[n-1],
+			)
 		}
 	}
 }
@@ -203,7 +209,36 @@ func TestAdversarial_PWS_EdgeCases(t *testing.T) {
 
 // 4. TestAdversarial_SheafTrellis_ExtremeInputs tests Sheaf Trellis with long runs, primes, and alternating bytes.
 func TestAdversarial_SheafTrellis_ExtremeInputs(t *testing.T) {
-	sizes := []int{1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 97, 101, 127, 128, 129, 255, 256, 257, 1009, 4096, 65536, 65537}
+	sizes := []int{
+		1,
+		2,
+		3,
+		4,
+		5,
+		7,
+		8,
+		15,
+		16,
+		17,
+		31,
+		32,
+		33,
+		63,
+		64,
+		65,
+		97,
+		101,
+		127,
+		128,
+		129,
+		255,
+		256,
+		257,
+		1009,
+		4096,
+		65536,
+		65537,
+	}
 
 	for _, sz := range sizes {
 		// A. Alternating 3-byte pattern
@@ -250,7 +285,12 @@ func TestAdversarial_SheafTrellis_ExtremeInputs(t *testing.T) {
 
 // 5. TestAdversarial_PureCDecompressor_Stress verifies 100% losslessness across all levels and stress inputs.
 func TestAdversarial_PureCDecompressor_Stress(t *testing.T) {
-	cCandidates := []string{"test_przm_dec.exe", "../../test_przm_dec.exe", "tests/test_przm_dec.exe", "c/test_przm_dec.exe"}
+	cCandidates := []string{
+		"test_przm_dec.exe",
+		"../../test_przm_dec.exe",
+		"tests/test_przm_dec.exe",
+		"c/test_przm_dec.exe",
+	}
 	var cBinPath string
 	for _, cand := range cCandidates {
 		absPath, err := filepath.Abs(cand)
@@ -352,7 +392,7 @@ func TestAdversarial_PureCDecompressor_Stress(t *testing.T) {
 				inPrzm := filepath.Join(tmpDir, testName+".przm")
 				outBin := filepath.Join(tmpDir, testName+".out")
 
-				if err := os.WriteFile(inPrzm, comp, 0644); err != nil {
+				if err := os.WriteFile(inPrzm, comp, 0o644); err != nil {
 					t.Fatalf("WriteFile failed: %v", err)
 				}
 
@@ -360,10 +400,20 @@ func TestAdversarial_PureCDecompressor_Stress(t *testing.T) {
 				output, err := cmd.CombinedOutput()
 				if err != nil {
 					if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 2 {
-						t.Skipf("Pure C decompressor does not support Go-only experimental transform %q", comp[:min(4, len(comp))])
+						t.Skipf(
+							"Pure C decompressor does not support Go-only experimental transform %q",
+							comp[:min(4, len(comp))],
+						)
 						return
 					}
-					t.Fatalf("Pure C decompressor failed (exit status %v):\nOutput:\n%s\ncomp len=%d, header=%q / %x", err, string(output), len(comp), comp[:min(16, len(comp))], comp[:min(16, len(comp))])
+					t.Fatalf(
+						"Pure C decompressor failed (exit status %v):\nOutput:\n%s\ncomp len=%d, header=%q / %x",
+						err,
+						string(output),
+						len(comp),
+						comp[:min(16, len(comp))],
+						comp[:min(16, len(comp))],
+					)
 				}
 
 				decC, err := os.ReadFile(outBin)
@@ -383,7 +433,7 @@ func TestAdversarial_PureCDecompressor_Stress(t *testing.T) {
 	}
 }
 
-func makePattern(n int, period int) []byte {
+func makePattern(n, period int) []byte {
 	b := make([]byte, n)
 	for i := range b {
 		b[i] = byte((i*13 + (i%period)*17) % 256)
@@ -445,7 +495,13 @@ func testRoundtrips(t *testing.T, name string, sz int, data []byte) {
 			t.Fatalf("[%s_%d] DecompressSheafTrellis failed: %v", name, sz, err)
 		}
 		if !bytes.Equal(decSheaf, data) {
-			t.Fatalf("[%s_%d] Sheaf Trellis roundtrip mismatch! Expected len %d, got len %d", name, sz, len(data), len(decSheaf))
+			t.Fatalf(
+				"[%s_%d] Sheaf Trellis roundtrip mismatch! Expected len %d, got len %d",
+				name,
+				sz,
+				len(data),
+				len(decSheaf),
+			)
 		}
 	}
 
@@ -460,7 +516,13 @@ func testRoundtrips(t *testing.T, name string, sz int, data []byte) {
 			t.Fatalf("[%s_%d] przm.Decompress failed: %v", name, sz, err)
 		}
 		if !bytes.Equal(decPRZM, data) {
-			t.Fatalf("[%s_%d] przm level 1 roundtrip mismatch! Expected len %d, got len %d", name, sz, len(data), len(decPRZM))
+			t.Fatalf(
+				"[%s_%d] przm level 1 roundtrip mismatch! Expected len %d, got len %d",
+				name,
+				sz,
+				len(data),
+				len(decPRZM),
+			)
 		}
 	}
 }
@@ -644,7 +706,9 @@ func TestChallenger_ConcurrencyAndPoolSafety(t *testing.T) {
 // TestChallenger_EmpiricalCycleCeiling confirms decompressor operates in <= 384 CPU cycles per 64-byte block.
 func TestChallenger_EmpiricalCycleCeiling(t *testing.T) {
 	if przm.RaceEnabled {
-		t.Skip("skipping empirical cycle ceiling benchmark under race detector (instrumentation invalidates microarchitectural bounds)")
+		t.Skip(
+			"skipping empirical cycle ceiling benchmark under race detector (instrumentation invalidates microarchitectural bounds)",
+		)
 	}
 	const sz = 65536
 	data := make([]byte, sz)

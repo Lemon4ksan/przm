@@ -209,7 +209,10 @@ func TestChallenger_M1_DecompressAllocations_Audit(t *testing.T) {
 
 			// Finding: If V-ANS was selected, allocs is 3.00 instead of 0 or 1.
 			if allocs > 1.0 {
-				t.Logf("  -> Extraneous heap allocations detected: %.2f allocs/op (V-ANS model & buffer allocations in Go decompressor)", allocs)
+				t.Logf(
+					"  -> Extraneous heap allocations detected: %.2f allocs/op (V-ANS model & buffer allocations in Go decompressor)",
+					allocs,
+				)
 			}
 		}
 	}
@@ -218,7 +221,12 @@ func TestChallenger_M1_DecompressAllocations_Audit(t *testing.T) {
 // TestChallenger_M1_CDecompressor_InteropGap_Reproducer reproduces the Pure C
 // decompressor failure on Level 4 compressed streams when GCTR is selected.
 func TestChallenger_M1_CDecompressor_InteropGap_Reproducer(t *testing.T) {
-	cCandidates := []string{"test_przm_dec.exe", "../../test_przm_dec.exe", "tests/test_przm_dec.exe", "c/test_przm_dec.exe"}
+	cCandidates := []string{
+		"test_przm_dec.exe",
+		"../../test_przm_dec.exe",
+		"tests/test_przm_dec.exe",
+		"c/test_przm_dec.exe",
+	}
 	var cBinPath string
 	for _, cand := range cCandidates {
 		absPath, err := filepath.Abs(cand)
@@ -250,7 +258,7 @@ func TestChallenger_M1_CDecompressor_InteropGap_Reproducer(t *testing.T) {
 	tmpDir := t.TempDir()
 	inPrzm := filepath.Join(tmpDir, "gctr_test.przm")
 	outBin := filepath.Join(tmpDir, "gctr_test.out")
-	if err := os.WriteFile(inPrzm, compLvl4, 0644); err != nil {
+	if err := os.WriteFile(inPrzm, compLvl4, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -272,7 +280,12 @@ func TestChallenger_M1_CDecompressor_InteropGap_Reproducer(t *testing.T) {
 // TestChallengerM1_CDecompressorSinusoidalPayloads verifies that pure C test_przm_dec.exe
 // decodes Level 4 sinusoidal payloads compressed with GCTR bit-exact losslessly across multiple sizes.
 func TestChallengerM1_CDecompressorSinusoidalPayloads(t *testing.T) {
-	cCandidates := []string{"test_przm_dec.exe", "../../test_przm_dec.exe", "tests/test_przm_dec.exe", "c/test_przm_dec.exe"}
+	cCandidates := []string{
+		"test_przm_dec.exe",
+		"../../test_przm_dec.exe",
+		"tests/test_przm_dec.exe",
+		"c/test_przm_dec.exe",
+	}
 	var cBinPath string
 	for _, cand := range cCandidates {
 		absPath, err := filepath.Abs(cand)
@@ -304,14 +317,19 @@ func TestChallengerM1_CDecompressorSinusoidalPayloads(t *testing.T) {
 		tmpDir := t.TempDir()
 		inPrzm := filepath.Join(tmpDir, "gctr_sin.przm")
 		outBin := filepath.Join(tmpDir, "gctr_sin.out")
-		if err := os.WriteFile(inPrzm, compLvl4, 0644); err != nil {
+		if err := os.WriteFile(inPrzm, compLvl4, 0o644); err != nil {
 			t.Fatal(err)
 		}
 
 		cmd := exec.Command(cBinPath, inPrzm, outBin)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("Pure C decompressor failed on Level 4 output (sz %d, exit status %v):\nOutput: %s", sz, err, string(output))
+			t.Fatalf(
+				"Pure C decompressor failed on Level 4 output (sz %d, exit status %v):\nOutput: %s",
+				sz,
+				err,
+				string(output),
+			)
 		}
 
 		decomp, err := os.ReadFile(outBin)
@@ -330,7 +348,12 @@ func TestChallengerM1_CDecompressorSinusoidalPayloads(t *testing.T) {
 // pure C test_przm_dec.exe decodes 50 distinct randomized payloads compressed with
 // standard PRZM frames losslessly with 0 C heap allocations.
 func TestChallenger_M1_CDecompressor_HenselStandardStreams_50Payloads(t *testing.T) {
-	cCandidates := []string{"test_przm_dec.exe", "../../test_przm_dec.exe", "tests/test_przm_dec.exe", "c/test_przm_dec.exe"}
+	cCandidates := []string{
+		"test_przm_dec.exe",
+		"../../test_przm_dec.exe",
+		"tests/test_przm_dec.exe",
+		"c/test_przm_dec.exe",
+	}
 	var cBinPath string
 	for _, cand := range cCandidates {
 		absPath, err := filepath.Abs(cand)
@@ -393,14 +416,20 @@ func TestChallenger_M1_CDecompressor_HenselStandardStreams_50Payloads(t *testing
 		inPrzm := filepath.Join(tmpDir, fmt.Sprintf("p%d.przm", pIdx))
 		outBin := filepath.Join(tmpDir, fmt.Sprintf("p%d.out", pIdx))
 
-		if err := os.WriteFile(inPrzm, comp, 0644); err != nil {
+		if err := os.WriteFile(inPrzm, comp, 0o644); err != nil {
 			t.Fatal(err)
 		}
 
 		cmd := exec.Command(cBinPath, inPrzm, outBin)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("[Payload %d, Magic 0x%08X] C decompressor failed: %v\nOutput: %s", pIdx, magic, err, string(output))
+			t.Fatalf(
+				"[Payload %d, Magic 0x%08X] C decompressor failed: %v\nOutput: %s",
+				pIdx,
+				magic,
+				err,
+				string(output),
+			)
 		}
 
 		decomp, err := os.ReadFile(outBin)
@@ -472,7 +501,11 @@ func TestChallenger_M1_ConcurrencyStress100_ScratchpadIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Logf("Concurrency Stress: %d operations completed successfully across %d goroutines.", totalOps.Load(), numGoroutines)
+	t.Logf(
+		"Concurrency Stress: %d operations completed successfully across %d goroutines.",
+		totalOps.Load(),
+		numGoroutines,
+	)
 }
 
 // -----------------------------------------------------------------------------
@@ -691,7 +724,6 @@ func TestChallenger_Hensel_UnalignedAndPrimeLengths(t *testing.T) {
 			t.Fatalf("Unaligned przm.HenselLCPPos expected 45, got %d", lcpPos)
 		}
 	})
-
 }
 
 // TestChallenger_Hensel_HighCollisionOverflow stress-tests pathological hash
@@ -963,7 +995,7 @@ func TestChallenger_Hensel_FingerprintAdversarialCases(t *testing.T) {
 
 // naiveHashChainOracle computes the exact unpruned match by linearly checking
 // every candidate in the scratchpad chain up to maxDepth.
-func naiveHashChainOracle(src []byte, pos, uSize, maxDepth, minLen int, head []int32, prev []int32) (int, int) {
+func naiveHashChainOracle(src []byte, pos, uSize, maxDepth, minLen int, head, prev []int32) (int, int) {
 	if pos+4 > uSize {
 		return 0, 0
 	}
@@ -1043,7 +1075,9 @@ func TestChallenger_Hensel_ExhaustiveOracle50000(t *testing.T) {
 		[]byte("AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPP"),
 		[]byte("const HenselHashPrime uint32 = 0x1E35A7BD"),
 		[]byte("SHORT_4B"),
-		[]byte("VERY_LONG_REPETITION_P_ADIC_HENSEL_QUADRATIC_CONVERGENCE_SPEEDUP_ACROSS_LEVELS_THREE_AND_FOUR_PRESERVING_BITSTREAM_COMPATIBILITY_AND_ZERO_ALLOCATION_DECOMPRESSOR_CONTRACT_1234567890"),
+		[]byte(
+			"VERY_LONG_REPETITION_P_ADIC_HENSEL_QUADRATIC_CONVERGENCE_SPEEDUP_ACROSS_LEVELS_THREE_AND_FOUR_PRESERVING_BITSTREAM_COMPATIBILITY_AND_ZERO_ALLOCATION_DECOMPRESSOR_CONTRACT_1234567890",
+		),
 	}
 
 	for i := range 300 {
@@ -1203,7 +1237,12 @@ func TestChallenger_Hensel_ZeroAllocations(t *testing.T) {
 // Level 3 and Level 4 across all boundary conditions decompress bit-exact
 // via the Pure C reference decompressor.
 func TestChallenger_Hensel_PureCInterop(t *testing.T) {
-	cCandidates := []string{"test_przm_dec.exe", "../../test_przm_dec.exe", "tests/test_przm_dec.exe", "c/test_przm_dec.exe"}
+	cCandidates := []string{
+		"test_przm_dec.exe",
+		"../../test_przm_dec.exe",
+		"tests/test_przm_dec.exe",
+		"c/test_przm_dec.exe",
+	}
 	var cBinPath string
 	for _, cand := range cCandidates {
 		absPath, err := filepath.Abs(cand)
@@ -1244,7 +1283,7 @@ func TestChallenger_Hensel_PureCInterop(t *testing.T) {
 				inPath := filepath.Join(tmpDir, fmt.Sprintf("%s_l%d.przm", tc.name, lvl))
 				outPath := filepath.Join(tmpDir, fmt.Sprintf("%s_l%d.out", tc.name, lvl))
 
-				if err := os.WriteFile(inPath, comp, 0644); err != nil {
+				if err := os.WriteFile(inPath, comp, 0o644); err != nil {
 					t.Fatalf("failed to write %s: %v", inPath, err)
 				}
 
@@ -1398,7 +1437,12 @@ func TestChallenger_PWSEncode_ShortInputs(t *testing.T) {
 // TestChallenger_CDecompressor_TruncatedAndMalformedFrames checks that the C decompressor
 // rejects truncated frames (< 20 bytes for PWS, < 8 bytes for PRZM) cleanly without crashing.
 func TestChallenger_CDecompressor_TruncatedAndMalformedFrames(t *testing.T) {
-	cCandidates := []string{"test_przm_dec.exe", "../../test_przm_dec.exe", "tests/test_przm_dec.exe", "c/test_przm_dec.exe"}
+	cCandidates := []string{
+		"test_przm_dec.exe",
+		"../../test_przm_dec.exe",
+		"tests/test_przm_dec.exe",
+		"c/test_przm_dec.exe",
+	}
 	var cBinPath string
 	for _, cand := range cCandidates {
 		absPath, err := filepath.Abs(cand)
@@ -1426,8 +1470,34 @@ func TestChallenger_CDecompressor_TruncatedAndMalformedFrames(t *testing.T) {
 		{"4_bytes_pws", []byte{'P', 'W', 0x01, 0x00}},
 		{"7_bytes_pws", []byte{'P', 'W', 0x01, 0x00, 0x04, 0x00, 0x00}},
 		{"8_bytes_pws", []byte{'P', 'W', 0x01, 0x00, 0x04, 0x00, 0x00, 0x00}},
-		{"16_bytes_pws", []byte{'P', 'W', 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00}},
-		{"19_bytes_pws", []byte{'P', 'W', 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
+		{
+			"16_bytes_pws",
+			[]byte{'P', 'W', 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00},
+		},
+		{
+			"19_bytes_pws",
+			[]byte{
+				'P',
+				'W',
+				0x01,
+				0x00,
+				0x04,
+				0x00,
+				0x00,
+				0x00,
+				0x01,
+				0x00,
+				0x00,
+				0x00,
+				0x01,
+				0x00,
+				0x00,
+				0x00,
+				0x00,
+				0x00,
+				0x00,
+			},
+		},
 		{"3_bytes_przm", []byte{'P', 'R', 'Z'}},
 		{"4_bytes_przm", []byte{'P', 'R', 'Z', 'M'}},
 		{"7_bytes_przm", []byte{'P', 'R', 'Z', 'M', 0x00, 0x04, 0x00}},
@@ -1438,7 +1508,7 @@ func TestChallenger_CDecompressor_TruncatedAndMalformedFrames(t *testing.T) {
 			inPrzm := filepath.Join(tmpDir, "trunc_"+tc.name+".przm")
 			outBin := filepath.Join(tmpDir, "trunc_"+tc.name+".out")
 
-			if err := os.WriteFile(inPrzm, tc.data, 0644); err != nil {
+			if err := os.WriteFile(inPrzm, tc.data, 0o644); err != nil {
 				t.Fatalf("WriteFile failed: %v", err)
 			}
 
@@ -1446,12 +1516,21 @@ func TestChallenger_CDecompressor_TruncatedAndMalformedFrames(t *testing.T) {
 			output, err := cmd.CombinedOutput()
 			// Must fail (non-zero exit code)
 			if err == nil {
-				t.Fatalf("Expected C decompressor to reject truncated frame %q, but succeeded! Output:\n%s", tc.name, string(output))
+				t.Fatalf(
+					"Expected C decompressor to reject truncated frame %q, but succeeded! Output:\n%s",
+					tc.name,
+					string(output),
+				)
 			}
 			// Exit code must be 2 (Invalid PRZM frame header / error) or 3 (Decompression failed), NOT a crash (e.g. status code -1073741819 / 0xC0000005)
 			exitCode := cmd.ProcessState.ExitCode()
 			if exitCode != 2 && exitCode != 3 {
-				t.Fatalf("C decompressor crashed or exited unexpectedly with code %d on %q. Output:\n%s", exitCode, tc.name, string(output))
+				t.Fatalf(
+					"C decompressor crashed or exited unexpectedly with code %d on %q. Output:\n%s",
+					exitCode,
+					tc.name,
+					string(output),
+				)
 			}
 		})
 	}

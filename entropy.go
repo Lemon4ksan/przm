@@ -20,9 +20,7 @@ const (
 	ModeRecursiveLZ      uint8 = 4 // Recursive PRZM LZ77 frame (for structured, highly-repetitive command streams)
 )
 
-var (
-	ErrCorruptedStream = errors.New("entropy_pack: corrupted stream")
-)
+var ErrCorruptedStream = errors.New("entropy_pack: corrupted stream")
 
 // -----------------------------------------------------------------------------
 // Canonical Huffman 4-Stream Interleaved Codec (RAM-Speed Architecture)
@@ -469,7 +467,7 @@ func EncodeHuffman4X(src []byte) ([]byte, error) {
 }
 
 // DecodeHuffman4X executes 4-way interleaved branchless decoding with 0 heap allocations.
-func DecodeHuffman4X(dst []byte, src []byte, decTable *CanonicalHuffmanTable) (int, error) {
+func DecodeHuffman4X(dst, src []byte, decTable *CanonicalHuffmanTable) (int, error) {
 	if len(src) < 5 {
 		return 0, ErrCorruptedStream
 	}
@@ -688,7 +686,7 @@ func EncodeHuffmanCompact(src []byte) ([]byte, error) {
 }
 
 // DecodeHuffmanCompact unpacks a single-stream compact Huffman payload with 0 heap allocations.
-func DecodeHuffmanCompact(dst []byte, src []byte, decTable *CanonicalHuffmanTable) (int, error) {
+func DecodeHuffmanCompact(dst, src []byte, decTable *CanonicalHuffmanTable) (int, error) {
 	if len(src) < 5 {
 		return 0, ErrCorruptedStream
 	}
@@ -862,7 +860,7 @@ func EncodeHuffmanCompact4X(src []byte) ([]byte, error) {
 }
 
 // DecodeHuffmanCompact4X unpacks a 4-stream interleaved compact Huffman payload with 0 heap allocations.
-func DecodeHuffmanCompact4X(dst []byte, src []byte, decTable *CanonicalHuffmanTable) (int, error) {
+func DecodeHuffmanCompact4X(dst, src []byte, decTable *CanonicalHuffmanTable) (int, error) {
 	if len(src) < 5 {
 		return 0, ErrCorruptedStream
 	}
@@ -1068,7 +1066,7 @@ func PackStream(src []byte, prefMode uint8) ([]byte, error) {
 }
 
 // UnpackStream decompresses a packed stream into dst with ZERO heap allocations.
-func UnpackStream(dst []byte, src []byte, scratchTable *CanonicalHuffmanTable) (int, error) {
+func UnpackStream(dst, src []byte, scratchTable *CanonicalHuffmanTable) (int, error) {
 	if len(src) < 5 {
 		return 0, ErrCorruptedStream
 	}
@@ -1098,7 +1096,7 @@ func UnpackStream(dst []byte, src []byte, scratchTable *CanonicalHuffmanTable) (
 	case ModeRecursiveLZ:
 		decomp, err := DecompressTo(src[5:], dst[:origLen])
 		if err != nil {
-			return 0, fmt.Errorf("%w: recursive lz decode failed: %v", ErrCorruptedStream, err)
+			return 0, fmt.Errorf("%w: recursive lz decode failed: %w", ErrCorruptedStream, err)
 		}
 		return len(decomp), nil
 
@@ -1106,4 +1104,3 @@ func UnpackStream(dst []byte, src []byte, scratchTable *CanonicalHuffmanTable) (
 		return 0, fmt.Errorf("%w: unknown mode %d", ErrCorruptedStream, mode)
 	}
 }
-

@@ -117,8 +117,8 @@ func BenchmarkMobiusTransform(b *testing.B) {
 	data := make([]byte, 64*1024)
 	b.SetBytes(int64(len(data)))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		FastMobiusTransformInplace(data, 6, false)
 	}
 }
@@ -133,8 +133,8 @@ func BenchmarkMobiusDecompress(b *testing.B) {
 	dst := make([]byte, len(src)+64)
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		_, _ = DecompressMobiusTo(compressed, dst)
 	}
 }

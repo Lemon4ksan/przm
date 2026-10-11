@@ -309,17 +309,17 @@ func TestTier1_GPU_F07_GracefulCPUSIMDFallback(t *testing.T) {
 			data: generateSyntheticSourceCode(300),
 		},
 		{
-			name: "ZeroLengthPayload",
+			name:  "ZeroLengthPayload",
 			setup: func() func() { return func() {} },
 			data:  []byte{},
 		},
 		{
-			name: "SingleBytePayload",
+			name:  "SingleBytePayload",
 			setup: func() func() { return func() {} },
 			data:  []byte{0x42},
 		},
 		{
-			name: "ThreeBytePayload",
+			name:  "ThreeBytePayload",
 			setup: func() func() { return func() {} },
 			data:  []byte{1, 2, 3},
 		},

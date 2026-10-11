@@ -53,14 +53,14 @@ func (sw *SymplecticWriter) flush() error {
 	}
 	// CompressSymplectic automatically estimates optimal shear and returns a self-describing block
 	encoded := CompressSymplectic(sw.chunk[:sw.pending])
-	
+
 	// We need to write a 4-byte length prefix for the encoded block so the reader knows how much to read
 	var lenBuf [4]byte
 	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(encoded)))
 	if _, err := sw.w.Write(lenBuf[:]); err != nil {
 		return err
 	}
-	
+
 	if _, err := sw.w.Write(encoded); err != nil {
 		return err
 	}
@@ -104,29 +104,29 @@ func (sr *SymplecticReader) Read(p []byte) (n int, err error) {
 	if _, err := io.ReadFull(sr.r, lenBuf[:]); err != nil {
 		return 0, err
 	}
-	
+
 	chunkLen := int(binary.LittleEndian.Uint32(lenBuf[:]))
 	if chunkLen > 1024*1024 { // Sanity check 1MB max block size
 		return 0, errors.New("przm: invalid symplectic chunk length")
 	}
-	
+
 	if cap(sr.readBuf) < chunkLen {
 		sr.readBuf = make([]byte, chunkLen)
 	}
 	sr.readBuf = sr.readBuf[:chunkLen]
-	
+
 	if _, err := io.ReadFull(sr.r, sr.readBuf); err != nil {
 		return 0, err
 	}
-	
+
 	dec, err := DecompressSymplectic(sr.readBuf, nil)
 	if err != nil {
 		return 0, err
 	}
-	
+
 	sr.decoded = dec
 	sr.offset = 0
-	
+
 	copied := copy(p, sr.decoded[sr.offset:])
 	sr.offset += copied
 	return copied, nil
@@ -276,4 +276,3 @@ func (uc *SymplecticUnifiedCodec) DecodeBlockInplace(block []byte) ([]byte, erro
 
 	return payload, nil
 }
-

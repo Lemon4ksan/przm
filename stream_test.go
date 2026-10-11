@@ -66,12 +66,12 @@ func TestStream_RoundtripMultiChunk(t *testing.T) {
 	testCases := []struct {
 		name       string
 		chunkSizes []int
-		generator  func(size int, seed int) []byte
+		generator  func(size, seed int) []byte
 	}{
 		{
 			name:       "SingleChunk_Text",
 			chunkSizes: []int{8192},
-			generator: func(size int, seed int) []byte {
+			generator: func(size, seed int) []byte {
 				buf := make([]byte, size)
 				phrase := []byte("The quick brown fox jumps over the lazy dog. 1234567890! ")
 				for i := range buf {
@@ -83,7 +83,7 @@ func TestStream_RoundtripMultiChunk(t *testing.T) {
 		{
 			name:       "TwoChunks_RepetitiveJSON",
 			chunkSizes: []int{16384, 16384},
-			generator: func(size int, seed int) []byte {
+			generator: func(size, seed int) []byte {
 				var b bytes.Buffer
 				for i := 0; b.Len() < size; i++ {
 					fmt.Fprintf(&b, `{"id":%d,"metric":"cpu_utilization","val":%d,"active":true}`, i+seed, (i*37)%100)
@@ -94,13 +94,13 @@ func TestStream_RoundtripMultiChunk(t *testing.T) {
 		{
 			name:       "FourChunks_BinaryPatterns",
 			chunkSizes: []int{32768, 65536, 16384, 32768},
-			generator: func(size int, seed int) []byte {
+			generator: func(size, seed int) []byte {
 				buf := make([]byte, size)
 				r := rand.New(rand.NewSource(int64(seed)))
 				pattern := make([]byte, 128)
 				r.Read(pattern)
 				for i := range buf {
-					buf[i] = pattern[(i)%len(pattern)]
+					buf[i] = pattern[i%len(pattern)]
 				}
 				return buf
 			},
@@ -108,7 +108,7 @@ func TestStream_RoundtripMultiChunk(t *testing.T) {
 		{
 			name:       "EightChunks_MixedData",
 			chunkSizes: []int{10000, 20000, 30000, 15000, 25000, 40000, 12000, 8000},
-			generator: func(size int, seed int) []byte {
+			generator: func(size, seed int) []byte {
 				buf := make([]byte, size)
 				for i := range buf {
 					if i%3 == 0 {
@@ -123,7 +123,7 @@ func TestStream_RoundtripMultiChunk(t *testing.T) {
 		{
 			name:       "ZeroByteStream",
 			chunkSizes: []int{},
-			generator: func(size int, seed int) []byte {
+			generator: func(size, seed int) []byte {
 				return []byte{}
 			},
 		},
@@ -452,7 +452,11 @@ func TestStream_MultithreadedCompression(t *testing.T) {
 				})
 
 				if allocs != 0.0 {
-					t.Fatalf("ZERO-ALLOC VIOLATION on %s: DecompressTo produced %.2f allocs/run (mandated strictly 0.00)", tc.name, allocs)
+					t.Fatalf(
+						"ZERO-ALLOC VIOLATION on %s: DecompressTo produced %.2f allocs/run (mandated strictly 0.00)",
+						tc.name,
+						allocs,
+					)
 				}
 				t.Logf("[%s] MT(threads=4, chunk=64K) AllocsPerRun(100) = %.2f (0.00 verified)", tc.name, allocs)
 			}
@@ -470,7 +474,10 @@ func TestStream_MultithreadedCompression(t *testing.T) {
 			t.Fatalf("CompressWithOptions(threads=1) failed: %v", err)
 		}
 		if binary.LittleEndian.Uint32(comp1[0:4]) != MagicPRZM {
-			t.Fatalf("expected single frame MagicPRZM for Threads=1 within MaxBlockSize, got 0x%08X", binary.LittleEndian.Uint32(comp1[0:4]))
+			t.Fatalf(
+				"expected single frame MagicPRZM for Threads=1 within MaxBlockSize, got 0x%08X",
+				binary.LittleEndian.Uint32(comp1[0:4]),
+			)
 		}
 		dec1, err := Decompress(comp1)
 		if err != nil {
@@ -486,7 +493,10 @@ func TestStream_MultithreadedCompression(t *testing.T) {
 			t.Fatalf("compressMultiChunk(threads=1) failed: %v", err)
 		}
 		if binary.LittleEndian.Uint32(compSeq[0:4]) != MagicPRZS {
-			t.Fatalf("expected MagicPRZS for compressMultiChunk(threads=1), got 0x%08X", binary.LittleEndian.Uint32(compSeq[0:4]))
+			t.Fatalf(
+				"expected MagicPRZS for compressMultiChunk(threads=1), got 0x%08X",
+				binary.LittleEndian.Uint32(compSeq[0:4]),
+			)
 		}
 		decSeq, err := Decompress(compSeq)
 		if err != nil {
@@ -561,7 +571,12 @@ func TestStream_MultithreadedCompression(t *testing.T) {
 			for _, th := range []int{1, 4} {
 				_, err := CompressWithOptions(smallPayload, CompressOptions{Threads: th, ChunkSize: MaxBlockSize + 1})
 				if !errors.Is(err, ErrExceedsMaxBlock) {
-					t.Fatalf("CompressWithOptions(size=%d, threads=%d) expected ErrExceedsMaxBlock, got: %v", size, th, err)
+					t.Fatalf(
+						"CompressWithOptions(size=%d, threads=%d) expected ErrExceedsMaxBlock, got: %v",
+						size,
+						th,
+						err,
+					)
 				}
 			}
 		}

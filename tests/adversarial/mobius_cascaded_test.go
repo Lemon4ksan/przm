@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/lemon4ksan/foundation/bufkit"
+
 	"github.com/lemon4ksan/przm"
 )
 
@@ -255,7 +256,12 @@ func TestZeroAllocation_FMT_And_Margolus(t *testing.T) {
 
 // 4. Cross-Language Roundtrip Stress: Go Compressor -> Pure C Reference Decompressor
 func TestCrossLanguageRoundtrip_PureCDecompressor_Stress(t *testing.T) {
-	cCandidates := []string{"test_przm_dec.exe", "../../test_przm_dec.exe", "tests/test_przm_dec.exe", "c/test_przm_dec.exe"}
+	cCandidates := []string{
+		"test_przm_dec.exe",
+		"../../test_przm_dec.exe",
+		"tests/test_przm_dec.exe",
+		"c/test_przm_dec.exe",
+	}
 	var cBinPath string
 	for _, cand := range cCandidates {
 		absPath, err := filepath.Abs(cand)
@@ -347,7 +353,7 @@ func TestCrossLanguageRoundtrip_PureCDecompressor_Stress(t *testing.T) {
 				inPrzm := filepath.Join(tmpDir, fmt.Sprintf("w%d_%s.przm", workerID, item.name))
 				outBin := filepath.Join(tmpDir, fmt.Sprintf("w%d_%s.out", workerID, item.name))
 
-				if err := os.WriteFile(inPrzm, item.compressed, 0644); err != nil {
+				if err := os.WriteFile(inPrzm, item.compressed, 0o644); err != nil {
 					errChan <- fmt.Errorf("[%s] failed to write przm: %w", item.name, err)
 					return
 				}
@@ -355,7 +361,9 @@ func TestCrossLanguageRoundtrip_PureCDecompressor_Stress(t *testing.T) {
 				cmd := exec.Command(cBinPath, inPrzm, outBin)
 				out, err := cmd.CombinedOutput()
 				if err != nil {
-					if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 2 && !bytes.HasPrefix(item.compressed, []byte("MOBI")) && !bytes.HasPrefix(item.compressed, []byte("MARG")) {
+					if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 2 &&
+						!bytes.HasPrefix(item.compressed, []byte("MOBI")) &&
+						!bytes.HasPrefix(item.compressed, []byte("MARG")) {
 						// Skip experimental Go-only transform prototypes (e.g. TDA1) not part of Pure C spec
 						_ = os.Remove(inPrzm)
 						_ = os.Remove(outBin)
@@ -393,7 +401,6 @@ func TestCrossLanguageRoundtrip_PureCDecompressor_Stress(t *testing.T) {
 
 	wg.Wait()
 	close(errChan)
-
 }
 
 // 5. Adversarial Malformed Frames & Boundaries for C and Go Decompressors
@@ -748,9 +755,8 @@ func BenchmarkCascadedPWS_IsoQuant_Decompress(b *testing.B) {
 	_, _ = przm.DecompressIsoQuant(frame, dst)
 	b.SetBytes(int64(len(orig)))
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = przm.DecompressIsoQuant(frame, dst)
 	}
 }
@@ -774,9 +780,8 @@ func BenchmarkCascadedPWS_Mahler_Decompress(b *testing.B) {
 
 	b.SetBytes(int64(len(orig)))
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = przm.DecompressMahler(frame, dst)
 	}
 }
@@ -796,9 +801,8 @@ func BenchmarkCascadedPWS_HMDS_Decompress(b *testing.B) {
 
 	b.SetBytes(int64(len(orig)))
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = przm.DecompressHMDS(frame, dst)
 	}
 }
@@ -827,9 +831,8 @@ func BenchmarkCascadedPWS_SpectralUnitary_Decompress(b *testing.B) {
 
 	b.SetBytes(int64(len(orig)))
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = przm.DecompressSpectralUnitary(frame, dst)
 	}
 }
@@ -849,9 +852,8 @@ func BenchmarkCascadedPWS_Symplectic_Decompress(b *testing.B) {
 
 	b.SetBytes(int64(len(orig)))
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = przm.DecompressSymplectic(frame, dst)
 	}
 }
@@ -872,9 +874,8 @@ func BenchmarkCascadedPWS_GaloisJIT_Decompress(b *testing.B) {
 
 	b.SetBytes(int64(len(orig)))
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = przm.DecompressGCTR(frame, dst)
 	}
 }
@@ -886,7 +887,12 @@ func BenchmarkCascadedPWS_GaloisJIT_Decompress(b *testing.B) {
 // Helper to locate compiled Pure C decompressor binary
 func getCBinPath(t *testing.T) string {
 	t.Helper()
-	cCandidates := []string{"test_przm_dec.exe", "../../test_przm_dec.exe", "tests/test_przm_dec.exe", "c/test_przm_dec.exe"}
+	cCandidates := []string{
+		"test_przm_dec.exe",
+		"../../test_przm_dec.exe",
+		"tests/test_przm_dec.exe",
+		"c/test_przm_dec.exe",
+	}
 	for _, cand := range cCandidates {
 		absPath, err := filepath.Abs(cand)
 		if err == nil {
@@ -996,7 +1002,12 @@ func TestChallenger_IsoQuant_UnalignedLengths(t *testing.T) {
 				t.Fatalf("[%s] Global Decompress failed: %v", testName, err)
 			}
 			if !bytes.Equal(decGlobal, data) {
-				t.Fatalf("[%s] Global Decompress mismatch: len(got)=%d, len(want)=%d", testName, len(decGlobal), len(data))
+				t.Fatalf(
+					"[%s] Global Decompress mismatch: len(got)=%d, len(want)=%d",
+					testName,
+					len(decGlobal),
+					len(data),
+				)
 			}
 
 			// 4. Pure C Decompression (sample across sizes to maintain speed)
@@ -1004,14 +1015,19 @@ func TestChallenger_IsoQuant_UnalignedLengths(t *testing.T) {
 				inPrzm := filepath.Join(tmpDir, testName+".przm")
 				outBin := filepath.Join(tmpDir, testName+".out")
 
-				if err := os.WriteFile(inPrzm, comp, 0644); err != nil {
+				if err := os.WriteFile(inPrzm, comp, 0o644); err != nil {
 					t.Fatalf("[%s] WriteFile failed: %v", testName, err)
 				}
 
 				cmd := exec.Command(cBin, inPrzm, outBin)
 				output, err := cmd.CombinedOutput()
 				if err != nil {
-					t.Fatalf("[%s] Pure C decompressor failed (exit status %v):\nOutput:\n%s", testName, err, string(output))
+					t.Fatalf(
+						"[%s] Pure C decompressor failed (exit status %v):\nOutput:\n%s",
+						testName,
+						err,
+						string(output),
+					)
 				}
 
 				decC, err := os.ReadFile(outBin)
@@ -1020,7 +1036,12 @@ func TestChallenger_IsoQuant_UnalignedLengths(t *testing.T) {
 				}
 
 				if !bytes.Equal(decC, data) {
-					t.Fatalf("[%s] Pure C decompress mismatch: len(got)=%d, len(want)=%d", testName, len(decC), len(data))
+					t.Fatalf(
+						"[%s] Pure C decompress mismatch: len(got)=%d, len(want)=%d",
+						testName,
+						len(decC),
+						len(data),
+					)
 				}
 
 				_ = os.Remove(inPrzm)
@@ -1073,7 +1094,7 @@ func TestChallenger_IsoQuant_ManualModes_Unaligned(t *testing.T) {
 		// Decompress in Pure C
 		inPrzm1 := filepath.Join(tmpDir, fmt.Sprintf("mode1_sz%d.przm", sz))
 		outBin1 := filepath.Join(tmpDir, fmt.Sprintf("mode1_sz%d.out", sz))
-		if err := os.WriteFile(inPrzm1, mode1Frame, 0644); err != nil {
+		if err := os.WriteFile(inPrzm1, mode1Frame, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		cmd1 := exec.Command(cBin, inPrzm1, outBin1)
@@ -1116,7 +1137,7 @@ func TestChallenger_IsoQuant_ManualModes_Unaligned(t *testing.T) {
 			// Decompress in Pure C
 			inPrzm3 := filepath.Join(tmpDir, fmt.Sprintf("mode3_sz%d.przm", sz))
 			outBin3 := filepath.Join(tmpDir, fmt.Sprintf("mode3_sz%d.out", sz))
-			if err := os.WriteFile(inPrzm3, mode3Frame, 0644); err != nil {
+			if err := os.WriteFile(inPrzm3, mode3Frame, 0o644); err != nil {
 				t.Fatal(err)
 			}
 			cmd3 := exec.Command(cBin, inPrzm3, outBin3)
@@ -1203,7 +1224,7 @@ func TestChallenger_IsoQuant_MalformedAndAdversarialFrames(t *testing.T) {
 		// C test
 		inPrzm := filepath.Join(tmpDir, fmt.Sprintf("trunc_%d.przm", length))
 		outBin := filepath.Join(tmpDir, fmt.Sprintf("trunc_%d.out", length))
-		_ = os.WriteFile(inPrzm, trunc, 0644)
+		_ = os.WriteFile(inPrzm, trunc, 0o644)
 
 		cmd := exec.Command(cBin, inPrzm, outBin)
 		_ = cmd.Run()
@@ -1227,7 +1248,7 @@ func TestChallenger_IsoQuant_MalformedAndAdversarialFrames(t *testing.T) {
 		// C test
 		inPrzm := filepath.Join(tmpDir, fmt.Sprintf("badmode_%d.przm", badMode))
 		outBin := filepath.Join(tmpDir, fmt.Sprintf("badmode_%d.out", badMode))
-		_ = os.WriteFile(inPrzm, corrupt, 0644)
+		_ = os.WriteFile(inPrzm, corrupt, 0o644)
 
 		cmd := exec.Command(cBin, inPrzm, outBin)
 		_ = cmd.Run()
@@ -1250,7 +1271,7 @@ func TestChallenger_IsoQuant_MalformedAndAdversarialFrames(t *testing.T) {
 	// C test
 	inPrzm := filepath.Join(tmpDir, "trunc_payload.przm")
 	outBin := filepath.Join(tmpDir, "trunc_payload.out")
-	_ = os.WriteFile(inPrzm, corruptPayload, 0644)
+	_ = os.WriteFile(inPrzm, corruptPayload, 0o644)
 
 	cmd := exec.Command(cBin, inPrzm, outBin)
 	_ = cmd.Run()
@@ -1272,7 +1293,7 @@ func TestChallenger_IsoQuant_MalformedAndAdversarialFrames(t *testing.T) {
 	// C test
 	inPrzmMax := filepath.Join(tmpDir, "max_block.przm")
 	outBinMax := filepath.Join(tmpDir, "max_block.out")
-	_ = os.WriteFile(inPrzmMax, corruptMaxBlock, 0644)
+	_ = os.WriteFile(inPrzmMax, corruptMaxBlock, 0o644)
 
 	cmdMax := exec.Command(cBin, inPrzmMax, outBinMax)
 	_ = cmdMax.Run()

@@ -38,7 +38,7 @@ var (
 )
 
 // ApplyMargolusBlockRule applies the local block bijection on 2x2 cells (a, b; c, d).
-func ApplyMargolusBlockRule(a, b, c, d uint8, ruleID uint8, inverse bool) (uint8, uint8, uint8, uint8) {
+func ApplyMargolusBlockRule(a, b, c, d, ruleID uint8, inverse bool) (uint8, uint8, uint8, uint8) {
 	switch ruleID {
 	case MargolusRuleBBM:
 		// 11-instruction branchless SWAR across all 8 bitplanes

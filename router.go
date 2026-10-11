@@ -4,9 +4,6 @@
 
 package przm
 
-import (
-)
-
 // RouteDecision specifies the pre-LZ classification and transform gating decision.
 type RouteDecision uint8
 

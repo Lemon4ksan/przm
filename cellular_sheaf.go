@@ -761,7 +761,10 @@ func CompressCellularSheaf(src []byte, level int) ([]byte, error) {
 	}
 
 	// Test if PWS AVX-wave cascade yields even better compression on payload
-	if packed, err := PWSEncode(payload); err == nil && len(packed)+CellularSheafHeaderSize < len(payload)+CellularSheafHeaderSize {
+	if packed, err := PWSEncode(
+		payload,
+	); err == nil &&
+		len(packed)+CellularSheafHeaderSize < len(payload)+CellularSheafHeaderSize {
 		flags |= CSHDFlagCascadedPWS
 		dst := make([]byte, CellularSheafHeaderSize+len(packed))
 		binary.LittleEndian.PutUint32(dst[0:4], PRZM_MAGIC_CELLULAR_SHEAF)

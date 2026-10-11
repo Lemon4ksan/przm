@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/lemon4ksan/foundation/bufkit"
+
 	"github.com/lemon4ksan/przm"
 	"github.com/lemon4ksan/przm/bench"
 )

@@ -168,7 +168,7 @@ const (
 
 // ApplyGCTRForward applies the superoptimized forward transform in-place or to dst.
 // Theorem 30 proves exact bijectivity for all supported operators.
-func ApplyGCTRForward(src []byte, dst []byte, opID uint8) []byte {
+func ApplyGCTRForward(src, dst []byte, opID uint8) []byte {
 	n := len(src)
 	if cap(dst) < n {
 		dst = make([]byte, n)
@@ -272,7 +272,7 @@ func ApplyGCTRForward(src []byte, dst []byte, opID uint8) []byte {
 
 // ApplyGCTRInverse reverses the superoptimized transform, restoring original bytes
 // with zero loss (Theorem 30). Operates at full memory bandwidth (> 2 GB/s).
-func ApplyGCTRInverse(src []byte, dst []byte, opID uint8) ([]byte, error) {
+func ApplyGCTRInverse(src, dst []byte, opID uint8) ([]byte, error) {
 	n := len(src)
 	if cap(dst) < n {
 		dst = make([]byte, n)
@@ -421,7 +421,7 @@ func CompressGCTR(src []byte) []byte {
 }
 
 // DecompressGCTR restores original bytes from GCTR frame with dual subformat dispatch.
-func DecompressGCTR(src []byte, dst []byte) ([]byte, error) {
+func DecompressGCTR(src, dst []byte) ([]byte, error) {
 	if len(src) < 10 {
 		return nil, ErrGCTRCorrupted
 	}
@@ -467,4 +467,3 @@ func DecompressGCTR(src []byte, dst []byte) ([]byte, error) {
 	// Invert the superoptimized Galois operator (Theorem 30)
 	return ApplyGCTRInverse(innerDec, dst[:0], opID)
 }
-

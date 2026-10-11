@@ -109,7 +109,11 @@ func TestDedup_EmitOpCopyBlock(t *testing.T) {
 			}
 		}
 		if !foundOpCopyBlock {
-			t.Errorf("level %d: expected OpCopyBlock (0xFD) with targetBlock 0 in command stream, cmds: %x", level, cmds)
+			t.Errorf(
+				"level %d: expected OpCopyBlock (0xFD) with targetBlock 0 in command stream, cmds: %x",
+				level,
+				cmds,
+			)
 		}
 
 		// Verify lossless roundtrip

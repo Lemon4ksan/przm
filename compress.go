@@ -23,19 +23,19 @@ const (
 )
 
 type scratchpad struct {
-	head         []int32
-	hensel       HenselScratchpad
-	cmdBuf       []byte
-	offsetBuf    []byte
-	literalBuf   []byte
-	transBuf     []byte
-	nibbleBuf    []byte
-	nibbleLowBuf []byte
-	splitBuf     []byte
-	normBuf      []byte
-	dedup        DedupTable
-	sheafSBuf    []byte
-	sheafCBuf    []byte
+	head            []int32
+	hensel          HenselScratchpad
+	cmdBuf          []byte
+	offsetBuf       []byte
+	literalBuf      []byte
+	transBuf        []byte
+	nibbleBuf       []byte
+	nibbleLowBuf    []byte
+	splitBuf        []byte
+	normBuf         []byte
+	dedup           DedupTable
+	sheafSBuf       []byte
+	sheafCBuf       []byte
 	sheafMaskBuf    []byte
 	sheafWorkBuf    []byte
 	ctxSheafWorkBuf []byte
@@ -66,10 +66,6 @@ var padPool = generic.NewPool(func() *scratchpad {
 		},
 	}
 })
-
-
-
-
 
 // detectStride scans initial bytes to identify periodic record or column strides S in [4, 256].
 func detectStride(src []byte) (int, bool) {
@@ -128,140 +124,20 @@ func isHighEntropy(src []byte) bool {
 	return unique >= threshold
 }
 
-// isCandidateAST determines if src is structured text (JSON, XML, AST, source code)
-// by verifying the absence of binary control characters and presence of balanced brackets.
-// Rejects binary data and unstructured text in < 25 ns.
-func isCandidateAST(src []byte) bool {
-	sampleLen := min(len(src), 1024)
-	if sampleLen < 64 {
-		return false
-	}
-	// Quick binary check: reject if null bytes or non-printable ASCII control bytes appear
-	checkLen := min(sampleLen, 256)
-	for i := range checkLen {
-		b := src[i]
-		if b == 0 || (b < 0x09 && b > 0x00) || (b > 0x0D && b < 0x20) {
-			return false
-		}
-	}
-	openCount, closeCount := 0, 0
-	for i := range sampleLen {
-		switch src[i] {
-		case '{', '[', '(':
-			openCount++
-		case '}', ']', ')':
-			closeCount++
-		}
-	}
-	return openCount >= 4 && closeCount >= 4
-}
-
-// hasChannelCorrelation4 verifies cross-channel covariance and stride-4 alignment
-// to determine whether 4-channel tensor / geometric transforms (Spectral Unitary, Minkowski h-MDS)
-// can reduce entropy. Rejects uncorrelated data in < 30 ns.
-func hasChannelCorrelation4(src []byte) bool {
-	sampleQuads := 16 // 64 bytes
-	if len(src) < sampleQuads*4 {
-		return false
-	}
-	totalCrossDiff := 0
-	stride4Matches := 0
-	for i := 0; i < sampleQuads*4; i += 4 {
-		b0 := int(src[i])
-		b1 := int(src[i+1])
-		b2 := int(src[i+2])
-		b3 := int(src[i+3])
-		d0 := b0 - b1
-		if d0 < 0 {
-			d0 = -d0
-		}
-		d1 := b1 - b2
-		if d1 < 0 {
-			d1 = -d1
-		}
-		d2 := b2 - b3
-		if d2 < 0 {
-			d2 = -d2
-		}
-		totalCrossDiff += d0 + d1 + d2
-
-		if i+4 < sampleQuads*4 && src[i] == src[i+4] {
-			stride4Matches++
-		}
-	}
-	// High cross-channel affinity (avg diff < 42) or clear stride-4 alignment
-	return totalCrossDiff < (sampleQuads*3*42) || stride4Matches >= 6
-}
-
-// isCandidateShaderOrVec4 verifies whether src exhibits GPU SPIR-V / WGSL shader bytecode,
-// float4 vector attributes, or structured 4-column tabular alignment.
-// Evaluates in < 25 ns on a cacheline sample.
-func isCandidateShaderOrVec4(src []byte) bool {
-	n := len(src)
-	if n < 64 {
-		return false
-	}
-	// 1. Detect SPIR-V shader bytecode magic (0x07230203 or 0x03022307)
-	if n >= 4 {
-		magic := binary.LittleEndian.Uint32(src[0:4])
-		if magic == 0x07230203 || magic == 0x03022307 {
-			return true
-		}
-	}
-	// 2. Sample quads for stride-4 channel periodicity or float4 mantissa alignment
-	sampleQuads := min(n/4, 32)
-	stride4Matches := 0
-	float4ExpCount := 0
-	for i := 0; i < sampleQuads*4; i += 4 {
-		if i+4 < sampleQuads*4 && src[i] == src[i+4] {
-			stride4Matches++
-		}
-		// IEEE-754 32-bit float exponent byte (byte index 3 in little-endian float)
-		b3 := src[i+3]
-		if b3 >= 0x38 && b3 <= 0x48 { // Normalized floats in [0.001, 1000.0]
-			float4ExpCount++
-		}
-	}
-	return stride4Matches >= 4 || float4ExpCount >= (sampleQuads*3)/4
-}
-
-// isCandidateTDA checks if src possesses topological sparsity (>= 15% zeros)
-// or 64-bit periodic word motifs suitable for persistent homology barcode compression.
-// Rejects arbitrary text and binary data in < 15 ns.
-func isCandidateTDA(src []byte) bool {
-	sampleLen := min(len(src), 256)
-	if sampleLen < 64 {
-		return false
-	}
-	zeroCount := 0
-	words := sampleLen / 8
-	repWords := 0
-	for i := range words {
-		w := binary.LittleEndian.Uint64(src[i*8 : (i+1)*8])
-		if w == 0 {
-			zeroCount += 8
-		}
-		if i >= 1 && (w == binary.LittleEndian.Uint64(src[(i-1)*8:i*8]) || (i >= 4 && w == binary.LittleEndian.Uint64(src[(i-4)*8:(i-3)*8]))) {
-			repWords++
-		}
-	}
-	return zeroCount >= (sampleLen*15)/100 || repWords >= 2
-}
-
 // CompressOptions configures fine-grained PRZM compression parameters.
 type CompressOptions struct {
-	Level              int         // 1..5
-	WindowLog          int         // 16 (64K), 20 (1M), 23 (8M), or 0 (auto)
-	Dict               *Dictionary // Optional external schema dictionary
-	RawDict            []byte      // Optional raw prefix history dictionary buffer
-	DictID             uint32      // Optional dictionary ID for RawDict
-	ArchivalMode       bool        // Explicit toggle for --mode=archival
-	StandardStreamOnly bool        // Ensure canonical PRZM stream format (MagicPRZM = 0x4D5A5250)
-	Threads            int         // 0 = auto (runtime.GOMAXPROCS(0)), 1 = single-threaded, >1 = explicit worker count
-	ChunkSize          int         // 0 = auto (default 2 MiB), >0 = explicit chunk uncompressed byte size
-	GPUAcceleration    bool        // Offload LZ77 dictionary search to NVIDIA Ampere GPU via CUDA Driver API
-	MinMatch           int         // Minimum match length: 3 or 4 (default 4; 3 enables FlagMinMatch3)
-	CompactDict        bool        // Enable dedicated OpcodePrefixRawDict (0xE9) for constant raw dictionary offsets
+	Level              int          // 1..5
+	WindowLog          int          // 16 (64K), 20 (1M), 23 (8M), or 0 (auto)
+	Dict               *Dictionary  // Optional external schema dictionary
+	RawDict            []byte       // Optional raw prefix history dictionary buffer
+	DictID             uint32       // Optional dictionary ID for RawDict
+	ArchivalMode       bool         // Explicit toggle for --mode=archival
+	StandardStreamOnly bool         // Ensure canonical PRZM stream format (MagicPRZM = 0x4D5A5250)
+	Threads            int          // 0 = auto (runtime.GOMAXPROCS(0)), 1 = single-threaded, >1 = explicit worker count
+	ChunkSize          int          // 0 = auto (default 2 MiB), >0 = explicit chunk uncompressed byte size
+	GPUAcceleration    bool         // Offload LZ77 dictionary search to NVIDIA Ampere GPU via CUDA Driver API
+	MinMatch           int          // Minimum match length: 3 or 4 (default 4; 3 enables FlagMinMatch3)
+	CompactDict        bool         // Enable dedicated OpcodePrefixRawDict (0xE9) for constant raw dictionary offsets
 	LiteralProbe       func([]byte) // Optional probe hook for testing/diagnostics
 }
 
@@ -277,7 +153,7 @@ func WithGPUAcceleration() Option {
 
 const DefaultChunkSize = 2 * 1024 * 1024 // 2 MiB
 
-func resolveConcurrencyOptions(opts CompressOptions) (threads int, chunkSize int) {
+func resolveConcurrencyOptions(opts CompressOptions) (threads, chunkSize int) {
 	threads = opts.Threads
 	if threads <= 0 {
 		threads = runtime.GOMAXPROCS(0)
@@ -395,7 +271,7 @@ func CompressWithOptions(src []byte, opts CompressOptions, optList ...Option) ([
 }
 
 // CompressWithWindow encodes src using explicit level and windowLog.
-func CompressWithWindow(src []byte, level int, windowLog int) ([]byte, error) {
+func CompressWithWindow(src []byte, level, windowLog int) ([]byte, error) {
 	return CompressWithOptions(src, CompressOptions{Level: level, WindowLog: windowLog, StandardStreamOnly: true})
 }
 
@@ -583,18 +459,15 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	}
 
-	stride := 1
-	hasStride := false
+	var stride int
+	var hasStride bool
 	if dictLen == 0 {
 		stride, hasStride = detectStride(src)
-		if hasStride {
-			flags |= FlagStride
-		}
 	} else {
 		stride, hasStride = detectStride(origSrc)
-		if hasStride {
-			flags |= FlagStride
-		}
+	}
+	if hasStride {
+		flags |= FlagStride
 	}
 
 	var activeMatcher *dictMatcher
@@ -659,7 +532,26 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			bStart := dictLen
 			for bStart < uSize {
 				bSize := min(uSize-bStart, BlockSize64K)
-				compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M, minMatchBase, activeMatcher, dictLen, compactDict)
+				compressBlockOptimal(
+					src,
+					bStart,
+					bSize,
+					uSize,
+					windowSize,
+					windowLog,
+					level,
+					pad,
+					dpPad,
+					&rep0,
+					&rep1,
+					&rep2,
+					sp1M,
+					sp8M,
+					minMatchBase,
+					activeMatcher,
+					dictLen,
+					compactDict,
+				)
 				bStart += bSize
 			}
 		} else {
@@ -689,14 +581,52 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					continue
 				}
 				if dpPad != nil {
-					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M, minMatchBase, activeMatcher, dictLen, compactDict)
+					compressBlockOptimal(
+						src,
+						bStart,
+						bSize,
+						uSize,
+						windowSize,
+						windowLog,
+						level,
+						pad,
+						dpPad,
+						&rep0,
+						&rep1,
+						&rep2,
+						sp1M,
+						sp8M,
+						minMatchBase,
+						activeMatcher,
+						dictLen,
+						compactDict,
+					)
 				} else {
 					compressFastOrGreedy(bStart, bSize)
 				}
 				pad.dedup.Insert(h, blockIdx)
 			} else if bSize == DedupBlockSize && blockIdx == 0 {
 				if dpPad != nil {
-					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M, minMatchBase, activeMatcher, dictLen, compactDict)
+					compressBlockOptimal(
+						src,
+						bStart,
+						bSize,
+						uSize,
+						windowSize,
+						windowLog,
+						level,
+						pad,
+						dpPad,
+						&rep0,
+						&rep1,
+						&rep2,
+						sp1M,
+						sp8M,
+						minMatchBase,
+						activeMatcher,
+						dictLen,
+						compactDict,
+					)
 				} else {
 					compressFastOrGreedy(bStart, bSize)
 				}
@@ -705,7 +635,26 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			} else {
 				// Tail block (< 65536 bytes) compressed via standard LZ77
 				if dpPad != nil {
-					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M, minMatchBase, activeMatcher, dictLen, compactDict)
+					compressBlockOptimal(
+						src,
+						bStart,
+						bSize,
+						uSize,
+						windowSize,
+						windowLog,
+						level,
+						pad,
+						dpPad,
+						&rep0,
+						&rep1,
+						&rep2,
+						sp1M,
+						sp8M,
+						minMatchBase,
+						activeMatcher,
+						dictLen,
+						compactDict,
+					)
 				} else {
 					compressFastOrGreedy(bStart, bSize)
 				}
@@ -723,7 +672,26 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			bStart := 0
 			for bStart < uSize {
 				bSize := min(uSize-bStart, BlockSize64K)
-				compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M, minMatchBase, activeMatcher, dictLen, compactDict)
+				compressBlockOptimal(
+					src,
+					bStart,
+					bSize,
+					uSize,
+					windowSize,
+					windowLog,
+					level,
+					pad,
+					dpPad,
+					&rep0,
+					&rep1,
+					&rep2,
+					sp1M,
+					sp8M,
+					minMatchBase,
+					activeMatcher,
+					dictLen,
+					compactDict,
+				)
 				bStart += bSize
 			}
 		} else {
@@ -737,7 +705,6 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 
 	// Pack Section 1 (Literals) via Etale Sheaf V-ANS or Nibble-Planes
 	litSection := packLiteralSection(pad.literalBuf, pad, level, opts, origSrc, &flags)
-
 
 	// Pack Section 2 (Commands) and Section 3 (Offsets) via 4-Stream Canonical Huffman
 	cmdMode := uint8(ModeHuffman4X)
@@ -769,7 +736,13 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	secDirSize := generic.Ternary((flags&FlagExtOffset) != 0, 6, 4)
 
 	sec1Size := 8 // 8-byte distribution params (ModelType = 0 uniform/raw)
-	totalCompressedSize := HeaderSize + frameParamsSize + secDirSize + sec1Size + len(cmdSection) + len(offSection) + len(litSection)
+	totalCompressedSize := HeaderSize + frameParamsSize + secDirSize + sec1Size + len(
+		cmdSection,
+	) + len(
+		offSection,
+	) + len(
+		litSection,
+	)
 
 	// Fallback to uncompressed if compressed payload exceeds raw data
 	if totalCompressedSize >= origUSize {

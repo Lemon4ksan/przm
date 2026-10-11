@@ -55,9 +55,16 @@ func TestGPUCrossoverProof(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchLZ77 failed on 4 MiB buffer: %v", err)
 	}
-	t.Logf("LZ77 Kernel Execution Profile: Ingress=%.2f GB/s, Kernel=%.2f ms (Internal=%.2f GB/s), Egress=%.2f GB/s, Total=%.2f ms, PCIe Overhead=%.1f%%, Matches=%d",
-		prof.IngressDMABandwidthGBps, prof.KernelTimeMs, prof.InternalVRAMBandwidthGBps,
-		prof.EgressDMABandwidthGBps, prof.TotalRoundTripMs, prof.PCIeOverheadPercent, len(matches))
+	t.Logf(
+		"LZ77 Kernel Execution Profile: Ingress=%.2f GB/s, Kernel=%.2f ms (Internal=%.2f GB/s), Egress=%.2f GB/s, Total=%.2f ms, PCIe Overhead=%.1f%%, Matches=%d",
+		prof.IngressDMABandwidthGBps,
+		prof.KernelTimeMs,
+		prof.InternalVRAMBandwidthGBps,
+		prof.EgressDMABandwidthGBps,
+		prof.TotalRoundTripMs,
+		prof.PCIeOverheadPercent,
+		len(matches),
+	)
 
 	// Assert internal LZ77 match search kernel throughput strictly exceeds 6.0 GB/s (proving Requirement R1)
 	if prof.InternalVRAMBandwidthGBps < 6.0 {

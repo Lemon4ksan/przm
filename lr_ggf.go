@@ -406,9 +406,7 @@ const (
 	globalLRGGFVer1   uint8 = 0x01
 )
 
-var (
-	ErrGlobalLRGGFDictSize = errors.New("przm/global_lrggf: dictionary must be 32KiB")
-)
+var ErrGlobalLRGGFDictSize = errors.New("przm/global_lrggf: dictionary must be 32KiB")
 
 // GlobalLRGGFEncode compresses src using a 32 KiB dictionary (16 KiB U, 16 KiB V).
 func GlobalLRGGFEncode(src, dict []byte) ([]byte, error) {

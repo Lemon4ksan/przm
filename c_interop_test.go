@@ -148,7 +148,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 					inPrzm := filepath.Join(tmpDir, fmt.Sprintf("%s_l%d.przm", tc.name, level))
 					outBin := filepath.Join(tmpDir, fmt.Sprintf("%s_l%d.out", tc.name, level))
 
-					if err := os.WriteFile(inPrzm, compressed, 0644); err != nil {
+					if err := os.WriteFile(inPrzm, compressed, 0o644); err != nil {
 						t.Fatalf("failed to write compressed file: %v", err)
 					}
 
@@ -191,7 +191,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 		inPrzm := filepath.Join(tmpDir, "isoquant_direct.przm")
 		outBin := filepath.Join(tmpDir, "isoquant_direct.out")
 
-		if err := os.WriteFile(inPrzm, compressed, 0644); err != nil {
+		if err := os.WriteFile(inPrzm, compressed, 0o644); err != nil {
 			t.Fatalf("failed to write compressed file: %v", err)
 		}
 
@@ -230,14 +230,18 @@ func TestPureCDecompressorInterop(t *testing.T) {
 		inPrzm := filepath.Join(tmpDir, "heis3_direct.przm")
 		outBin := filepath.Join(tmpDir, "heis3_direct.out")
 
-		if err := os.WriteFile(inPrzm, compressed, 0644); err != nil {
+		if err := os.WriteFile(inPrzm, compressed, 0o644); err != nil {
 			t.Fatalf("failed to write compressed file: %v", err)
 		}
 
 		cmd := exec.Command(cBinPath, inPrzm, outBin)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("C decompressor failed on Heisenberg Stride 3 frame (exit status %v):\nOutput:\n%s", err, string(output))
+			t.Fatalf(
+				"C decompressor failed on Heisenberg Stride 3 frame (exit status %v):\nOutput:\n%s",
+				err,
+				string(output),
+			)
 		}
 
 		decompressed, err := os.ReadFile(outBin)
@@ -246,7 +250,11 @@ func TestPureCDecompressorInterop(t *testing.T) {
 		}
 
 		if !bytes.Equal(decompressed, raw) {
-			t.Fatalf("Direct Heisenberg Stride 3 interop mismatch: got %d bytes, want %d bytes", len(decompressed), len(raw))
+			t.Fatalf(
+				"Direct Heisenberg Stride 3 interop mismatch: got %d bytes, want %d bytes",
+				len(decompressed),
+				len(raw),
+			)
 		}
 	})
 
@@ -269,14 +277,18 @@ func TestPureCDecompressorInterop(t *testing.T) {
 		inPrzm := filepath.Join(tmpDir, "heis4_direct.przm")
 		outBin := filepath.Join(tmpDir, "heis4_direct.out")
 
-		if err := os.WriteFile(inPrzm, compressed, 0644); err != nil {
+		if err := os.WriteFile(inPrzm, compressed, 0o644); err != nil {
 			t.Fatalf("failed to write compressed file: %v", err)
 		}
 
 		cmd := exec.Command(cBinPath, inPrzm, outBin)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("C decompressor failed on Heisenberg Stride 4 frame (exit status %v):\nOutput:\n%s", err, string(output))
+			t.Fatalf(
+				"C decompressor failed on Heisenberg Stride 4 frame (exit status %v):\nOutput:\n%s",
+				err,
+				string(output),
+			)
 		}
 
 		decompressed, err := os.ReadFile(outBin)
@@ -285,7 +297,11 @@ func TestPureCDecompressorInterop(t *testing.T) {
 		}
 
 		if !bytes.Equal(decompressed, raw) {
-			t.Fatalf("Direct Heisenberg Stride 4 interop mismatch: got %d bytes, want %d bytes", len(decompressed), len(raw))
+			t.Fatalf(
+				"Direct Heisenberg Stride 4 interop mismatch: got %d bytes, want %d bytes",
+				len(decompressed),
+				len(raw),
+			)
 		}
 	})
 
@@ -337,14 +353,18 @@ func TestPureCDecompressorInterop(t *testing.T) {
 				inPrzs := filepath.Join(tmpDir, fmt.Sprintf("%s.przs", sc.name))
 				outBin := filepath.Join(tmpDir, fmt.Sprintf("%s.out", sc.name))
 
-				if err := os.WriteFile(inPrzs, przsContainer, 0644); err != nil {
+				if err := os.WriteFile(inPrzs, przsContainer, 0o644); err != nil {
 					t.Fatalf("failed to write PRZS file: %v", err)
 				}
 
 				cmd := exec.Command(cBinPath, inPrzs, outBin)
 				output, err := cmd.CombinedOutput()
 				if err != nil {
-					t.Fatalf("Pure C decompressor failed on PRZS multi-chunk stream (exit status %v):\nOutput:\n%s", err, string(output))
+					t.Fatalf(
+						"Pure C decompressor failed on PRZS multi-chunk stream (exit status %v):\nOutput:\n%s",
+						err,
+						string(output),
+					)
 				}
 
 				decompressed, err := os.ReadFile(outBin)
@@ -353,7 +373,11 @@ func TestPureCDecompressorInterop(t *testing.T) {
 				}
 
 				if !bytes.Equal(decompressed, fullOriginal) {
-					t.Fatalf("Decompressed data mismatch (got %d bytes, want %d bytes)", len(decompressed), len(fullOriginal))
+					t.Fatalf(
+						"Decompressed data mismatch (got %d bytes, want %d bytes)",
+						len(decompressed),
+						len(fullOriginal),
+					)
 				}
 
 				// Cross-check Go decompressor produces the identical bitstream

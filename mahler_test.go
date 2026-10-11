@@ -193,7 +193,11 @@ func TestMahler_EndToEndPipeline(t *testing.T) {
 	}
 
 	if !bytes.Equal(decompressed, data) {
-		t.Fatalf("End-to-end Compress/Decompress mismatch for Mahler data: got len %d, want %d", len(decompressed), len(data))
+		t.Fatalf(
+			"End-to-end Compress/Decompress mismatch for Mahler data: got len %d, want %d",
+			len(decompressed),
+			len(data),
+		)
 	}
 }
 
@@ -311,10 +315,9 @@ func BenchmarkDecompressMahler_Throughput(b *testing.B) {
 	dst := make([]byte, n+64)
 
 	b.SetBytes(int64(n))
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := DecompressMahler(compressed, dst); err != nil {
 			b.Fatalf("Decompress failed: %v", err)
 		}

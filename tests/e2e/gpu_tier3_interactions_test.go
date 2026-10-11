@@ -68,7 +68,11 @@ func TestTier3_GPU_Multithreading_Pairwise(t *testing.T) {
 						t.Fatalf("chunk count mismatch: got %d, want %d", streamHdr.ChunkCount, expectedChunks)
 					}
 					if streamHdr.TotalUncompressedSize != uint64(len(ds.data)) {
-						t.Fatalf("uncompressed size mismatch: got %d, want %d", streamHdr.TotalUncompressedSize, len(ds.data))
+						t.Fatalf(
+							"uncompressed size mismatch: got %d, want %d",
+							streamHdr.TotalUncompressedSize,
+							len(ds.data),
+						)
 					}
 				}
 
@@ -88,7 +92,11 @@ func TestTier3_GPU_Multithreading_Pairwise(t *testing.T) {
 					t.Fatalf("przm.DecompressTo failed: %v", err)
 				}
 				if !bytes.Equal(decompTo, ds.data) {
-					t.Fatalf("przm.DecompressTo roundtrip mismatch: got %d bytes, want %d bytes", len(decompTo), len(ds.data))
+					t.Fatalf(
+						"przm.DecompressTo roundtrip mismatch: got %d bytes, want %d bytes",
+						len(decompTo),
+						len(ds.data),
+					)
 				}
 			})
 		}
@@ -144,7 +152,11 @@ func TestTier3_GPU_ChunkSizes_Pairwise(t *testing.T) {
 				t.Fatalf("unexpected chunk count: got %d, want %d", streamHdr.ChunkCount, expectedChunks)
 			}
 			if streamHdr.TotalUncompressedSize != uint64(len(data)) {
-				t.Fatalf("total uncompressed size mismatch: got %d, want %d", streamHdr.TotalUncompressedSize, len(data))
+				t.Fatalf(
+					"total uncompressed size mismatch: got %d, want %d",
+					streamHdr.TotalUncompressedSize,
+					len(data),
+				)
 			}
 
 			// Validate bit-exact lossless roundtrip
@@ -213,7 +225,12 @@ func TestTier3_GPU_VaryingLevels_Pairwise(t *testing.T) {
 				}
 
 				if !bytes.Equal(decomp, src) {
-					t.Fatalf("lossless roundtrip mismatch at level %d: got %d bytes, want %d", lvl, len(decomp), len(src))
+					t.Fatalf(
+						"lossless roundtrip mismatch at level %d: got %d bytes, want %d",
+						lvl,
+						len(decomp),
+						len(src),
+					)
 				}
 			})
 		}

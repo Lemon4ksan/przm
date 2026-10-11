@@ -192,4 +192,3 @@ func padicInverseWord64_SWAR(data []byte) {
 		ptr[i] = acc
 	}
 }
-

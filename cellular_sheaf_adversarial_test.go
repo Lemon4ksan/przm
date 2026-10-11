@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/lemon4ksan/foundation/bufkit"
+
 	"github.com/lemon4ksan/przm"
 )
 
@@ -58,13 +59,22 @@ func TestAdversarial_CoboundaryNilpotency_50K(t *testing.T) {
 		// Verify every face curl is identically zero
 		for idx, val := range c {
 			if val != 0 {
-				t.Fatalf("[Iteration %d] Nilpotency violation! M=%d, W=%d, Twist=0x%02X: (d1 ∘ d0)(phi) != 0 at face %d (val=0x%02X)",
-					iter, M, W, twist, idx, val)
+				t.Fatalf(
+					"[Iteration %d] Nilpotency violation! M=%d, W=%d, Twist=0x%02X: (d1 ∘ d0)(phi) != 0 at face %d (val=0x%02X)",
+					iter,
+					M,
+					W,
+					twist,
+					idx,
+					val,
+				)
 			}
 		}
 	}
 
-	t.Logf("PASS: 50,000 iterations completed. d1 ∘ d0 ≡ 0 identically holds across all 256 Galois twists and arbitrary geometries.")
+	t.Logf(
+		"PASS: 50,000 iterations completed. d1 ∘ d0 ≡ 0 identically holds across all 256 Galois twists and arbitrary geometries.",
+	)
 }
 
 // ----------------------------------------------------------------------------
@@ -181,8 +191,14 @@ func TestAdversarial_HodgeDecomposition_AdjointProperty(t *testing.T) {
 				if lhs0 != rhs0 {
 					adjoint0Failures++
 					if adjoint0Failures <= 5 {
-						t.Logf("Adjoint0 mismatch: M=%d, W=%d, Twist=0x%02X: <d0 phi, w>=0x%02X != <phi, d0^T w>=0x%02X",
-							M, W, twist, lhs0, rhs0)
+						t.Logf(
+							"Adjoint0 mismatch: M=%d, W=%d, Twist=0x%02X: <d0 phi, w>=0x%02X != <phi, d0^T w>=0x%02X",
+							M,
+							W,
+							twist,
+							lhs0,
+							rhs0,
+						)
 					}
 				}
 
@@ -215,8 +231,12 @@ func TestAdversarial_HodgeDecomposition_AdjointProperty(t *testing.T) {
 		}
 	}
 
-	t.Logf("Adjoint property summary: przm.Adjoint0 failures = %d, ReferenceAdjoint0 failures = %d, Adjoint1 failures = %d",
-		adjoint0Failures, refAdjoint0Failures, adjoint1Failures)
+	t.Logf(
+		"Adjoint property summary: przm.Adjoint0 failures = %d, ReferenceAdjoint0 failures = %d, Adjoint1 failures = %d",
+		adjoint0Failures,
+		refAdjoint0Failures,
+		adjoint1Failures,
+	)
 
 	if refAdjoint0Failures != 0 {
 		t.Fatalf("ReferenceAdjoint0 failed %d times!", refAdjoint0Failures)
@@ -227,8 +247,10 @@ func TestAdversarial_HodgeDecomposition_AdjointProperty(t *testing.T) {
 	}
 
 	if adjoint0Failures > 0 {
-		t.Errorf("[BUG CONFIRMED] przm.Adjoint0 has inverted incoming/outgoing Galois multipliers for twist > 1! Failures: %d (im(d0) ⟂ ker(d0^T) violated)",
-			adjoint0Failures)
+		t.Errorf(
+			"[BUG CONFIRMED] przm.Adjoint0 has inverted incoming/outgoing Galois multipliers for twist > 1! Failures: %d (im(d0) ⟂ ker(d0^T) violated)",
+			adjoint0Failures,
+		)
 	}
 }
 
@@ -542,7 +564,7 @@ func TestAdversarial_PureC_TwistCompatibility(t *testing.T) {
 			inPrzm := filepath.Join(tmpDir, tt.name+".przm")
 			outBin := filepath.Join(tmpDir, tt.name+".out")
 
-			if err := os.WriteFile(inPrzm, frame, 0644); err != nil {
+			if err := os.WriteFile(inPrzm, frame, 0o644); err != nil {
 				t.Fatalf("failed to write frame file: %v", err)
 			}
 
@@ -623,7 +645,7 @@ func TestAdversarial_NaturalTwistSelection_CInterop(t *testing.T) {
 	inPrzm := filepath.Join(tmpDir, "natural_twist.przm")
 	outBin := filepath.Join(tmpDir, "natural_twist.out")
 
-	if err := os.WriteFile(inPrzm, comp, 0644); err != nil {
+	if err := os.WriteFile(inPrzm, comp, 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 

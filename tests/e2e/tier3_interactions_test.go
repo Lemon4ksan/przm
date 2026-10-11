@@ -125,7 +125,6 @@ func TestTier3_08_StridePeriodic_And_DeltaMask(t *testing.T) {
 	t.Logf("Stride+Delta Flags: 0x%02X, Stride=%d", hdr.Flags, hdr.Stride)
 }
 
-
 // 10. External Dictionary + Large Window
 func TestTier3_10_Dictionary_And_LargeWindow(t *testing.T) {
 	tokens := []string{`,"sensor_id":`, `,"reading_val":`, `,"unit":"celsius"`}
@@ -136,7 +135,12 @@ func TestTier3_10_Dictionary_And_LargeWindow(t *testing.T) {
 
 	var buf bytes.Buffer
 	for i := range 500 {
-		fmt.Fprintf(&buf, `{"sensor_id":"temp-%03d","reading_val":%.2f,"unit":"celsius"}`+"\n", i%20, 20.0+float64(i%50)/5.0)
+		fmt.Fprintf(
+			&buf,
+			`{"sensor_id":"temp-%03d","reading_val":%.2f,"unit":"celsius"}`+"\n",
+			i%20,
+			20.0+float64(i%50)/5.0,
+		)
 	}
 	data := buf.Bytes()
 
@@ -199,7 +203,6 @@ func TestTier3_12_InterleavedEntropy_And_CorruptedOffset(t *testing.T) {
 		_, _ = przm.Decompress(corrupted)
 	})
 }
-
 
 // 14. Block Dedup + Zero-Heap DecompressTo
 func TestTier3_14_BlockDedup_And_ZeroHeapDecompressTo(t *testing.T) {

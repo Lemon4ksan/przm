@@ -30,9 +30,7 @@ const (
 	HMDSModeCompressed uint8  = 2 // 4-channel hyperbolic embedding + cascaded PWS
 )
 
-var (
-	ErrHMDSCorrupt = errors.New("przm: hmds block corrupted")
-)
+var ErrHMDSCorrupt = errors.New("przm: hmds block corrupted")
 
 // HyperbolicCoord4 represents a point in 4D Minkowski space M^4 with x0^2 - sum(xi^2) = 1.
 type HyperbolicCoord4 struct {
@@ -344,7 +342,7 @@ func encodeHMDSRaw(src []byte) []byte {
 
 // DecompressHMDS recovers data from h-MDS compressed stream with zero allocations
 // if dst capacity is sufficient.
-func DecompressHMDS(src []byte, dst []byte) ([]byte, error) {
+func DecompressHMDS(src, dst []byte) ([]byte, error) {
 	if len(src) < 9 {
 		return nil, ErrHMDSCorrupt
 	}

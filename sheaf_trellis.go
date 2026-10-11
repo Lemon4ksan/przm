@@ -42,7 +42,7 @@ func NewRepQueue4() RepQueue4 {
 }
 
 // Update rotates or promotes distance d to the head (slot 0).
-func (rq *RepQueue4) Update(slot int, d int) {
+func (rq *RepQueue4) Update(slot, d int) {
 	switch slot {
 	case 0:
 		rq.Q[0] = d
@@ -142,7 +142,7 @@ func TropicalVecMul4(d *TropicalVector4, W *TropicalMatrix4, out *TropicalVector
 
 // BlellochReduction computes the associative reduction of an array of transition matrices
 // across a horizon H using a parallel reduction tree in O(log H) span.
-func BlellochReduction(m []TropicalMatrix4, tree []TropicalMatrix4) TropicalMatrix4 {
+func BlellochReduction(m, tree []TropicalMatrix4) TropicalMatrix4 {
 	n := len(m)
 	if n == 0 {
 		return TropicalIdentity4()
@@ -167,7 +167,7 @@ func BlellochReduction(m []TropicalMatrix4, tree []TropicalMatrix4) TropicalMatr
 
 // BlellochPrefixScan computes all inclusive prefix products P[t] = M[0] (x) ... (x) M[t]
 // across horizon H using Blelloch's parallel prefix scan (up-sweep reduction tree and down-sweep scan).
-func BlellochPrefixScan(m []TropicalMatrix4, prefixes []TropicalMatrix4, tree []TropicalMatrix4) {
+func BlellochPrefixScan(m, prefixes, tree []TropicalMatrix4) {
 	n := len(m)
 	if n == 0 {
 		return
@@ -300,7 +300,7 @@ func SheafDecompose4(src []byte, f0, f1, f2, f3 *[]byte) {
 
 // SheafCollate4 interleaves 4 étale fiber sections back into the original sequence.
 // Theorem 34: Collate o sigma == Id (100% Bit-Exact Lossless).
-func SheafCollate4(dst []byte, f0, f1, f2, f3 []byte) {
+func SheafCollate4(dst, f0, f1, f2, f3 []byte) {
 	n := len(dst)
 	i := 0
 	j := 0
@@ -499,19 +499,10 @@ func CompressSheafTrellis(src []byte) []byte {
 	return dst
 }
 
-type matchCand struct {
-	mType   int // 1: Rep, 2: Explicit
-	repSlot int
-	dist    int
-	length  int
-	cost    int
-	score   int
-}
-
 // encodeTrellisStream implements Theorem 35: Tropical Min-Plus Trellis Parser
 // with 4-Slot Rep-Queue recurrent state tracking, 16/32-bit SWAR match gating,
 // and associative semiring horizon parsing. Zero heap allocations during parsing.
-func encodeTrellisStream(src []byte, out []byte, pad *sheafScratchpad) []byte {
+func encodeTrellisStream(src, out []byte, pad *sheafScratchpad) []byte {
 	n := len(src)
 	out = out[:0]
 	rq := NewRepQueue4()
@@ -899,7 +890,14 @@ func decodeTrellisPayload(payload, dst []byte) error {
 			// Literal Run: length = token + 1 (1 to 128)
 			runLen := int(token) + 1
 			if srcPtr+runLen > srcLen || dstPos+runLen > origLen {
-				return fmt.Errorf("literal overflow: srcPtr=%d, runLen=%d, srcLen=%d, dstPos=%d, origLen=%d", srcPtr, runLen, srcLen, dstPos, origLen)
+				return fmt.Errorf(
+					"literal overflow: srcPtr=%d, runLen=%d, srcLen=%d, dstPos=%d, origLen=%d",
+					srcPtr,
+					runLen,
+					srcLen,
+					dstPos,
+					origLen,
+				)
 			}
 			pSrc := unsafe.Pointer(&payload[srcPtr])
 			pDst := unsafe.Add(baseDst, dstPos)
@@ -933,7 +931,14 @@ func decodeTrellisPayload(payload, dst []byte) error {
 			}
 			d := rq.Q[repIdx]
 			if d <= 0 || dstPos < d || dstPos+mLen > origLen {
-				return fmt.Errorf("rep match invalid: repIdx=%d, d=%d, dstPos=%d, mLen=%d, origLen=%d", repIdx, d, dstPos, mLen, origLen)
+				return fmt.Errorf(
+					"rep match invalid: repIdx=%d, d=%d, dstPos=%d, mLen=%d, origLen=%d",
+					repIdx,
+					d,
+					dstPos,
+					mLen,
+					origLen,
+				)
 			}
 
 			// Copy match via vector memory block store
@@ -945,7 +950,7 @@ func decodeTrellisPayload(payload, dst []byte) error {
 			lenCode := int(token & 0x1F)
 			mLen := lenCode + 3
 			if srcPtr+2 > srcLen {
-				return fmt.Errorf("truncated explicit match offset")
+				return errors.New("truncated explicit match offset")
 			}
 			d := int(binary.LittleEndian.Uint16(payload[srcPtr : srcPtr+2]))
 			srcPtr += 2
@@ -955,7 +960,13 @@ func decodeTrellisPayload(payload, dst []byte) error {
 				mLen = 34 + int(extra)
 			}
 			if d <= 0 || dstPos < d || dstPos+mLen > origLen {
-				return fmt.Errorf("explicit match invalid: d=%d, dstPos=%d, mLen=%d, origLen=%d", d, dstPos, mLen, origLen)
+				return fmt.Errorf(
+					"explicit match invalid: d=%d, dstPos=%d, mLen=%d, origLen=%d",
+					d,
+					dstPos,
+					mLen,
+					origLen,
+				)
 			}
 
 			copyMatch(baseDst, dstPos, dstPos-d, mLen, d)
@@ -965,7 +976,13 @@ func decodeTrellisPayload(payload, dst []byte) error {
 	}
 
 	if dstPos != origLen {
-		return fmt.Errorf("dstPos mismatch: dstPos=%d, origLen=%d, srcPtr=%d, srcLen=%d", dstPos, origLen, srcPtr, srcLen)
+		return fmt.Errorf(
+			"dstPos mismatch: dstPos=%d, origLen=%d, srcPtr=%d, srcLen=%d",
+			dstPos,
+			origLen,
+			srcPtr,
+			srcLen,
+		)
 	}
 	return nil
 }

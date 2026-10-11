@@ -7,7 +7,6 @@ package przm
 import (
 	"encoding/binary"
 	"errors"
-	"sync"
 
 	"github.com/lemon4ksan/foundation/bufkit"
 )
@@ -17,10 +16,10 @@ import (
 const (
 	SymplecticMagic uint32 = 0x53594D50 // "SYMP"
 
-	SymplecticModeRaw        uint8 = 0
-	SymplecticModeShear      uint8 = 1 // Sp(4, F_{2^8}) Involutive Transvection T_S
-	SymplecticModeTwistor    uint8 = 2 // Projective Twistor Dyad Collimation
-	SymplecticModeCompressed uint8 = 3 // Sp(4, F_{2^8}) Shear cascaded with PWS AVX-Wave
+	SymplecticModeRaw           uint8 = 0
+	SymplecticModeShear         uint8 = 1 // Sp(4, F_{2^8}) Involutive Transvection T_S
+	SymplecticModeTwistor       uint8 = 2 // Projective Twistor Dyad Collimation
+	SymplecticModeCompressed    uint8 = 3 // Sp(4, F_{2^8}) Shear cascaded with PWS AVX-Wave
 	SymplecticModeSp8           uint8 = 4 // Sp(8, F_{2^8}) 8-channel AVX2 Involutive Transvection
 	SymplecticModeDirectSum     uint8 = 5 // Sp(4) ⊕ Sp(4) Direct Sum Symplectic Transvection
 	SymplecticModeSp8Compressed uint8 = 6 // Sp(8) Transvection cascaded with PWS/LZ77
@@ -192,18 +191,6 @@ func EstimateOptimalSymplecticShear(data []byte) (SymplecticShear, float64) {
 
 	gain := float64(bestZeros-baseZeros) / float64(numVecs*2)
 	return bestShear, gain
-}
-
-type symplecticScratchpad struct {
-	buf []byte
-}
-
-var symplecticPool = sync.Pool{
-	New: func() any {
-		return &symplecticScratchpad{
-			buf: make([]byte, 65536),
-		}
-	},
 }
 
 // EstimateOptimalSymplecticShear8 evaluates whether 8D symplectic transvection

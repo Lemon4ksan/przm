@@ -185,7 +185,17 @@ func TestTwistor_Theorem31_DyadFactorization(t *testing.T) {
 				// Verify reconstructed coordinates match
 				rx0, rx1, rx2, rx3 := factored.Expand()
 				if rx0 != x0 || rx1 != x1 || rx2 != x2 || rx3 != x3 {
-					t.Fatalf("Dyad expansion mismatch: (%d,%d,%d,%d) vs (%d,%d,%d,%d)", rx0, rx1, rx2, rx3, x0, x1, x2, x3)
+					t.Fatalf(
+						"Dyad expansion mismatch: (%d,%d,%d,%d) vs (%d,%d,%d,%d)",
+						rx0,
+						rx1,
+						rx2,
+						rx3,
+						x0,
+						x1,
+						x2,
+						x3,
+					)
 				}
 			}
 		}
@@ -225,7 +235,11 @@ func TestSymplectic_EndToEndPipeline(t *testing.T) {
 	}
 
 	if !bytes.Equal(decompressed, data) {
-		t.Fatalf("End-to-end Compress/Decompress mismatch for Phase 12 data: got len %d, want %d", len(decompressed), len(data))
+		t.Fatalf(
+			"End-to-end Compress/Decompress mismatch for Phase 12 data: got len %d, want %d",
+			len(decompressed),
+			len(data),
+		)
 	}
 }
 
@@ -241,10 +255,9 @@ func BenchmarkDecompressSymplectic_Throughput(b *testing.B) {
 	dst := make([]byte, n+64)
 
 	b.SetBytes(int64(n))
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := DecompressSymplectic(compressed, dst); err != nil {
 			b.Fatalf("Decompress failed: %v", err)
 		}

@@ -5,7 +5,9 @@
 package przm
 
 // Galois Field F_{2^8} configuration with AES irreducible polynomial:
-//   p(x) = x^8 + x^4 + x^3 + x + 1 (0x11B = 283)
+//
+//	p(x) = x^8 + x^4 + x^3 + x + 1 (0x11B = 283)
+//
 // Using primitive generator g = 0x03.
 const (
 	gfPoly uint16 = 0x11B

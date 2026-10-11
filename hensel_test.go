@@ -95,8 +95,13 @@ func TestHensel_TheoremHL2_PruningCorrectness(t *testing.T) {
 				maxLift := 4 + (bits.TrailingZeros32(diff) >> 3)
 				pruned := maxLift <= bestLen
 				if pruned && trueLCP > bestLen {
-					t.Fatalf("Theorem HL-2 violation! Candidate with trueLCP=%d > bestLen=%d was pruned! (maxLift=%d, diff=%08x)",
-						trueLCP, bestLen, maxLift, diff)
+					t.Fatalf(
+						"Theorem HL-2 violation! Candidate with trueLCP=%d > bestLen=%d was pruned! (maxLift=%d, diff=%08x)",
+						trueLCP,
+						bestLen,
+						maxLift,
+						diff,
+					)
 				}
 			}
 		}
@@ -219,8 +224,12 @@ func TestHensel_Roundtrip_Levels3And4(t *testing.T) {
 			gen: func() []byte {
 				var buf bytes.Buffer
 				for i := range 300 {
-					fmt.Fprintf(&buf, `{"id":%d,"metric":"cpu_usage","val":%.2f,"tags":["us-west","prod","worker"]}`+"\n",
-						1000+i, float64(i%100)/3.0)
+					fmt.Fprintf(
+						&buf,
+						`{"id":%d,"metric":"cpu_usage","val":%.2f,"tags":["us-west","prod","worker"]}`+"\n",
+						1000+i,
+						float64(i%100)/3.0,
+					)
 				}
 				return buf.Bytes()
 			},
@@ -421,8 +430,16 @@ func TestHensel_CompressionRatioMeasurements(t *testing.T) {
 			gen: func() []byte {
 				var buf bytes.Buffer
 				for i := 0; buf.Len() < 64*1024; i++ {
-					fmt.Fprintf(&buf, `{"index":%d,"guid":"%08x-%04x-%04x","active":true,"balance":%.2f,"name":"User %d"}`+"\n",
-						i, i*7919, i%1000, i%500, float64(i)*1.37, i)
+					fmt.Fprintf(
+						&buf,
+						`{"index":%d,"guid":"%08x-%04x-%04x","active":true,"balance":%.2f,"name":"User %d"}`+"\n",
+						i,
+						i*7919,
+						i%1000,
+						i%500,
+						float64(i)*1.37,
+						i,
+					)
 				}
 				return buf.Bytes()[:64*1024]
 			},
@@ -464,8 +481,13 @@ func workerLoop%d(in <-chan Task, out chan<- Result) error {
 			gen: func() []byte {
 				var buf bytes.Buffer
 				for i := 0; buf.Len() < 64*1024; i++ {
-					fmt.Fprintf(&buf, "[2026-10-01 12:00:%02d.123] [INFO] [cluster.worker.%d] Heartbeat acknowledged from node-%d (latency=1.2ms, status=HEALTHY)\n",
-						i%60, i%8, i%8)
+					fmt.Fprintf(
+						&buf,
+						"[2026-10-01 12:00:%02d.123] [INFO] [cluster.worker.%d] Heartbeat acknowledged from node-%d (latency=1.2ms, status=HEALTHY)\n",
+						i%60,
+						i%8,
+						i%8,
+					)
 				}
 				return buf.Bytes()[:64*1024]
 			},

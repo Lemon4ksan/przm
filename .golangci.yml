@@ -1,0 +1,121 @@
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+    - golines
+
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/lemon4ksan/przm)
+
+    gofumpt:
+      module-path: github.com/lemon4ksan/przm
+      extra:
+        group-params: true
+
+    goimports:
+      local-prefixes:
+        - github.com/lemon4ksan/przm
+
+    golines:
+      max-len: 120
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - revive
+    - bodyclose
+    - nilerr
+    - noctx
+    - errorlint
+    - protogetter
+    - gocritic
+    - prealloc
+    - perfsprint
+    - gosec
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+
+    gocritic:
+      disabled-checks:
+        - captLocal
+        - elseif
+        - ifElseChain
+        - unlambda
+
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - std-error-handling
+    rules:
+      - linters: [errcheck, revive, staticcheck, protogetter]
+        path: .*(pb\.go|generated\.go)
+
+      - linters: [errcheck]
+        path: "gpu[/\\\\].*"
+
+      - linters: [gosec]
+        text: "G103:"
+
+      - linters: [gosec]
+        text: "G104:"
+
+      - linters: [gosec]
+        text: "G404:"
+
+      - linters: [gosec]
+        text: "G115:"
+
+      - linters: [gosec]
+        text: "G407:"
+
+      - linters: [gosec]
+        text: "G306:|G301:"
+
+      - linters: [gosec]
+        text: "G602:"
+
+      - linters: [staticcheck]
+        text: "QF1003:"
+
+      - linters: [revive]
+        path: "_test\\.go"
+        text: "exported: (exported|comment on exported)"
+
+      - linters: [gosec, noctx, bodyclose, errcheck, prealloc, staticcheck, errorlint, gocritic, unused, perfsprint, ineffassign]
+        path: "_test\\.go"
+
+      - linters: [gosec]
+        text: "G703:|G706:"
+        path: "(cmd|scripts|tools|gpu)[/\\\\].*"
+
+      - linters: [gosec, noctx, bodyclose, errcheck, prealloc, staticcheck, errorlint, gocritic, unused, perfsprint, ineffassign]
+        path: "(tests[/\\\\].*|bench[/\\\\].*|tools[/\\\\].*)"
+
+    paths:
+      - "scratch/.*"
+      - "archive/.*"
+      - "tools/.*"
+      - "bench/.*"
+      - "tests/bench_mt/.*"
+      - "vans_simd\\.go"

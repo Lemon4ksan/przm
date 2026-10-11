@@ -153,15 +153,6 @@ func main() {
 			},
 		},
 		{
-			Name: "TDA Boundary Annihilation",
-			Compress: func(data []byte) ([]byte, error) {
-				return przm.CompressTDA(data), nil
-			},
-			DecompTo: func(comp, dst []byte) ([]byte, error) {
-				return przm.DecompressTDA(comp, dst)
-			},
-		},
-		{
 			Name: "PWS Grammar (AVX-Wave)",
 			Compress: func(data []byte) ([]byte, error) {
 				return przm.PWSEncode(data)

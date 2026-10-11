@@ -84,7 +84,11 @@ func TestSpectral_Theorem24_OffDiagonalEntropyReduction(t *testing.T) {
 	scoreAfter := OffDiagonalSum(rhoAfter)
 
 	if scoreAfter > scoreBefore {
-		t.Fatalf("Off-diagonal score increased after unitary diagonalization: before %d, after %d", scoreBefore, scoreAfter)
+		t.Fatalf(
+			"Off-diagonal score increased after unitary diagonalization: before %d, after %d",
+			scoreBefore,
+			scoreAfter,
+		)
 	}
 }
 
@@ -121,10 +125,9 @@ func BenchmarkSpectralDecompress(b *testing.B) {
 
 	dst := make([]byte, len(data))
 	b.SetBytes(int64(len(data)))
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := DecompressSpectralUnitary(enc, dst)
 		if err != nil {
 			b.Fatal(err)

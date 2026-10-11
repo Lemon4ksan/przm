@@ -146,4 +146,3 @@ func BenchmarkHuffman(b *testing.B) {
 		}
 	})
 }
-

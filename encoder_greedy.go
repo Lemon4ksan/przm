@@ -143,15 +143,16 @@ func (e *greedyBlockEncoder) flushLiterals(literals []byte) {
 func (e *greedyBlockEncoder) extendMatch(pos, distance, maxLen int) int {
 	mLen := 4
 	if e.minMatch == 3 {
-		mLen = 3
-		if pos+3 < e.uSize && pos-distance+3 < e.uSize && e.src[pos+3] == e.src[pos-distance+3] {
-			mLen = 4
-		} else {
+		if pos+3 >= e.uSize || pos-distance+3 >= e.uSize || e.src[pos+3] != e.src[pos-distance+3] {
 			return 3
 		}
 	}
 	for pos+mLen+8 <= e.uSize && mLen+8 <= maxLen {
-		diff := binary.LittleEndian.Uint64(e.src[pos+mLen:pos+mLen+8]) ^ binary.LittleEndian.Uint64(e.src[pos-distance+mLen:pos-distance+mLen+8])
+		diff := binary.LittleEndian.Uint64(
+			e.src[pos+mLen:pos+mLen+8],
+		) ^ binary.LittleEndian.Uint64(
+			e.src[pos-distance+mLen:pos-distance+mLen+8],
+		)
 		if diff != 0 {
 			return mLen + (bits.TrailingZeros64(diff) >> 3)
 		}
@@ -159,7 +160,11 @@ func (e *greedyBlockEncoder) extendMatch(pos, distance, maxLen int) int {
 		if mLen >= 32 && pos+maxLen <= e.uSize {
 			rem := maxLen - mLen
 			if rem >= 32 {
-				return mLen + simd.FindMatchLengthVector(e.src[pos+mLen:pos+maxLen], e.src[pos-distance+mLen:pos-distance+maxLen], rem)
+				return mLen + simd.FindMatchLengthVector(
+					e.src[pos+mLen:pos+maxLen],
+					e.src[pos-distance+mLen:pos-distance+maxLen],
+					rem,
+				)
 			}
 		}
 	}
@@ -179,12 +184,18 @@ func (e *greedyBlockEncoder) evalCandidate(pos, distance, maxLen int) matchCandi
 				return matchCandidate{}
 			}
 		} else {
-			if e.src[pos] != e.src[pos-distance] || e.src[pos+1] != e.src[pos-distance+1] || e.src[pos+2] != e.src[pos-distance+2] {
+			if e.src[pos] != e.src[pos-distance] || e.src[pos+1] != e.src[pos-distance+1] ||
+				e.src[pos+2] != e.src[pos-distance+2] {
 				return matchCandidate{}
 			}
 		}
 	} else {
-		if pos+4 > e.uSize || pos-distance+4 > e.uSize || binary.LittleEndian.Uint32(e.src[pos:pos+4]) != binary.LittleEndian.Uint32(e.src[pos-distance:pos-distance+4]) {
+		if pos+4 > e.uSize || pos-distance+4 > e.uSize ||
+			binary.LittleEndian.Uint32(
+				e.src[pos:pos+4],
+			) != binary.LittleEndian.Uint32(
+				e.src[pos-distance:pos-distance+4],
+			) {
 			return matchCandidate{}
 		}
 	}
@@ -333,7 +344,11 @@ func (e *greedyBlockEncoder) checkDelta(pos, blockEnd, distance, ringK int, best
 	if distance < 14 || pos < distance || pos+8 > blockEnd || pos-distance+8 > e.uSize {
 		return
 	}
-	diff8 := binary.LittleEndian.Uint64(e.src[pos:pos+8]) ^ binary.LittleEndian.Uint64(e.src[pos-distance:pos-distance+8])
+	diff8 := binary.LittleEndian.Uint64(
+		e.src[pos:pos+8],
+	) ^ binary.LittleEndian.Uint64(
+		e.src[pos-distance:pos-distance+8],
+	)
 	if diff8 != 0 {
 		hasZero := (diff8 - 0x0101010101010101) & ^diff8 & 0x8080808080808080
 		zeroBytes := bits.OnesCount64(hasZero)
@@ -356,7 +371,11 @@ func (e *greedyBlockEncoder) checkDelta(pos, blockEnd, distance, ringK int, best
 	i := 0
 	for i < checkLimit {
 		if i+8 <= checkLimit {
-			diff := binary.LittleEndian.Uint64(e.src[pos+i:pos+i+8]) ^ binary.LittleEndian.Uint64(e.src[pos-distance+i:pos-distance+i+8])
+			diff := binary.LittleEndian.Uint64(
+				e.src[pos+i:pos+i+8],
+			) ^ binary.LittleEndian.Uint64(
+				e.src[pos-distance+i:pos-distance+i+8],
+			)
 			if diff == 0 {
 				i += 8
 				curLen = i
@@ -442,7 +461,7 @@ func (e *greedyBlockEncoder) findBest(pos, blockEnd int) matchCandidate {
 	best := matchCandidate{}
 
 	if e.activeMatcher != nil {
-		tokIdx, transOp, tokLen, cost, score, pairTok2 := e.activeMatcher.match(e.src, pos)
+		tokIdx, transOp, tokLen, cost, _, pairTok2 := e.activeMatcher.match(e.src, pos)
 		if tokLen >= 3 && tokLen <= maxBlockLen {
 			var mType int
 			dictBonus := 0
@@ -458,7 +477,7 @@ func (e *greedyBlockEncoder) findBest(pos, blockEnd int) matchCandidate {
 					dictBonus = 2
 				}
 			}
-			score = tokLen - cost + dictBonus
+			score := tokLen - cost + dictBonus
 			if score > best.score && score >= 1 {
 				best = matchCandidate{
 					mType:    mType,
@@ -584,17 +603,32 @@ func (e *greedyBlockEncoder) findBest(pos, blockEnd int) matchCandidate {
 
 	// 2. Check 3 repeat offset registers (rep0, rep1, rep2)
 	if *e.rep0 > 0 && *e.rep0 != candidateDistance0 {
-		if cand := e.evalCandidate(pos, *e.rep0, maxBlockLen); cand.score > best.score || (cand.length >= best.length-1 && cand.length >= e.minMatch && best.mType >= 4) || (cand.length >= best.length && cand.length >= e.minMatch) {
+		if cand := e.evalCandidate(
+			pos,
+			*e.rep0,
+			maxBlockLen,
+		); cand.score > best.score || (cand.length >= best.length-1 && cand.length >= e.minMatch && best.mType >= 4) ||
+			(cand.length >= best.length && cand.length >= e.minMatch) {
 			best = cand
 		}
 	}
 	if *e.rep1 > 0 && *e.rep1 != candidateDistance0 && *e.rep1 != *e.rep0 {
-		if cand := e.evalCandidate(pos, *e.rep1, maxBlockLen); cand.score > best.score || (cand.length >= best.length-1 && cand.length >= e.minMatch && best.mType >= 4) || (cand.length >= best.length && cand.length >= e.minMatch) {
+		if cand := e.evalCandidate(
+			pos,
+			*e.rep1,
+			maxBlockLen,
+		); cand.score > best.score || (cand.length >= best.length-1 && cand.length >= e.minMatch && best.mType >= 4) ||
+			(cand.length >= best.length && cand.length >= e.minMatch) {
 			best = cand
 		}
 	}
 	if *e.rep2 > 0 && *e.rep2 != candidateDistance0 && *e.rep2 != *e.rep1 && *e.rep2 != *e.rep0 {
-		if cand := e.evalCandidate(pos, *e.rep2, maxBlockLen); cand.score > best.score || (cand.length >= best.length-1 && cand.length >= e.minMatch && best.mType >= 4) || (cand.length >= best.length && cand.length >= e.minMatch) {
+		if cand := e.evalCandidate(
+			pos,
+			*e.rep2,
+			maxBlockLen,
+		); cand.score > best.score || (cand.length >= best.length-1 && cand.length >= e.minMatch && best.mType >= 4) ||
+			(cand.length >= best.length && cand.length >= e.minMatch) {
 			best = cand
 		}
 	}
@@ -617,7 +651,12 @@ func (e *greedyBlockEncoder) findBest(pos, blockEnd int) matchCandidate {
 	if e.hasStride && best.length < 8 {
 		for m := 3; m <= 8; m++ {
 			distance := m * e.stride
-			if pos >= distance && pos+4 <= blockEnd && binary.LittleEndian.Uint32(e.src[pos:pos+4]) == binary.LittleEndian.Uint32(e.src[pos-distance:pos-distance+4]) {
+			if pos >= distance && pos+4 <= blockEnd &&
+				binary.LittleEndian.Uint32(
+					e.src[pos:pos+4],
+				) == binary.LittleEndian.Uint32(
+					e.src[pos-distance:pos-distance+4],
+				) {
 				mLen := e.extendMatch(pos, distance, min(maxBlockLen, 19))
 				if mLen >= e.minMatch {
 					cost := 2
@@ -734,7 +773,8 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 
 	for pos+e.minMatch <= blockEnd {
 		// 1. RLE Check (run of identical bytes >= 12)
-		if pos+12 <= blockEnd && e.src[pos] == e.src[pos+1] && e.src[pos] == e.src[pos+2] && e.src[pos] == e.src[pos+3] {
+		if pos+12 <= blockEnd && e.src[pos] == e.src[pos+1] && e.src[pos] == e.src[pos+2] &&
+			e.src[pos] == e.src[pos+3] {
 			rleByte := e.src[pos]
 			rleLen := 4
 			for pos+rleLen < blockEnd && e.src[pos+rleLen] == rleByte && rleLen < 65535 {
@@ -777,7 +817,8 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 						preferNext = true
 					}
 				} else if best.mType >= 4 && (nextBest.mType == 1 || nextBest.mType == 3 || nextBest.mType == 7 || nextBest.mType == 8) {
-					if nextBest.length >= best.length-2 || (e.level >= 6 && nextBest.ringK == 0 && nextBest.length >= best.length-3 && best.distance >= 16384) {
+					if nextBest.length >= best.length-2 ||
+						(e.level >= 6 && nextBest.ringK == 0 && nextBest.length >= best.length-3 && best.distance >= 16384) {
 						preferNext = true
 					}
 				}
@@ -982,7 +1023,12 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 					e.flushLiterals(e.src[literalStart:pos])
 				}
 				if best.transOp == OpcodePrefixTransPair {
-					e.pad.cmdBuf = append(e.pad.cmdBuf, OpcodePrefixTransPair, uint8(best.dictTok), uint8(best.pairTok2))
+					e.pad.cmdBuf = append(
+						e.pad.cmdBuf,
+						OpcodePrefixTransPair,
+						uint8(best.dictTok),
+						uint8(best.pairTok2),
+					)
 				} else if best.transOp != 0 {
 					e.pad.cmdBuf = append(e.pad.cmdBuf, best.transOp, uint8(best.dictTok))
 				} else {

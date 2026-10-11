@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 
 	"github.com/lemon4ksan/foundation/generic"
+
 	"github.com/lemon4ksan/przm/gpu"
 )
 
@@ -268,7 +269,6 @@ func tryCompressGPU(src []byte, opts CompressOptions, pad *scratchpad) (out []by
 				}
 				if ctxSheafOk && len(ctxSheafOut) < bestLen {
 					vansOut = ctxSheafOut
-					bestLen = len(ctxSheafOut)
 					vansBeatsRaw = true
 				}
 			}

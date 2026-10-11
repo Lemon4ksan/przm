@@ -65,7 +65,13 @@ func TestChallenger_PureCDecompressor_GoMT_Interop(t *testing.T) {
 			generator: func(sz int) []byte {
 				var b bytes.Buffer
 				for b.Len() < sz {
-					fmt.Fprintf(&b, `{"sensor_id":"s_%d","temp":%d,"alert":%t},`, b.Len()%100, 20+(b.Len()%15), b.Len()%50 == 0)
+					fmt.Fprintf(
+						&b,
+						`{"sensor_id":"s_%d","temp":%d,"alert":%t},`,
+						b.Len()%100,
+						20+(b.Len()%15),
+						b.Len()%50 == 0,
+					)
 				}
 				return b.Bytes()[:sz]
 			},
@@ -79,7 +85,7 @@ func TestChallenger_PureCDecompressor_GoMT_Interop(t *testing.T) {
 			generator: func(sz int) []byte {
 				buf := make([]byte, sz)
 				for i := range buf {
-					buf[i] = byte((i * 37 + (i >> 5) * 19) & 0xFF)
+					buf[i] = byte((i*37 + (i>>5)*19) & 0xFF)
 				}
 				return buf
 			},
@@ -123,7 +129,7 @@ func TestChallenger_PureCDecompressor_GoMT_Interop(t *testing.T) {
 			inPrzs := filepath.Join(tmpDir, fmt.Sprintf("%s.przs", tc.name))
 			outBin := filepath.Join(tmpDir, fmt.Sprintf("%s.out", tc.name))
 
-			if err := os.WriteFile(inPrzs, compressed, 0644); err != nil {
+			if err := os.WriteFile(inPrzs, compressed, 0o644); err != nil {
 				t.Fatalf("Failed to write compressed file: %v", err)
 			}
 
@@ -168,7 +174,7 @@ func TestChallenger_PureCDecompressor_GoMT_Interop(t *testing.T) {
 		// 1. Truncated file (cut in half)
 		truncPrzs := filepath.Join(tmpDir, "trunc.przs")
 		truncOut := filepath.Join(tmpDir, "trunc.out")
-		if err := os.WriteFile(truncPrzs, comp[:len(comp)/2], 0644); err != nil {
+		if err := os.WriteFile(truncPrzs, comp[:len(comp)/2], 0o644); err != nil {
 			t.Fatal(err)
 		}
 		cmd := exec.Command(cBinPath, truncPrzs, truncOut)
@@ -183,7 +189,7 @@ func TestChallenger_PureCDecompressor_GoMT_Interop(t *testing.T) {
 		corruptComp[21] = 'X'
 		corruptPrzs := filepath.Join(tmpDir, "corrupt.przs")
 		corruptOut := filepath.Join(tmpDir, "corrupt.out")
-		if err := os.WriteFile(corruptPrzs, corruptComp, 0644); err != nil {
+		if err := os.WriteFile(corruptPrzs, corruptComp, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		cmd = exec.Command(cBinPath, corruptPrzs, corruptOut)

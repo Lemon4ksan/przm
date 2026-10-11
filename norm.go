@@ -40,9 +40,7 @@ const (
 	minNetSavings  = 16
 )
 
-var (
-	ErrCorruptedNormStream = errors.New("przm: corrupted normalized stream")
-)
+var ErrCorruptedNormStream = errors.New("przm: corrupted normalized stream")
 
 // NormSpan describes a single contracted Base64 or Hex span.
 type NormSpan struct {
@@ -66,8 +64,10 @@ const (
 	b64LutURL   = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 )
 
-var b64RevStd [256]int8
-var b64RevURL [256]int8
+var (
+	b64RevStd [256]int8
+	b64RevURL [256]int8
+)
 
 func init() {
 	for i := range b64RevStd {
@@ -83,7 +83,7 @@ func init() {
 }
 
 // IsWholeBlockHex checks if src consists entirely of even-length hex characters (>= 64B).
-func IsWholeBlockHex(src []byte) (isHex bool, upper bool) {
+func IsWholeBlockHex(src []byte) (isHex, upper bool) {
 	n := len(src)
 	if n < minNormSpanLen || (n%2) != 0 {
 		return false, false
@@ -188,7 +188,7 @@ func hexNibble(c byte) (byte, bool) {
 }
 
 // ContractHex contracts 2 ASCII hex characters into 1 raw byte.
-func ContractHex(src []byte, dst []byte) {
+func ContractHex(src, dst []byte) {
 	n := len(src) / 2
 	for i := range n {
 		hi, _ := hexNibble(src[2*i])
@@ -198,7 +198,7 @@ func ContractHex(src []byte, dst []byte) {
 }
 
 // ExpandHexTo expands raw binary bytes into lowercase or uppercase ASCII hex.
-func ExpandHexTo(dst []byte, src []byte, upper bool) {
+func ExpandHexTo(dst, src []byte, upper bool) {
 	lut := hexLutLower
 	if upper {
 		lut = hexLutUpper
@@ -215,7 +215,7 @@ func ExpandHexTo(dst []byte, src []byte, upper bool) {
 }
 
 // ContractBase64 contracts 4 ASCII Base64 chars into 3 raw bytes (handling trailing padding).
-func ContractBase64(src []byte, dst []byte, padCount int, urlSafe bool) int {
+func ContractBase64(src, dst []byte, padCount int, urlSafe bool) int {
 	lut := &b64RevStd
 	if urlSafe {
 		lut = &b64RevURL
@@ -257,7 +257,7 @@ func ContractBase64(src []byte, dst []byte, padCount int, urlSafe bool) int {
 }
 
 // ExpandBase64To expands raw binary bytes into 4-char ASCII Base64 chunks with padding.
-func ExpandBase64To(dst []byte, src []byte, padCount int, urlSafe bool) {
+func ExpandBase64To(dst, src []byte, padCount int, urlSafe bool) {
 	lut := b64LutStd
 	if urlSafe {
 		lut = b64LutURL
@@ -474,22 +474,52 @@ func EncodeNormSpans(src []byte, plan NormPlan, out []byte) []byte {
 			ContractHex(src[s.OrigOffset:s.OrigOffset+s.OrigLen], out[dataWritePos:dataWritePos+s.ContractedLen])
 			dataWritePos += s.ContractedLen
 		case NormSpanBase64Std:
-			ContractBase64(src[s.OrigOffset:s.OrigOffset+s.OrigLen], out[dataWritePos:dataWritePos+s.ContractedLen], 0, false)
+			ContractBase64(
+				src[s.OrigOffset:s.OrigOffset+s.OrigLen],
+				out[dataWritePos:dataWritePos+s.ContractedLen],
+				0,
+				false,
+			)
 			dataWritePos += s.ContractedLen
 		case NormSpanBase64Pad1:
-			ContractBase64(src[s.OrigOffset:s.OrigOffset+s.OrigLen], out[dataWritePos:dataWritePos+s.ContractedLen], 1, false)
+			ContractBase64(
+				src[s.OrigOffset:s.OrigOffset+s.OrigLen],
+				out[dataWritePos:dataWritePos+s.ContractedLen],
+				1,
+				false,
+			)
 			dataWritePos += s.ContractedLen
 		case NormSpanBase64Pad2:
-			ContractBase64(src[s.OrigOffset:s.OrigOffset+s.OrigLen], out[dataWritePos:dataWritePos+s.ContractedLen], 2, false)
+			ContractBase64(
+				src[s.OrigOffset:s.OrigOffset+s.OrigLen],
+				out[dataWritePos:dataWritePos+s.ContractedLen],
+				2,
+				false,
+			)
 			dataWritePos += s.ContractedLen
 		case NormSpanBase64URL:
-			ContractBase64(src[s.OrigOffset:s.OrigOffset+s.OrigLen], out[dataWritePos:dataWritePos+s.ContractedLen], 0, true)
+			ContractBase64(
+				src[s.OrigOffset:s.OrigOffset+s.OrigLen],
+				out[dataWritePos:dataWritePos+s.ContractedLen],
+				0,
+				true,
+			)
 			dataWritePos += s.ContractedLen
 		case NormSpanBase64URLPad1:
-			ContractBase64(src[s.OrigOffset:s.OrigOffset+s.OrigLen], out[dataWritePos:dataWritePos+s.ContractedLen], 1, true)
+			ContractBase64(
+				src[s.OrigOffset:s.OrigOffset+s.OrigLen],
+				out[dataWritePos:dataWritePos+s.ContractedLen],
+				1,
+				true,
+			)
 			dataWritePos += s.ContractedLen
 		case NormSpanBase64URLPad2:
-			ContractBase64(src[s.OrigOffset:s.OrigOffset+s.OrigLen], out[dataWritePos:dataWritePos+s.ContractedLen], 2, true)
+			ContractBase64(
+				src[s.OrigOffset:s.OrigOffset+s.OrigLen],
+				out[dataWritePos:dataWritePos+s.ContractedLen],
+				2,
+				true,
+			)
 			dataWritePos += s.ContractedLen
 		}
 
@@ -515,7 +545,7 @@ func EncodeNormSpans(src []byte, plan NormPlan, out []byte) []byte {
 
 // ExpandNormSpansTo expands a stream with prepended span table directly into dst[:uSize].
 // Executes with strictly 0 heap allocations.
-func ExpandNormSpansTo(dst []byte, contracted []byte) (int, error) {
+func ExpandNormSpansTo(dst, contracted []byte) (int, error) {
 	if len(contracted) < 2 {
 		return 0, ErrCorruptedNormStream
 	}

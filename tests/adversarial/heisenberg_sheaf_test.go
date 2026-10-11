@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/lemon4ksan/foundation/bufkit"
+
 	"github.com/lemon4ksan/przm"
 )
 
@@ -155,7 +156,12 @@ func TestChallengerM2_100Goroutine_ConcurrencyStress(t *testing.T) {
 	}
 
 	if len(errs) > 0 {
-		t.Fatalf("Encountered %d concurrency errors under %d goroutines! First error: %v", len(errs), numGoroutines, errs[0])
+		t.Fatalf(
+			"Encountered %d concurrency errors under %d goroutines! First error: %v",
+			len(errs),
+			numGoroutines,
+			errs[0],
+		)
 	}
 }
 
@@ -311,7 +317,11 @@ func TestChallengerM2_EmptyBuffer_EdgeCase(t *testing.T) {
 	// Calling DecompressHeisenberg directly on 0-byte slice returns nil error and 0 length (PROJECT.md Feature 4 contract)
 	dec, decErr := przm.DecompressHeisenberg(comp, nil)
 	if decErr != nil || len(dec) != 0 {
-		t.Fatalf("Expected nil error and empty slice when passing 0 bytes to DecompressHeisenberg, got: %v, len=%d", decErr, len(dec))
+		t.Fatalf(
+			"Expected nil error and empty slice when passing 0 bytes to DecompressHeisenberg, got: %v, len=%d",
+			decErr,
+			len(dec),
+		)
 	}
 
 	// Calling DecompressTo directly on 0-byte slice succeeds via wrapper guard
@@ -418,7 +428,7 @@ func TestChallengerM2_PureC_50RandomFrames_Stress(t *testing.T) {
 			inPrzm := filepath.Join(tmpDir, fmt.Sprintf("f_%d.przm", i))
 			outBin := filepath.Join(tmpDir, fmt.Sprintf("f_%d.bin", i))
 
-			if err := os.WriteFile(inPrzm, comp, 0644); err != nil {
+			if err := os.WriteFile(inPrzm, comp, 0o644); err != nil {
 				t.Fatalf("Failed to write frame file: %v", err)
 			}
 
@@ -530,7 +540,32 @@ func TestChallengerM2_MalformedFrame_Robustness(t *testing.T) {
 			},
 			{
 				name: "BadStride",
-				data: []byte{0x48, 0x45, 0x49, 0x53, 0x0C, 0x00, 0x00, 0x00, 0x05, 0x01, 0x00, 0x00, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+				data: []byte{
+					0x48,
+					0x45,
+					0x49,
+					0x53,
+					0x0C,
+					0x00,
+					0x00,
+					0x00,
+					0x05,
+					0x01,
+					0x00,
+					0x00,
+					1,
+					2,
+					3,
+					4,
+					5,
+					6,
+					7,
+					8,
+					9,
+					10,
+					11,
+					12,
+				},
 			},
 			{
 				name: "TruncatedPayload",
@@ -542,7 +577,7 @@ func TestChallengerM2_MalformedFrame_Robustness(t *testing.T) {
 			t.Run(mc.name, func(t *testing.T) {
 				inPrzm := filepath.Join(tmpDir, mc.name+".przm")
 				outBin := filepath.Join(tmpDir, mc.name+".out")
-				_ = os.WriteFile(inPrzm, mc.data, 0644)
+				_ = os.WriteFile(inPrzm, mc.data, 0o644)
 
 				cmd := exec.Command(cBinPath, inPrzm, outBin)
 				err := cmd.Run()
@@ -577,9 +612,8 @@ func BenchmarkChallengerM2_LineRateThroughput(b *testing.B) {
 
 			b.SetBytes(int64(sz))
 			b.ReportAllocs()
-			b.ResetTimer()
 
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, err := przm.DecompressHeisenberg(comp, dst)
 				if err != nil {
 					b.Fatal(err)
@@ -742,7 +776,13 @@ func TestAdversarialHeisenberg_BoundaryLengths(t *testing.T) {
 				// For stride 4, W must remain unchanged
 				if stride == 4 {
 					if buf[idx+3] != orig[idx+3] {
-						t.Fatalf("Length %d, Stride %d: Channel W corrupted at block %d (index %d)", n, stride, b, idx+3)
+						t.Fatalf(
+							"Length %d, Stride %d: Channel W corrupted at block %d (index %d)",
+							n,
+							stride,
+							b,
+							idx+3,
+						)
 					}
 				}
 			}
@@ -824,7 +864,11 @@ func TestAdversarialHeisenberg_FrameCodecBoundaryPayloads(t *testing.T) {
 			t.Logf("Size 0: compressed len = %d", len(compressed))
 			decompressed, err := przm.DecompressHeisenberg(compressed, nil)
 			if err != nil {
-				t.Logf("DISCOVERY: Size 0 DecompressHeisenberg returned error: %v (compressed len: %d)", err, len(compressed))
+				t.Logf(
+					"DISCOVERY: Size 0 DecompressHeisenberg returned error: %v (compressed len: %d)",
+					err,
+					len(compressed),
+				)
 			} else if !bytes.Equal(decompressed, orig) {
 				t.Fatalf("Size 0 mismatch: got %v, want %v", decompressed, orig)
 			}
@@ -991,7 +1035,11 @@ func TestAdversarialHeisenberg_ZeroAllocationInvariant(t *testing.T) {
 			allocsM3 := testing.AllocsPerRun(20, func() {
 				_, _ = przm.DecompressHeisenberg(comp3, dst)
 			})
-			t.Logf("Size %d: Mode 3 (Cascaded PWS) allocations: %v allocs/op (delegated to inner PWSDecode)", size, allocsM3)
+			t.Logf(
+				"Size %d: Mode 3 (Cascaded PWS) allocations: %v allocs/op (delegated to inner PWSDecode)",
+				size,
+				allocsM3,
+			)
 		}
 	}
 }
@@ -1496,13 +1544,31 @@ func TestChallenger_Sheaf_Adjoint0_OrthogonalDecomposition_12K(t *testing.T) {
 	const totalTrials = 12000
 	rng := rand.New(rand.NewSource(0xCAFE_BABE_2026))
 
-	t.Logf("Executing %d trials: Adjoint0 duality <d0 phi, psi> == <phi, d0^T psi> and orthogonal decomposition...", totalTrials)
+	t.Logf(
+		"Executing %d trials: Adjoint0 duality <d0 phi, psi> == <phi, d0^T psi> and orthogonal decomposition...",
+		totalTrials,
+	)
 
 	// Pre-define specific boundary/stress geometries
 	specialDims := [][2]int{
-		{2, 2}, {2, 3}, {3, 2}, {1, 2}, {2, 1}, {1, 10}, {10, 1}, {1, 1},
-		{4, 4}, {8, 8}, {16, 16}, {32, 32}, {3, 7}, {11, 13}, {17, 19},
-		{2, 64}, {64, 2}, {33, 17},
+		{2, 2},
+		{2, 3},
+		{3, 2},
+		{1, 2},
+		{2, 1},
+		{1, 10},
+		{10, 1},
+		{1, 1},
+		{4, 4},
+		{8, 8},
+		{16, 16},
+		{32, 32},
+		{3, 7},
+		{11, 13},
+		{17, 19},
+		{2, 64},
+		{64, 2},
+		{33, 17},
 	}
 
 	var (
@@ -1590,8 +1656,15 @@ func TestChallenger_Sheaf_Adjoint0_OrthogonalDecomposition_12K(t *testing.T) {
 		if lhs0 != rhs0 {
 			adjoint0Failures++
 			if adjoint0Failures <= 5 {
-				t.Errorf("[Trial %d] Adjoint0 failure: M=%d, W=%d, Twist=0x%02X: <d0 phi, psi>=0x%02X != <phi, d0^T psi>=0x%02X",
-					trial, M, W, twist, lhs0, rhs0)
+				t.Errorf(
+					"[Trial %d] Adjoint0 failure: M=%d, W=%d, Twist=0x%02X: <d0 phi, psi>=0x%02X != <phi, d0^T psi>=0x%02X",
+					trial,
+					M,
+					W,
+					twist,
+					lhs0,
+					rhs0,
+				)
 			}
 		}
 
@@ -1611,8 +1684,15 @@ func TestChallenger_Sheaf_Adjoint0_OrthogonalDecomposition_12K(t *testing.T) {
 			if lhs1 != rhs1 {
 				adjoint1Failures++
 				if adjoint1Failures <= 5 {
-					t.Errorf("[Trial %d] Adjoint1 failure: M=%d, W=%d, Twist=0x%02X: <d1 psi, c>=0x%02X != <psi, d1^T c>=0x%02X",
-						trial, M, W, twist, lhs1, rhs1)
+					t.Errorf(
+						"[Trial %d] Adjoint1 failure: M=%d, W=%d, Twist=0x%02X: <d1 psi, c>=0x%02X != <psi, d1^T c>=0x%02X",
+						trial,
+						M,
+						W,
+						twist,
+						lhs1,
+						rhs1,
+					)
 				}
 			}
 
@@ -1623,8 +1703,14 @@ func TestChallenger_Sheaf_Adjoint0_OrthogonalDecomposition_12K(t *testing.T) {
 			if pairingOrtho != 0 {
 				orthoDecompFailures++
 				if orthoDecompFailures <= 5 {
-					t.Errorf("[Trial %d] Orthogonal decomposition failure: <d0 phi, d1^T c>=0x%02X != 0 (M=%d, W=%d, Twist=0x%02X)",
-						trial, pairingOrtho, M, W, twist)
+					t.Errorf(
+						"[Trial %d] Orthogonal decomposition failure: <d0 phi, d1^T c>=0x%02X != 0 (M=%d, W=%d, Twist=0x%02X)",
+						trial,
+						pairingOrtho,
+						M,
+						W,
+						twist,
+					)
 				}
 			}
 		}
@@ -1711,8 +1797,15 @@ func TestChallenger_Sheaf_CoboundaryNilpotency_20K(t *testing.T) {
 			if val != 0 {
 				primalNilpotencyFailures++
 				if primalNilpotencyFailures <= 5 {
-					t.Errorf("[Trial %d] Primal nilpotency violation: M=%d, W=%d, Twist=0x%02X: (d1 ∘ d0)(phi) != 0 at face %d (val=0x%02X)",
-						trial, M, W, twist, faceIdx, val)
+					t.Errorf(
+						"[Trial %d] Primal nilpotency violation: M=%d, W=%d, Twist=0x%02X: (d1 ∘ d0)(phi) != 0 at face %d (val=0x%02X)",
+						trial,
+						M,
+						W,
+						twist,
+						faceIdx,
+						val,
+					)
 				}
 				break
 			}
@@ -1731,8 +1824,15 @@ func TestChallenger_Sheaf_CoboundaryNilpotency_20K(t *testing.T) {
 			if val != 0 {
 				dualNilpotencyFailures++
 				if dualNilpotencyFailures <= 5 {
-					t.Errorf("[Trial %d] Dual nilpotency violation: M=%d, W=%d, Twist=0x%02X: (d0^T ∘ d1^T)(c) != 0 at vertex %d (val=0x%02X)",
-						trial, M, W, twist, vIdx, val)
+					t.Errorf(
+						"[Trial %d] Dual nilpotency violation: M=%d, W=%d, Twist=0x%02X: (d0^T ∘ d1^T)(c) != 0 at vertex %d (val=0x%02X)",
+						trial,
+						M,
+						W,
+						twist,
+						vIdx,
+						val,
+					)
 				}
 				break
 			}
@@ -1758,7 +1858,10 @@ func TestChallenger_Sheaf_HodgeLaplacian_SelfAdjointness_12K(t *testing.T) {
 	const totalTrials = 12000
 	rng := rand.New(rand.NewSource(0x7001_A55A_BEEF))
 
-	t.Logf("Executing %d trials: Self-adjointness and commutation of Hodge Laplacians Delta_0 and Delta_1...", totalTrials)
+	t.Logf(
+		"Executing %d trials: Self-adjointness and commutation of Hodge Laplacians Delta_0 and Delta_1...",
+		totalTrials,
+	)
 
 	var (
 		lap0SelfAdjointFailures int
@@ -1801,8 +1904,15 @@ func TestChallenger_Sheaf_HodgeLaplacian_SelfAdjointness_12K(t *testing.T) {
 		if p0A != p0B {
 			lap0SelfAdjointFailures++
 			if lap0SelfAdjointFailures <= 5 {
-				t.Errorf("[Trial %d] Delta_0 self-adjointness failure: M=%d, W=%d, Twist=0x%02X: <Delta_0 phi, chi>=0x%02X != <phi, Delta_0 chi>=0x%02X",
-					trial, M, W, twist, p0A, p0B)
+				t.Errorf(
+					"[Trial %d] Delta_0 self-adjointness failure: M=%d, W=%d, Twist=0x%02X: <Delta_0 phi, chi>=0x%02X != <phi, Delta_0 chi>=0x%02X",
+					trial,
+					M,
+					W,
+					twist,
+					p0A,
+					p0B,
+				)
 			}
 		}
 
@@ -1813,8 +1923,12 @@ func TestChallenger_Sheaf_HodgeLaplacian_SelfAdjointness_12K(t *testing.T) {
 		if p0A != dirichlet0 {
 			lap0SelfAdjointFailures++
 			if lap0SelfAdjointFailures <= 5 {
-				t.Errorf("[Trial %d] Delta_0 energy pairing mismatch: <Delta_0 phi, chi>=0x%02X != <d0 phi, d0 chi>=0x%02X",
-					trial, p0A, dirichlet0)
+				t.Errorf(
+					"[Trial %d] Delta_0 energy pairing mismatch: <Delta_0 phi, chi>=0x%02X != <d0 phi, d0 chi>=0x%02X",
+					trial,
+					p0A,
+					dirichlet0,
+				)
 			}
 		}
 
@@ -1867,8 +1981,15 @@ func TestChallenger_Sheaf_HodgeLaplacian_SelfAdjointness_12K(t *testing.T) {
 		if p1A != p1B {
 			lap1SelfAdjointFailures++
 			if lap1SelfAdjointFailures <= 5 {
-				t.Errorf("[Trial %d] Delta_1 self-adjointness failure: M=%d, W=%d, Twist=0x%02X: <Delta_1 u, v>=0x%02X != <u, Delta_1 v>=0x%02X",
-					trial, M, W, twist, p1A, p1B)
+				t.Errorf(
+					"[Trial %d] Delta_1 self-adjointness failure: M=%d, W=%d, Twist=0x%02X: <Delta_1 u, v>=0x%02X != <u, Delta_1 v>=0x%02X",
+					trial,
+					M,
+					W,
+					twist,
+					p1A,
+					p1B,
+				)
 			}
 		}
 
@@ -1882,8 +2003,12 @@ func TestChallenger_Sheaf_HodgeLaplacian_SelfAdjointness_12K(t *testing.T) {
 		if p1A != dirichlet1 {
 			lap1SelfAdjointFailures++
 			if lap1SelfAdjointFailures <= 5 {
-				t.Errorf("[Trial %d] Delta_1 Hodge energy split mismatch: <Delta_1 u, v>=0x%02X != <d0^T u, d0^T v> ^ <d1 u, d1 v>=0x%02X",
-					trial, p1A, dirichlet1)
+				t.Errorf(
+					"[Trial %d] Delta_1 Hodge energy split mismatch: <Delta_1 u, v>=0x%02X != <d0^T u, d0^T v> ^ <d1 u, d1 v>=0x%02X",
+					trial,
+					p1A,
+					dirichlet1,
+				)
 			}
 		}
 
@@ -1928,8 +2053,13 @@ func TestChallenger_Sheaf_HodgeLaplacian_SelfAdjointness_12K(t *testing.T) {
 		if !bytes.Equal(lap1Exact.Eh, expectedExact.Eh) || !bytes.Equal(lap1Exact.Ev, expectedExact.Ev) {
 			lap0CommutationFailures++
 			if lap0CommutationFailures <= 5 {
-				t.Errorf("[Trial %d] Commutation failure: Delta_1(d0 phi) != d0(Delta_0 phi) (M=%d, W=%d, Twist=0x%02X)",
-					trial, M, W, twist)
+				t.Errorf(
+					"[Trial %d] Commutation failure: Delta_1(d0 phi) != d0(Delta_0 phi) (M=%d, W=%d, Twist=0x%02X)",
+					trial,
+					M,
+					W,
+					twist,
+				)
 			}
 		}
 
@@ -1946,14 +2076,26 @@ func TestChallenger_Sheaf_HodgeLaplacian_SelfAdjointness_12K(t *testing.T) {
 		if !bytes.Equal(lap1Coexact.Eh, expectedCoexact.Eh) || !bytes.Equal(lap1Coexact.Ev, expectedCoexact.Ev) {
 			lap1CommutationFailures++
 			if lap1CommutationFailures <= 5 {
-				t.Errorf("[Trial %d] Commutation failure: Delta_1(d1^T c) != d1^T(d1(d1^T c)) (M=%d, W=%d, Twist=0x%02X)",
-					trial, M, W, twist)
+				t.Errorf(
+					"[Trial %d] Commutation failure: Delta_1(d1^T c) != d1^T(d1(d1^T c)) (M=%d, W=%d, Twist=0x%02X)",
+					trial,
+					M,
+					W,
+					twist,
+				)
 			}
 		}
 	}
 
-	t.Logf("Summary 12K Laplacians: Delta_0 self-adj fails = %d, Delta_1 self-adj fails = %d, Delta_0 comm fails = %d, Delta_1 comm fails = %d, Lap0 lin fails = %d, Lap1 lin fails = %d",
-		lap0SelfAdjointFailures, lap1SelfAdjointFailures, lap0CommutationFailures, lap1CommutationFailures, lap0LinearityFailures, lap1LinearityFailures)
+	t.Logf(
+		"Summary 12K Laplacians: Delta_0 self-adj fails = %d, Delta_1 self-adj fails = %d, Delta_0 comm fails = %d, Delta_1 comm fails = %d, Lap0 lin fails = %d, Lap1 lin fails = %d",
+		lap0SelfAdjointFailures,
+		lap1SelfAdjointFailures,
+		lap0CommutationFailures,
+		lap1CommutationFailures,
+		lap0LinearityFailures,
+		lap1LinearityFailures,
+	)
 
 	if lap0SelfAdjointFailures > 0 {
 		t.Fatalf("FAILED: %d Delta_0 self-adjointness failures detected!", lap0SelfAdjointFailures)

@@ -12,8 +12,16 @@ import (
 func generateTestServerLogStream(targetSize int) []byte {
 	var b strings.Builder
 	for i := 1000; b.Len() < targetSize-128; i++ {
-		fmt.Fprintf(&b, `{"timestamp":"2026-10-11T01:15:%02d.%03dZ","level":"INFO","trace_id":"trc_%08x","client_ip":"192.168.1.%d","http":{"method":"POST","uri":"/api/v2/ingest/telemetry","status":200,"duration_ms":%.2f,"bytes_sent":%d},"user_agent":"CloudScale-Agent/2.4.1 (Linux x86_64) Go-http-client/2.0","service":"edge-ingest-router","region":"eu-central-1"}`+"\n",
-			(i/1000)%60, i%1000, i*31, i%254+1, 1.2+float64(i%50)/10.0, 480+(i%200))
+		fmt.Fprintf(
+			&b,
+			`{"timestamp":"2026-10-11T01:15:%02d.%03dZ","level":"INFO","trace_id":"trc_%08x","client_ip":"192.168.1.%d","http":{"method":"POST","uri":"/api/v2/ingest/telemetry","status":200,"duration_ms":%.2f,"bytes_sent":%d},"user_agent":"CloudScale-Agent/2.4.1 (Linux x86_64) Go-http-client/2.0","service":"edge-ingest-router","region":"eu-central-1"}`+"\n",
+			(i/1000)%60,
+			i%1000,
+			i*31,
+			i%254+1,
+			1.2+float64(i%50)/10.0,
+			480+(i%200),
+		)
 	}
 	return []byte(b.String()[:targetSize])
 }
@@ -75,7 +83,13 @@ func TestServerLogsCurrentBaseline(t *testing.T) {
 		sec3L4Type := compL4[sec3L4Off]
 		sec2L4OrigLen := int(binary.LittleEndian.Uint32(compL4[sec2L4Off+1 : sec2L4Off+5]))
 		sec3L4OrigLen := int(binary.LittleEndian.Uint32(compL4[sec3L4Off+1 : sec3L4Off+5]))
-		t.Logf("L4 Raw Sizes: Sec2(Cmd)=%d (type=%d), Sec3(Off)=%d (type=%d)", sec2L4OrigLen, sec2L4Type, sec3L4OrigLen, sec3L4Type)
+		t.Logf(
+			"L4 Raw Sizes: Sec2(Cmd)=%d (type=%d), Sec3(Off)=%d (type=%d)",
+			sec2L4OrigLen,
+			sec2L4Type,
+			sec3L4OrigLen,
+			sec3L4Type,
+		)
 
 		var scratchTableL4 CanonicalHuffmanTable
 		cmdBufL4 := make([]byte, sec2L4OrigLen)

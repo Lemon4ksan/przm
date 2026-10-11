@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/lemon4ksan/foundation/bufkit"
+
 	"github.com/lemon4ksan/przm"
 )
 
@@ -433,7 +434,7 @@ func TestCellularSheaf_PureCDecompressorInterop(t *testing.T) {
 			inPrzm := filepath.Join(tmpDir, tg.name+".przm")
 			outBin := filepath.Join(tmpDir, tg.name+".out")
 
-			if err := os.WriteFile(inPrzm, comp, 0644); err != nil {
+			if err := os.WriteFile(inPrzm, comp, 0o644); err != nil {
 				t.Fatalf("failed to write compressed file: %v", err)
 			}
 
@@ -531,8 +532,14 @@ func TestCellularSheaf_HodgeLaplacian1_MathematicalProperties(t *testing.T) {
 			pairing2 := cochain1Dot(uRand, lap1V)
 
 			if pairing1 != pairing2 {
-				t.Fatalf("M=%d, W=%d, Twist=0x%02X: Self-adjointness of Delta_1 failed: <Delta_1 u, v>=0x%02X != <u, Delta_1 v>=0x%02X",
-					M, W, twist, pairing1, pairing2)
+				t.Fatalf(
+					"M=%d, W=%d, Twist=0x%02X: Self-adjointness of Delta_1 failed: <Delta_1 u, v>=0x%02X != <u, Delta_1 v>=0x%02X",
+					M,
+					W,
+					twist,
+					pairing1,
+					pairing2,
+				)
 			}
 
 			// 4. Linearity: Delta_1(u ^ v) == Delta_1(u) ^ Delta_1(v)
@@ -738,9 +745,8 @@ func BenchmarkCellularSheafDecompress(b *testing.B) {
 
 	b.SetBytes(int64(len(orig)))
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := przm.DecompressCellularSheaf(compressed, dst)
 		if err != nil {
 			b.Fatal(err)

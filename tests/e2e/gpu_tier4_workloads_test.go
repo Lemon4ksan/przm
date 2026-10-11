@@ -277,7 +277,10 @@ func TestTier4_GPU_Workload_HardwareFailureUnderLoad(t *testing.T) {
 	if completedOps.Load() != totalExpected {
 		t.Fatalf("expected %d completed ops, got %d", totalExpected, completedOps.Load())
 	}
-	t.Logf("Hardware failure under load: successfully processed %d operations across fault injections", completedOps.Load())
+	t.Logf(
+		"Hardware failure under load: successfully processed %d operations across fault injections",
+		completedOps.Load(),
+	)
 
 	// Confirm healthy GPU execution after recovery
 	recoveryData := generateSyntheticJSON(1500)
@@ -310,7 +313,11 @@ func TestTier4_GPU_Workload_MultiChunkArchivalStream(t *testing.T) {
 	data := make([]byte, payloadSize)
 	for i := range numChunks {
 		chunkSlice := data[i*chunkSize : (i+1)*chunkSize]
-		pat := fmt.Sprintf("ARCHIVAL_STREAM_CHUNK_HEADER_METRIC_SEQ_%06d_RECORD_TAG_TIMESTAMP_%d_", i, 1760000000+i*3600)
+		pat := fmt.Sprintf(
+			"ARCHIVAL_STREAM_CHUNK_HEADER_METRIC_SEQ_%06d_RECORD_TAG_TIMESTAMP_%d_",
+			i,
+			1760000000+i*3600,
+		)
 		for j := range chunkSlice {
 			chunkSlice[j] = pat[(j*7)%len(pat)] ^ byte(i*17)
 		}

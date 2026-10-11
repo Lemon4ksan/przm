@@ -294,7 +294,17 @@ func PWSEncode(src []byte) ([]byte, error) {
 	out = append(out, szBuf[:]...)
 
 	// Rule counts
-	out = append(out, uint8(len(g.L1)), uint8(len(g.L2)), uint8(len(g.L3)), uint8(len(g.L4)), uint8(len(g.L5)), 0x00, 0x00, 0x00)
+	out = append(
+		out,
+		uint8(len(g.L1)),
+		uint8(len(g.L2)),
+		uint8(len(g.L3)),
+		uint8(len(g.L4)),
+		uint8(len(g.L5)),
+		0x00,
+		0x00,
+		0x00,
+	)
 
 	// Rule tables
 	for _, r := range g.L1 {

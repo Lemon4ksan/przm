@@ -272,10 +272,19 @@ func TestIsoQuant_CompressionRatioAdvantage(t *testing.T) {
 	}
 
 	ratio := float64(len(src)) / float64(len(compressed))
-	t.Logf("IsoQuant Multi-channel compression ratio: %.2fx (raw: %d, compressed: %d)", ratio, len(src), len(compressed))
+	t.Logf(
+		"IsoQuant Multi-channel compression ratio: %.2fx (raw: %d, compressed: %d)",
+		ratio,
+		len(src),
+		len(compressed),
+	)
 
 	if len(compressed) >= len(src) {
-		t.Fatalf("Expected compression advantage on correlated multi-channel stream, got %d vs raw %d", len(compressed), len(src))
+		t.Fatalf(
+			"Expected compression advantage on correlated multi-channel stream, got %d vs raw %d",
+			len(compressed),
+			len(src),
+		)
 	}
 }
 

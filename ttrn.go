@@ -7,12 +7,10 @@ import (
 
 const MagicTTRN uint32 = 0x4E525454 // 'TTRN'
 
-var (
-	ErrTTRNCorrupted = errors.New("przm/ttrn: corrupted stream")
-)
+var ErrTTRNCorrupted = errors.New("przm/ttrn: corrupted stream")
 
 // ShuffleStride2 separates bytes at even and odd positions.
-func ShuffleStride2(src []byte, dst []byte) {
+func ShuffleStride2(src, dst []byte) {
 	n := len(src)
 	half := (n + 1) / 2
 	for i := range n {
@@ -25,7 +23,7 @@ func ShuffleStride2(src []byte, dst []byte) {
 }
 
 // UnshuffleStride2 reverses ShuffleStride2.
-func UnshuffleStride2(src []byte, dst []byte) {
+func UnshuffleStride2(src, dst []byte) {
 	n := len(src)
 	half := (n + 1) / 2
 	for i := range n {
@@ -38,7 +36,7 @@ func UnshuffleStride2(src []byte, dst []byte) {
 }
 
 // CompressTTRN compresses a tensor using the Hybrid Tensor Train mechanism.
-func CompressTTRN(src []byte, dict []byte) ([]byte, error) {
+func CompressTTRN(src, dict []byte) ([]byte, error) {
 	n := len(src)
 
 	out := make([]byte, 8)

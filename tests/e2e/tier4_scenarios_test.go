@@ -20,8 +20,14 @@ func TestTier4_Scenario01_MicroserviceJSONAccessLogs(t *testing.T) {
 	// Synthesize 64 KiB of realistic microservice JSON access logs
 	var buf bytes.Buffer
 	for i := range 1000 {
-		fmt.Fprintf(&buf, `{"ts":"2026-10-04T12:%02d:%02dZ","trace_id":"e4d8%04x","method":"POST","uri":"/api/v1/checkout","status":200,"dur_ms":%d}`+"\n",
-			(i/60)%60, i%60, i, 10+(i*7)%150)
+		fmt.Fprintf(
+			&buf,
+			`{"ts":"2026-10-04T12:%02d:%02dZ","trace_id":"e4d8%04x","method":"POST","uri":"/api/v1/checkout","status":200,"dur_ms":%d}`+"\n",
+			(i/60)%60,
+			i%60,
+			i,
+			10+(i*7)%150,
+		)
 	}
 	logs := buf.Bytes()
 	comp := assertRoundtrip(t, logs, 1)
@@ -92,7 +98,12 @@ func TestTier4_Scenario05_DatabaseWriteAheadLog(t *testing.T) {
 		for r := range 30 {
 			tupleOffset := offset + 64 + r*200
 			if tupleOffset+100 <= offset+pageSize {
-				tuple := fmt.Sprintf("TXN_ID:%08d|USER_ID:%06d|AMOUNT:%06d|STATE:COMMITTED;", 1000+p*10+r, 5000+r, (r*97)%10000)
+				tuple := fmt.Sprintf(
+					"TXN_ID:%08d|USER_ID:%06d|AMOUNT:%06d|STATE:COMMITTED;",
+					1000+p*10+r,
+					5000+r,
+					(r*97)%10000,
+				)
 				copy(wal[tupleOffset:], tuple)
 			}
 		}
@@ -118,10 +129,14 @@ func TestTier4_Scenario07_WebApplicationAssetBundle(t *testing.T) {
 	var bundle bytes.Buffer
 
 	// Section A: JSON metadata
-	bundle.WriteString(`{"app":"dashboard","version":"2.4.0","env":"production","modules":["auth","metrics","billing"]}` + "\n")
+	bundle.WriteString(
+		`{"app":"dashboard","version":"2.4.0","env":"production","modules":["auth","metrics","billing"]}` + "\n",
+	)
 
 	// Section B: Embedded SVG icon
-	bundle.WriteString(`<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="40" stroke="green" fill="yellow" /></svg>` + "\n")
+	bundle.WriteString(
+		`<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="40" stroke="green" fill="yellow" /></svg>` + "\n",
+	)
 
 	// Section C: Inlined Base64 asset
 	b64Asset := generateBase64Payload(1024)
@@ -129,7 +144,11 @@ func TestTier4_Scenario07_WebApplicationAssetBundle(t *testing.T) {
 
 	// Section D: CSS stylesheet rules
 	for i := range 50 {
-		fmt.Fprintf(&bundle, ".widget-card-%03d { display: flex; padding: 16px; margin: 8px; border-radius: 4px; background-color: #f5f5f5; }\n", i)
+		fmt.Fprintf(
+			&bundle,
+			".widget-card-%03d { display: flex; padding: 16px; margin: 8px; border-radius: 4px; background-color: #f5f5f5; }\n",
+			i,
+		)
 	}
 
 	data := bundle.Bytes()
@@ -194,7 +213,12 @@ func TestTier4_Scenario09_HighEntropyColdStorage(t *testing.T) {
 
 	// Cold storage mode must not expand beyond normal framing overhead (< 1.5%)
 	expansion := float64(len(comp)) / float64(len(cipherStream))
-	t.Logf("Scenario 9 (Encrypted Cold Storage): %d -> %d bytes (Expansion: %.4f)", len(cipherStream), len(comp), expansion)
+	t.Logf(
+		"Scenario 9 (Encrypted Cold Storage): %d -> %d bytes (Expansion: %.4f)",
+		len(cipherStream),
+		len(comp),
+		expansion,
+	)
 	if expansion > 1.05 {
 		t.Fatalf("incompressible payload expanded by more than 5%%: %.4f", expansion)
 	}

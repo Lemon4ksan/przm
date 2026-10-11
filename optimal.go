@@ -17,20 +17,6 @@ const (
 	maxSubLenCandidates = 16
 )
 
-// dpNode stores the dynamic programming node state for the forward DAG parser.
-// Sized at exactly 32 bytes for cache alignment (power of 2) during relaxation.
-type dpNode struct {
-	cost    int32 // Scaled by CostScale (16 units per byte)
-	from    int32 // Predecessor position for backward path tracing
-	dist    int32 // Match distance (0 for literal transition)
-	repCode int8  // -1 for regular match / literal; 0, 1, 2 for rep0, rep1, rep2
-	_       [3]byte
-	rep0    int32  // Snapshot of rep0 hardware repeat register at this node
-	rep1    int32  // Snapshot of rep1 hardware repeat register at this node
-	rep2    int32  // Snapshot of rep2 hardware repeat register at this node
-	gen     uint32 // Epoch Generation Counter
-}
-
 // dpState is the hot cache-aligned window state for the Optimal Parser.
 type dpState struct {
 	cost int32
@@ -97,8 +83,6 @@ func getVarintBracket(d int) int {
 func calcOffCostPRZM(d int) int {
 	return getVarintBracket(d) + 1
 }
-
-var varintCost = [4]int32{27, 40, 53, 66} // 14 + 13*(bracket+1) for brackets 0..3
 
 // calcEdgeCostPRZM calculates the fixed-point bit-cost (scaled by 16) for a match edge.
 // Repeat matches incur 0 offset serialization bytes in Section 3.
@@ -259,7 +243,7 @@ func writeOffsetPRZM(offsetBuf *[]byte, d int) {
 }
 
 //go:noinline
-func insertHashLarge(src []byte, p, uSize int, windowLog int, sp1M *HenselScratchpad1M, sp8M *HenselScratchpad8M) {
+func insertHashLarge(src []byte, p, uSize, windowLog int, sp1M *HenselScratchpad1M, sp8M *HenselScratchpad8M) {
 	switch windowLog {
 	case WindowLog8M:
 		if sp8M != nil {
@@ -272,7 +256,14 @@ func insertHashLarge(src []byte, p, uSize int, windowLog int, sp1M *HenselScratc
 	}
 }
 
-func insertHashPRZM(src []byte, p, uSize int, pad *scratchpad, windowLog int, sp1M *HenselScratchpad1M, sp8M *HenselScratchpad8M) {
+func insertHashPRZM(
+	src []byte,
+	p, uSize int,
+	pad *scratchpad,
+	windowLog int,
+	sp1M *HenselScratchpad1M,
+	sp8M *HenselScratchpad8M,
+) {
 	if p+4 <= uSize {
 		h := (binary.LittleEndian.Uint32(src[p:p+4]) * 0x1E35A7BD) >> 16
 		h &= hashTableMask
@@ -347,8 +338,6 @@ func emitPathPRZM(
 		if repCode < -1 {
 			if litLen > 0 {
 				flushLiteralsPRZM(&pad.cmdBuf, &pad.literalBuf, src[litStart:litStart+litLen])
-				litStart = -1
-				litLen = 0
 			}
 			switch repCode {
 			case -2:
@@ -584,16 +573,36 @@ func compressBlockOptimal(
 			tokIdx, transOp, tokLen, _, score, pairTok2 := activeMatcher.match(src, pos)
 			if score >= 1 && tokLen >= 2 && candCount < 30 {
 				if tokIdx < 8 && transOp == 0 {
-					candidates[candCount] = dpCandidate{dist: 0, length: int32(tokLen), repCode: -2, extra: int32(tokIdx)}
+					candidates[candCount] = dpCandidate{
+						dist:    0,
+						length:  int32(tokLen),
+						repCode: -2,
+						extra:   int32(tokIdx),
+					}
 					candCount++
 				} else if transOp == 0 {
-					candidates[candCount] = dpCandidate{dist: 0, length: int32(tokLen), repCode: -3, extra: int32(tokIdx)}
+					candidates[candCount] = dpCandidate{
+						dist:    0,
+						length:  int32(tokLen),
+						repCode: -3,
+						extra:   int32(tokIdx),
+					}
 					candCount++
 				} else if transOp == OpcodePrefixTransPair && pairTok2 >= 0 {
-					candidates[candCount] = dpCandidate{dist: 0, length: int32(tokLen), repCode: -5, extra: int32(tokIdx) | (int32(pairTok2) << 8)}
+					candidates[candCount] = dpCandidate{
+						dist:    0,
+						length:  int32(tokLen),
+						repCode: -5,
+						extra:   int32(tokIdx) | (int32(pairTok2) << 8),
+					}
 					candCount++
 				} else if transOp != 0 {
-					candidates[candCount] = dpCandidate{dist: 0, length: int32(tokLen), repCode: -4, extra: int32(tokIdx) | (int32(transOp) << 8)}
+					candidates[candCount] = dpCandidate{
+						dist:    0,
+						length:  int32(tokLen),
+						repCode: -4,
+						extra:   int32(tokIdx) | (int32(transOp) << 8),
+					}
 					candCount++
 				}
 			}
@@ -602,7 +611,8 @@ func compressBlockOptimal(
 		// Repeat 0 check
 		if r0 > 0 && pos-r0 >= 0 && r0 <= windowSize {
 			minR0 := minMatchBase
-			if pos+2 <= uSize && binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r0:pos-r0+2]) {
+			if pos+2 <= uSize &&
+				binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r0:pos-r0+2]) {
 				l0 := HenselLCPPos(src, pos, pos-r0, maxL)
 				if l0 >= minR0 {
 					candidates[candCount] = dpCandidate{dist: int32(r0), length: int32(min(l0, dpMaxL)), repCode: 0}
@@ -615,7 +625,8 @@ func compressBlockOptimal(
 		// Repeat 1 check
 		if r1 > 0 && pos-r1 >= 0 && r1 <= windowSize && r1 != r0 {
 			minR1 := minMatchBase
-			if pos+2 <= uSize && binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r1:pos-r1+2]) {
+			if pos+2 <= uSize &&
+				binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r1:pos-r1+2]) {
 				l1 := HenselLCPPos(src, pos, pos-r1, maxL)
 				if l1 >= minR1 {
 					candidates[candCount] = dpCandidate{dist: int32(r1), length: int32(min(l1, dpMaxL)), repCode: 1}
@@ -628,7 +639,8 @@ func compressBlockOptimal(
 		// Repeat 2 check
 		if r2 > 0 && pos-r2 >= 0 && r2 <= windowSize && r2 != r0 && r2 != r1 {
 			minR2 := minMatchBase
-			if pos+2 <= uSize && binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r2:pos-r2+2]) {
+			if pos+2 <= uSize &&
+				binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r2:pos-r2+2]) {
 				l2 := HenselLCPPos(src, pos, pos-r2, maxL)
 				if l2 >= minR2 {
 					candidates[candCount] = dpCandidate{dist: int32(r2), length: int32(min(l2, dpMaxL)), repCode: 2}
@@ -648,7 +660,12 @@ func compressBlockOptimal(
 			mPos := pos - d
 			if compactDict && dictLen > 0 && mPos < dictLen {
 				if candCount < 30 && l >= minMatchBase {
-					candidates[candCount] = dpCandidate{dist: int32(mPos), length: int32(min(l, dpMaxL)), repCode: -6, extra: 0}
+					candidates[candCount] = dpCandidate{
+						dist:    int32(mPos),
+						length:  int32(min(l, dpMaxL)),
+						repCode: -6,
+						extra:   0,
+					}
 					candCount++
 					updateLong(mPos, l, -6)
 				}
@@ -677,7 +694,8 @@ func compressBlockOptimal(
 		canDists := [...]int{344, 343, 342, 68692, 68746, 68741, 68694, 87268, 17200, 17150}
 		for _, cd := range canDists {
 			if cd > 0 && pos-cd >= 0 && cd <= windowSize && cd != r0 && cd != r1 && cd != r2 {
-				if pos+4 <= uSize && pos-cd+4 <= uSize && binary.LittleEndian.Uint32(src[pos:pos+4]) == binary.LittleEndian.Uint32(src[pos-cd:pos-cd+4]) {
+				if pos+4 <= uSize && pos-cd+4 <= uSize &&
+					binary.LittleEndian.Uint32(src[pos:pos+4]) == binary.LittleEndian.Uint32(src[pos-cd:pos-cd+4]) {
 					l := HenselLCPPos(src, pos, pos-cd, maxL)
 					if l >= 4 {
 						updateBracket(cd, l)
@@ -741,7 +759,12 @@ func compressBlockOptimal(
 			}
 
 			// Hensel Ultrametric Match Finding
-			curMaxLen := max(int(bracketBest[0].length), int(bracketBest[1].length), int(bracketBest[2].length), int(bracketBest[3].length))
+			curMaxLen := max(
+				int(bracketBest[0].length),
+				int(bracketBest[1].length),
+				int(bracketBest[2].length),
+				int(bracketBest[3].length),
+			)
 			for c := range candCount {
 				if int(candidates[c].length) > curMaxLen {
 					curMaxLen = int(candidates[c].length)

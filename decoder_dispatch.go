@@ -149,7 +149,7 @@ func copyMatch(baseDst unsafe.Pointer, dstPos, srcIdx, mLen, d int) {
 
 // execMatch safely executes a match copy, transparently handling positive offsets in outBuf
 // and negative offsets into the raw prefix dictionary buffer.
-func execMatch(baseDst unsafe.Pointer, outBuf []byte, rawDict []byte, dstPos, d, mLen int) error {
+func execMatch(baseDst unsafe.Pointer, outBuf, rawDict []byte, dstPos, d, mLen int) error {
 	if d <= 0 || dstPos+mLen > len(outBuf) {
 		return fmt.Errorf("%w: invalid match bounds (d=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, dstPos, mLen)
 	}
@@ -159,11 +159,23 @@ func execMatch(baseDst unsafe.Pointer, outBuf []byte, rawDict []byte, dstPos, d,
 		return nil
 	}
 	if len(rawDict) == 0 {
-		return fmt.Errorf("%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, srcIdx, dstPos, mLen)
+		return fmt.Errorf(
+			"%w: invalid match distance %d (srcIdx=%d, dstPos=%d, mLen=%d)",
+			ErrCorruptedFrame,
+			d,
+			srcIdx,
+			dstPos,
+			mLen,
+		)
 	}
 	dictOffset := len(rawDict) + srcIdx
 	if dictOffset < 0 || dictOffset >= len(rawDict) {
-		return fmt.Errorf("%w: dictionary offset %d out of bounds (dictLen=%d)", ErrCorruptedFrame, dictOffset, len(rawDict))
+		return fmt.Errorf(
+			"%w: dictionary offset %d out of bounds (dictLen=%d)",
+			ErrCorruptedFrame,
+			dictOffset,
+			len(rawDict),
+		)
 	}
 	dictAvail := len(rawDict) - dictOffset
 	copyFromDict := min(mLen, dictAvail)
@@ -180,20 +192,20 @@ func execMatch(baseDst unsafe.Pointer, outBuf []byte, rawDict []byte, dstPos, d,
 
 // frameDecoder manages the decompress state machine and executes PRZM bytecodes.
 type frameDecoder struct {
-	baseDst      unsafe.Pointer
-	outBuf       []byte
-	allocSize    int
-	dstPos       int
+	baseDst   unsafe.Pointer
+	outBuf    []byte
+	allocSize int
+	dstPos    int
 
-	cmds         []byte
-	cmdPtr       int
-	cmdEnd       int
+	cmds   []byte
+	cmdPtr int
+	cmdEnd int
 
-	lits         []byte
-	litPtr       int
+	lits   []byte
+	litPtr int
 
-	offs         []byte
-	offPtr       int
+	offs   []byte
+	offPtr int
 
 	rep0         int
 	rep1         int
@@ -201,8 +213,8 @@ type frameDecoder struct {
 	stride       int
 	minMatchBase int
 
-	rawDict      []byte
-	activeDict   [][]byte
+	rawDict    []byte
+	activeDict [][]byte
 }
 
 func (d *frameDecoder) decode() error {
@@ -667,7 +679,13 @@ func (d *frameDecoder) decodeRawDictMatch() error {
 	d.offPtr = newOffPtr
 
 	if dictOff < 0 || dictOff+mLen > len(d.rawDict) || d.dstPos+mLen > len(d.outBuf) {
-		return fmt.Errorf("%w: raw dict offset out of bounds (off=%d, mLen=%d, dictLen=%d)", ErrCorruptedFrame, dictOff, mLen, len(d.rawDict))
+		return fmt.Errorf(
+			"%w: raw dict offset out of bounds (off=%d, mLen=%d, dictLen=%d)",
+			ErrCorruptedFrame,
+			dictOff,
+			mLen,
+			len(d.rawDict),
+		)
 	}
 	copy(d.outBuf[d.dstPos:d.dstPos+mLen], d.rawDict[dictOff:dictOff+mLen])
 	d.dstPos += mLen
@@ -913,7 +931,12 @@ func (d *frameDecoder) decodeCopyBlock() error {
 	}
 	ref := int(srcBlockIdx) * DedupBlockSize
 	if ref < 0 || ref+DedupBlockSize > d.dstPos {
-		return fmt.Errorf("%w: forward or self-referential dedup block reference (ref=%d, dstPos=%d)", ErrCorruptedFrame, ref, d.dstPos)
+		return fmt.Errorf(
+			"%w: forward or self-referential dedup block reference (ref=%d, dstPos=%d)",
+			ErrCorruptedFrame,
+			ref,
+			d.dstPos,
+		)
 	}
 	if d.dstPos+DedupBlockSize > len(d.outBuf) {
 		return fmt.Errorf("%w: dedup block exceeds buffer capacity", ErrCorruptedFrame)

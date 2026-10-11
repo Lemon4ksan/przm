@@ -10,12 +10,10 @@ import (
 var (
 	cuMemAllocHost     = modCUDA.NewProc("cuMemAllocHost")
 	cuMemFreeHost      = modCUDA.NewProc("cuMemFreeHost")
-	cuCtxGetCurrent    = modCUDA.NewProc("cuCtxGetCurrent")
 	cuPrimaryCtxRetain = modCUDA.NewProc("cuDevicePrimaryCtxRetain")
 	pinnedMu           sync.Mutex
 	pinnedCtx          uintptr
 	cuMemHostAlloc     = modCUDA.NewProc("cuMemHostAlloc")
-	cuCtxGetDevice     = modCUDA.NewProc("cuCtxGetDevice")
 )
 
 func ensureContext() error {
@@ -32,12 +30,12 @@ func ensureContext() error {
 
 	var ctx uintptr
 	if pinnedCtx != 0 {
-		cuCtxSetCurrent.Call(pinnedCtx)
+		_, _, _ = cuCtxSetCurrent.Call(pinnedCtx)
 		return nil
 	}
 	if r, _, _ := cuPrimaryCtxRetain.Call(uintptr(unsafe.Pointer(&ctx)), uintptr(dev)); r == 0 && ctx != 0 {
 		pinnedCtx = ctx
-		cuCtxSetCurrent.Call(pinnedCtx)
+		_, _, _ = cuCtxSetCurrent.Call(pinnedCtx)
 		return nil
 	}
 
@@ -45,7 +43,7 @@ func ensureContext() error {
 		return fmt.Errorf("cuCtxCreate failed: %d", r)
 	}
 	pinnedCtx = ctx
-	cuCtxSetCurrent.Call(pinnedCtx)
+	_, _, _ = cuCtxSetCurrent.Call(pinnedCtx)
 	return nil
 }
 
@@ -108,7 +106,7 @@ type PinnedBufferPool struct {
 const defaultMaxPinnedPoolCap = 8
 
 // NewPinnedBufferPool initializes pool with preallocated pinned buffers.
-func NewPinnedBufferPool(bufSize int, initialCap int) (*PinnedBufferPool, error) {
+func NewPinnedBufferPool(bufSize, initialCap int) (*PinnedBufferPool, error) {
 	maxCap := defaultMaxPinnedPoolCap
 	if initialCap > maxCap {
 		maxCap = initialCap
@@ -117,7 +115,7 @@ func NewPinnedBufferPool(bufSize int, initialCap int) (*PinnedBufferPool, error)
 	for i := 0; i < initialCap; i++ {
 		b, ptr, err := AllocPinnedHost(bufSize)
 		if err != nil {
-			p.Close()
+			_ = p.Close()
 			return nil, err
 		}
 		p.pool = append(p.pool, PinnedBuffer{Bytes: b, Ptr: ptr})

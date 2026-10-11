@@ -89,7 +89,10 @@ func TestTier2_F04_WindowLog_Boundaries(t *testing.T) {
 			if tc.name == "MaxBlockSize_LimitCheck" {
 				// Assert error returned on exceeding 16 MiB max block limit
 				overflowData := make([]byte, tc.size)
-				_, err := przm.CompressWithOptions(overflowData, przm.CompressOptions{Level: 1, StandardStreamOnly: true})
+				_, err := przm.CompressWithOptions(
+					overflowData,
+					przm.CompressOptions{Level: 1, StandardStreamOnly: true},
+				)
 				if err == nil {
 					t.Fatalf("expected ErrExceedsMaxBlock, got nil")
 				}

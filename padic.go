@@ -7,7 +7,6 @@ package przm
 import (
 	"encoding/binary"
 	"errors"
-	"sync"
 	"unsafe"
 )
 
@@ -31,13 +30,6 @@ var (
 	ErrPadicNotApplicable = errors.New("przm/padic: data does not exhibit 2-adic ultrametric singularity")
 )
 
-var padicBufPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 64*1024)
-		return &b
-	},
-}
-
 func mahler16ForwardBlock(buf *[16]byte) {
 	for s := 1; s < 16; s++ {
 		for i := 15; i >= s; i-- {
@@ -57,7 +49,7 @@ func mahler16InverseBlock(buf *[16]byte) {
 // DetectPadic performs fast sub-microsecond inspection on src to determine
 // whether the payload exhibits 2-adic ultrametric contraction (pointer graphs,
 // 64-bit B-Tree index pages, CSR sparse matrix indices, or stride 16/32 records).
-func DetectPadic(src []byte) (stride int, order int, mode uint8, ok bool) {
+func DetectPadic(src []byte) (stride, order int, mode uint8, ok bool) {
 	n := len(src)
 	if n < 128 {
 		return 0, 0, 0, false
@@ -135,7 +127,7 @@ func DetectPadic(src []byte) (stride int, order int, mode uint8, ok bool) {
 }
 
 // PadicSingularityTransform computes the forward non-Archimedean transform.
-func PadicSingularityTransform(src []byte, stride int, order int, mode uint8) []byte {
+func PadicSingularityTransform(src []byte, stride, order int, mode uint8) []byte {
 	n := len(src)
 	out := make([]byte, n)
 
@@ -211,7 +203,7 @@ func PadicSingularityTransform(src []byte, stride int, order int, mode uint8) []
 
 // PadicSingularityInverse computes the exact inverse non-Archimedean synthesis.
 // Strictly 0 heap allocations if dst has capacity >= len(src).
-func PadicSingularityInverse(src, dst []byte, stride int, order int, mode uint8) error {
+func PadicSingularityInverse(src, dst []byte, stride, order int, mode uint8) error {
 	n := len(src)
 	if len(dst) < n {
 		return ErrPadicBufTooSmall
@@ -314,7 +306,11 @@ func CompressPadic(src []byte, level int) ([]byte, error) {
 	}
 
 	// Try standard stream cascade
-	if comp, err := CompressWithOptions(transformed, CompressOptions{Level: level, StandardStreamOnly: true}); err == nil && len(comp)+12 < n {
+	if comp, err := CompressWithOptions(
+		transformed,
+		CompressOptions{Level: level, StandardStreamOnly: true},
+	); err == nil &&
+		len(comp)+12 < n {
 		dst := make([]byte, 12+len(comp))
 		binary.LittleEndian.PutUint32(dst[0:4], PadicMagic)
 		dst[4] = mode

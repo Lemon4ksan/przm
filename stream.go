@@ -6,6 +6,7 @@ package przm
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 )
 
@@ -46,7 +47,7 @@ func DecompressStream(r io.Reader, w io.Writer) error {
 	var lenBuf [4]byte
 	for {
 		_, err := io.ReadFull(r, lenBuf[:])
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

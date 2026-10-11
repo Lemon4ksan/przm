@@ -278,7 +278,12 @@ func TestHeisenberg_CompressionRatioAdvantage(t *testing.T) {
 	}
 
 	ratio := float64(len(src)) / float64(len(compressed))
-	t.Logf("Heisenberg Multi-Channel 3D compression ratio: %.2fx (raw: %d, compressed: %d)", ratio, len(src), len(compressed))
+	t.Logf(
+		"Heisenberg Multi-Channel 3D compression ratio: %.2fx (raw: %d, compressed: %d)",
+		ratio,
+		len(src),
+		len(compressed),
+	)
 
 	if len(compressed) >= len(src) {
 		t.Fatalf("Expected compression advantage on correlated 3D stream, got %d vs raw %d", len(compressed), len(src))
@@ -338,7 +343,9 @@ func TestHeisenberg_EstimatorFidelity(t *testing.T) {
 	}
 
 	// 5. English text -> should NOT apply
-	text := []byte("The quick brown fox jumps over the lazy dog. Heisenberg groups model non-commutative nilpotent Lie manifolds.")
+	text := []byte(
+		"The quick brown fox jumps over the lazy dog. Heisenberg groups model non-commutative nilpotent Lie manifolds.",
+	)
 	_, ok = przm.EstimateOptimalHeisenberg(text)
 	if ok {
 		t.Fatalf("Estimator false positive on text")

@@ -2,6 +2,7 @@ package gpu
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -36,18 +37,14 @@ var (
 	cuDeviceTotalMem     = modCUDA.NewProc("cuDeviceTotalMem_v2")
 	cuDeviceGetAttribute = modCUDA.NewProc("cuDeviceGetAttribute")
 	cuCtxCreate          = modCUDA.NewProc("cuCtxCreate_v2")
-	cuCtxDestroy         = modCUDA.NewProc("cuCtxDestroy_v2")
 	cuCtxSetCurrent      = modCUDA.NewProc("cuCtxSetCurrent")
 	cuMemAlloc           = modCUDA.NewProc("cuMemAlloc_v2")
 	cuMemFree            = modCUDA.NewProc("cuMemFree_v2")
-	cuMemcpyHtoD         = modCUDA.NewProc("cuMemcpyHtoD_v2")
 	cuMemcpyHtoDAsync    = modCUDA.NewProc("cuMemcpyHtoDAsync_v2")
-	cuMemcpyDtoH         = modCUDA.NewProc("cuMemcpyDtoH_v2")
 	cuMemcpyDtoHAsync    = modCUDA.NewProc("cuMemcpyDtoHAsync_v2")
 	cuStreamCreate       = modCUDA.NewProc("cuStreamCreate")
 	cuStreamDestroy      = modCUDA.NewProc("cuStreamDestroy_v2")
 	cuStreamSynchronize  = modCUDA.NewProc("cuStreamSynchronize")
-	cuModuleLoadData     = modCUDA.NewProc("cuModuleLoadData")
 	cuModuleGetFunc      = modCUDA.NewProc("cuModuleGetFunction")
 	cuLaunchKernel       = modCUDA.NewProc("cuLaunchKernel")
 	cuEventCreate        = modCUDA.NewProc("cuEventCreate")
@@ -104,7 +101,12 @@ func IsAvailable() bool {
 			continue
 		}
 		var major int32
-		if r, _, _ := cuDeviceGetAttribute.Call(uintptr(unsafe.Pointer(&major)), uintptr(cuAttrComputeCapabilityMajor), uintptr(dev)); r == 0 && major >= 8 {
+		if r, _, _ := cuDeviceGetAttribute.Call(
+			uintptr(unsafe.Pointer(&major)),
+			uintptr(cuAttrComputeCapabilityMajor),
+			uintptr(dev),
+		); r == 0 &&
+			major >= 8 {
 			return true
 		}
 	}
@@ -124,7 +126,7 @@ func GetGlobalCompressor() (*GPUCompressor, error) {
 		return c, nil
 	}
 	if !IsAvailable() {
-		return nil, fmt.Errorf("cuda gpu acceleration not available or compute capability < 8.0")
+		return nil, errors.New("cuda gpu acceleration not available or compute capability < 8.0")
 	}
 	comp, err := NewGPUCompressor(0)
 	if err != nil {
@@ -207,7 +209,12 @@ func NewGPUCompressor(deviceID int) (*GPUCompressor, error) {
 	cuDeviceGetAttribute.Call(uintptr(unsafe.Pointer(&major)), uintptr(cuAttrComputeCapabilityMajor), uintptr(dev))
 	cuDeviceGetAttribute.Call(uintptr(unsafe.Pointer(&minor)), uintptr(cuAttrComputeCapabilityMinor), uintptr(dev))
 	if major < 8 {
-		return nil, fmt.Errorf("device %d compute capability %d.%d unsupported: Ampere sm_80+ (major >= 8) required", deviceID, major, minor)
+		return nil, fmt.Errorf(
+			"device %d compute capability %d.%d unsupported: Ampere sm_80+ (major >= 8) required",
+			deviceID,
+			major,
+			minor,
+		)
 	}
 
 	var ctx uintptr
@@ -303,7 +310,7 @@ func loadPTX() ([]byte, error) {
 	if len(embeddedPTX) > 0 {
 		return append(embeddedPTX, 0), nil
 	}
-	return nil, fmt.Errorf("przm_lz77.ptx not found")
+	return nil, errors.New("przm_lz77.ptx not found")
 }
 
 // Close destroys CUDA context and frees GPU resources.
@@ -471,7 +478,19 @@ func (g *GPUCompressor) MatchLZ77(src []byte) ([]LZ77Match, GPUProfile, error) {
 			uintptr(unsafe.Pointer(&params[i].wSize)), uintptr(unsafe.Pointer(&params[i].mDepth)),
 		}
 
-		cuLaunchKernel.Call(g.fnSearchMatches, 224, 1, 1, 256, 1, 1, 0, streams[i], uintptr(unsafe.Pointer(&pSearch[0])), 0)
+		cuLaunchKernel.Call(
+			g.fnSearchMatches,
+			224,
+			1,
+			1,
+			256,
+			1,
+			1,
+			0,
+			streams[i],
+			uintptr(unsafe.Pointer(&pSearch[0])),
+			0,
+		)
 
 		cuMemcpyDtoHAsync.Call(cOutPtr, cDMatch, uintptr(cLen*4), streams[i])
 	}
@@ -545,7 +564,7 @@ func (g *GPUCompressor) MatchLZ77(src []byte) ([]LZ77Match, GPUProfile, error) {
 	if cap(g.matchBuf) < n/4 {
 		g.matchBuf = make([]LZ77Match, 0, n/4)
 	}
-	
+
 	for i, desc := range outDesc {
 		if IsMatch32(desc) {
 			l, off := UnpackMatch32(desc)
@@ -609,14 +628,38 @@ func (g *GPUCompressor) BenchmarkVRAMBandwidth(sizeMB int) (float64, error) {
 	}
 
 	// Warmup
-	if r, _, _ := cuLaunchKernel.Call(g.fnVRAMBandwidth, 224, 1, 1, 256, 1, 1, 0, 0, uintptr(unsafe.Pointer(&params[0])), 0); r != 0 {
+	if r, _, _ := cuLaunchKernel.Call(
+		g.fnVRAMBandwidth,
+		224,
+		1,
+		1,
+		256,
+		1,
+		1,
+		0,
+		0,
+		uintptr(unsafe.Pointer(&params[0])),
+		0,
+	); r != 0 {
 		return 0, cuCheck("cuLaunchKernel warmup", r)
 	}
 
 	if r, _, _ := cuEventRecord.Call(evStart, 0); r != 0 {
 		return 0, cuCheck("cuEventRecord evStart", r)
 	}
-	if r, _, _ := cuLaunchKernel.Call(g.fnVRAMBandwidth, 224, 1, 1, 256, 1, 1, 0, 0, uintptr(unsafe.Pointer(&params[0])), 0); r != 0 {
+	if r, _, _ := cuLaunchKernel.Call(
+		g.fnVRAMBandwidth,
+		224,
+		1,
+		1,
+		256,
+		1,
+		1,
+		0,
+		0,
+		uintptr(unsafe.Pointer(&params[0])),
+		0,
+	); r != 0 {
 		return 0, cuCheck("cuLaunchKernel benchmark", r)
 	}
 	if r, _, _ := cuEventRecord.Call(evStop, 0); r != 0 {

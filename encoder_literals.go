@@ -25,7 +25,7 @@ func uvarintLen(x uint64) int {
 // packNibblePlanes splits a literal byte slice into a Low-Nibble plane (packed 2 per byte)
 // and a High-Nibble plane (runs of identical high nibbles).
 // Returns the packed stream and true if packed size is at least 8% smaller than raw lits.
-func packNibblePlanes(lits []byte, out []byte, lowBuf []byte) ([]byte, bool) {
+func packNibblePlanes(lits, out, lowBuf []byte) ([]byte, bool) {
 	n := len(lits)
 	if n < 32 {
 		return nil, false
@@ -277,7 +277,6 @@ func packContextSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 	}
 	if len(enc3) > 0 {
 		copy(workBuf[off:], enc3)
-		off += len(enc3)
 	}
 
 	return workBuf[:totalPayload], true
@@ -285,7 +284,14 @@ func packContextSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 
 // packLiteralSection evaluates V-ANS, Sheaf-VANS, Context-Sheaf-VANS and Nibble-Planes
 // on literalBuf to find the representation with the lowest entropy and smallest footprint.
-func packLiteralSection(lits []byte, pad *scratchpad, level int, opts CompressOptions, origSrc []byte, flags *uint8) []byte {
+func packLiteralSection(
+	lits []byte,
+	pad *scratchpad,
+	level int,
+	opts CompressOptions,
+	origSrc []byte,
+	flags *uint8,
+) []byte {
 	if len(lits) < 32 {
 		return lits
 	}
@@ -315,7 +321,6 @@ func packLiteralSection(lits []byte, pad *scratchpad, level int, opts CompressOp
 			}
 			if ctxSheafOk && len(ctxSheafOut) < bestLen {
 				vansOut = ctxSheafOut
-				bestLen = len(ctxSheafOut)
 				vansBeatsRaw = true
 			}
 		}

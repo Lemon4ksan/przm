@@ -16,9 +16,7 @@ const (
 	SpectralModeCompressed uint8  = 2 // 4x4 Unitary with cascaded PWS-compressed payload
 )
 
-var (
-	ErrSpectralCorrupt = errors.New("przm: spectral block corrupted")
-)
+var ErrSpectralCorrupt = errors.New("przm: spectral block corrupted")
 
 // UnitaryMatrix4 is a 4x4 orthogonal matrix in F_{2^8} satisfying U * U^T = I.
 type UnitaryMatrix4 [4][4]uint8
@@ -282,7 +280,7 @@ func encodeSpectralRaw(src []byte) []byte {
 
 // DecompressSpectralUnitary decodes a unitary spectral block with zero allocations
 // if dst capacity is sufficient.
-func DecompressSpectralUnitary(src []byte, dst []byte) ([]byte, error) {
+func DecompressSpectralUnitary(src, dst []byte) ([]byte, error) {
 	if len(src) < 9 {
 		return nil, ErrSpectralCorrupt
 	}

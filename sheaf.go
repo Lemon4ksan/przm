@@ -63,10 +63,18 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 	p0, p1, p2, p3 := 0, 0, 0, 0
 	pDst := unsafe.Pointer(&dst[0])
 	var pF0, pF1, pF2, pF3 unsafe.Pointer
-	if len(f0) > 0 { pF0 = unsafe.Pointer(&f0[0]) }
-	if len(f1) > 0 { pF1 = unsafe.Pointer(&f1[0]) }
-	if len(f2) > 0 { pF2 = unsafe.Pointer(&f2[0]) }
-	if len(f3) > 0 { pF3 = unsafe.Pointer(&f3[0]) }
+	if len(f0) > 0 {
+		pF0 = unsafe.Pointer(&f0[0])
+	}
+	if len(f1) > 0 {
+		pF1 = unsafe.Pointer(&f1[0])
+	}
+	if len(f2) > 0 {
+		pF2 = unsafe.Pointer(&f2[0])
+	}
+	if len(f3) > 0 {
+		pF3 = unsafe.Pointer(&f3[0])
+	}
 
 	prev := byte(0)
 	j := 0
@@ -74,80 +82,144 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 		c0 := SheafContextTable[prev]
 		var b0 byte
 		switch c0 {
-		case 0: b0 = *(*byte)(unsafe.Add(pF0, p0)); p0++
-		case 1: b0 = *(*byte)(unsafe.Add(pF1, p1)); p1++
-		case 2: b0 = *(*byte)(unsafe.Add(pF2, p2)); p2++
-		default: b0 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		case 0:
+			b0 = *(*byte)(unsafe.Add(pF0, p0))
+			p0++
+		case 1:
+			b0 = *(*byte)(unsafe.Add(pF1, p1))
+			p1++
+		case 2:
+			b0 = *(*byte)(unsafe.Add(pF2, p2))
+			p2++
+		default:
+			b0 = *(*byte)(unsafe.Add(pF3, p3))
+			p3++
 		}
 		*(*byte)(unsafe.Add(pDst, j)) = b0
 
 		c1 := SheafContextTable[b0]
 		var b1 byte
 		switch c1 {
-		case 0: b1 = *(*byte)(unsafe.Add(pF0, p0)); p0++
-		case 1: b1 = *(*byte)(unsafe.Add(pF1, p1)); p1++
-		case 2: b1 = *(*byte)(unsafe.Add(pF2, p2)); p2++
-		default: b1 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		case 0:
+			b1 = *(*byte)(unsafe.Add(pF0, p0))
+			p0++
+		case 1:
+			b1 = *(*byte)(unsafe.Add(pF1, p1))
+			p1++
+		case 2:
+			b1 = *(*byte)(unsafe.Add(pF2, p2))
+			p2++
+		default:
+			b1 = *(*byte)(unsafe.Add(pF3, p3))
+			p3++
 		}
 		*(*byte)(unsafe.Add(pDst, j+1)) = b1
 
 		c2 := SheafContextTable[b1]
 		var b2 byte
 		switch c2 {
-		case 0: b2 = *(*byte)(unsafe.Add(pF0, p0)); p0++
-		case 1: b2 = *(*byte)(unsafe.Add(pF1, p1)); p1++
-		case 2: b2 = *(*byte)(unsafe.Add(pF2, p2)); p2++
-		default: b2 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		case 0:
+			b2 = *(*byte)(unsafe.Add(pF0, p0))
+			p0++
+		case 1:
+			b2 = *(*byte)(unsafe.Add(pF1, p1))
+			p1++
+		case 2:
+			b2 = *(*byte)(unsafe.Add(pF2, p2))
+			p2++
+		default:
+			b2 = *(*byte)(unsafe.Add(pF3, p3))
+			p3++
 		}
 		*(*byte)(unsafe.Add(pDst, j+2)) = b2
 
 		c3 := SheafContextTable[b2]
 		var b3 byte
 		switch c3 {
-		case 0: b3 = *(*byte)(unsafe.Add(pF0, p0)); p0++
-		case 1: b3 = *(*byte)(unsafe.Add(pF1, p1)); p1++
-		case 2: b3 = *(*byte)(unsafe.Add(pF2, p2)); p2++
-		default: b3 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		case 0:
+			b3 = *(*byte)(unsafe.Add(pF0, p0))
+			p0++
+		case 1:
+			b3 = *(*byte)(unsafe.Add(pF1, p1))
+			p1++
+		case 2:
+			b3 = *(*byte)(unsafe.Add(pF2, p2))
+			p2++
+		default:
+			b3 = *(*byte)(unsafe.Add(pF3, p3))
+			p3++
 		}
 		*(*byte)(unsafe.Add(pDst, j+3)) = b3
 
 		c4 := SheafContextTable[b3]
 		var b4 byte
 		switch c4 {
-		case 0: b4 = *(*byte)(unsafe.Add(pF0, p0)); p0++
-		case 1: b4 = *(*byte)(unsafe.Add(pF1, p1)); p1++
-		case 2: b4 = *(*byte)(unsafe.Add(pF2, p2)); p2++
-		default: b4 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		case 0:
+			b4 = *(*byte)(unsafe.Add(pF0, p0))
+			p0++
+		case 1:
+			b4 = *(*byte)(unsafe.Add(pF1, p1))
+			p1++
+		case 2:
+			b4 = *(*byte)(unsafe.Add(pF2, p2))
+			p2++
+		default:
+			b4 = *(*byte)(unsafe.Add(pF3, p3))
+			p3++
 		}
 		*(*byte)(unsafe.Add(pDst, j+4)) = b4
 
 		c5 := SheafContextTable[b4]
 		var b5 byte
 		switch c5 {
-		case 0: b5 = *(*byte)(unsafe.Add(pF0, p0)); p0++
-		case 1: b5 = *(*byte)(unsafe.Add(pF1, p1)); p1++
-		case 2: b5 = *(*byte)(unsafe.Add(pF2, p2)); p2++
-		default: b5 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		case 0:
+			b5 = *(*byte)(unsafe.Add(pF0, p0))
+			p0++
+		case 1:
+			b5 = *(*byte)(unsafe.Add(pF1, p1))
+			p1++
+		case 2:
+			b5 = *(*byte)(unsafe.Add(pF2, p2))
+			p2++
+		default:
+			b5 = *(*byte)(unsafe.Add(pF3, p3))
+			p3++
 		}
 		*(*byte)(unsafe.Add(pDst, j+5)) = b5
 
 		c6 := SheafContextTable[b5]
 		var b6 byte
 		switch c6 {
-		case 0: b6 = *(*byte)(unsafe.Add(pF0, p0)); p0++
-		case 1: b6 = *(*byte)(unsafe.Add(pF1, p1)); p1++
-		case 2: b6 = *(*byte)(unsafe.Add(pF2, p2)); p2++
-		default: b6 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		case 0:
+			b6 = *(*byte)(unsafe.Add(pF0, p0))
+			p0++
+		case 1:
+			b6 = *(*byte)(unsafe.Add(pF1, p1))
+			p1++
+		case 2:
+			b6 = *(*byte)(unsafe.Add(pF2, p2))
+			p2++
+		default:
+			b6 = *(*byte)(unsafe.Add(pF3, p3))
+			p3++
 		}
 		*(*byte)(unsafe.Add(pDst, j+6)) = b6
 
 		c7 := SheafContextTable[b6]
 		var b7 byte
 		switch c7 {
-		case 0: b7 = *(*byte)(unsafe.Add(pF0, p0)); p0++
-		case 1: b7 = *(*byte)(unsafe.Add(pF1, p1)); p1++
-		case 2: b7 = *(*byte)(unsafe.Add(pF2, p2)); p2++
-		default: b7 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		case 0:
+			b7 = *(*byte)(unsafe.Add(pF0, p0))
+			p0++
+		case 1:
+			b7 = *(*byte)(unsafe.Add(pF1, p1))
+			p1++
+		case 2:
+			b7 = *(*byte)(unsafe.Add(pF2, p2))
+			p2++
+		default:
+			b7 = *(*byte)(unsafe.Add(pF3, p3))
+			p3++
 		}
 		*(*byte)(unsafe.Add(pDst, j+7)) = b7
 
@@ -157,10 +229,18 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 		c := SheafContextTable[prev]
 		var bt byte
 		switch c {
-		case 0: bt = *(*byte)(unsafe.Add(pF0, p0)); p0++
-		case 1: bt = *(*byte)(unsafe.Add(pF1, p1)); p1++
-		case 2: bt = *(*byte)(unsafe.Add(pF2, p2)); p2++
-		default: bt = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		case 0:
+			bt = *(*byte)(unsafe.Add(pF0, p0))
+			p0++
+		case 1:
+			bt = *(*byte)(unsafe.Add(pF1, p1))
+			p1++
+		case 2:
+			bt = *(*byte)(unsafe.Add(pF2, p2))
+			p2++
+		default:
+			bt = *(*byte)(unsafe.Add(pF3, p3))
+			p3++
 		}
 		*(*byte)(unsafe.Add(pDst, j)) = bt
 		prev = bt
@@ -203,7 +283,8 @@ func SheafSplit(src, sBuf, cBuf, maskBuf []byte) (int, int) {
 // SheafInterleave reconstructs the original byte stream into dst from syntax (s),
 // content (c), and mask streams. Guarantees 100% bit-exact lossless roundtrip.
 func SheafInterleave(dst, s, c, mask []byte, origLen int) {
-	if origLen <= 0 || origLen > MaxBlockSize || len(dst) < origLen || len(mask) < (origLen+7)/8 || len(s)+len(c) < origLen {
+	if origLen <= 0 || origLen > MaxBlockSize || len(dst) < origLen || len(mask) < (origLen+7)/8 ||
+		len(s)+len(c) < origLen {
 		return
 	}
 	simdInterleave(dst, s, c, mask, origLen)
@@ -305,14 +386,13 @@ func branchlessSplit(src []byte, table *[256]uint8, sBuf, cBuf, maskBuf []byte) 
 			cPos += int(1 - s)
 		}
 		*(*byte)(unsafe.Add(pM, mPos)) = mask
-		mPos++
 	}
 
 	return sPos, cPos
 }
 
 // branchlessInterleave provides bounds-safe byte reconstruction for scalar platforms.
-func branchlessInterleave(dst []byte, s, c, mask []byte, origLen int) {
+func branchlessInterleave(dst, s, c, mask []byte, origLen int) {
 	if origLen == 0 {
 		return
 	}
@@ -627,4 +707,3 @@ func CalculateSheafEntropy(s, c, mask []byte, origLen int) (entropyS, entropyC, 
 	aggregate = totalBits / float64(origLen)
 	return entropyS, entropyC, entropyM, aggregate
 }
-

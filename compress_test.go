@@ -85,7 +85,11 @@ func TestPostLZ77SheafRatio(t *testing.T) {
 
 	// Mathematical proof: final compressed size must achieve a significant reduction (> 50%)
 	if postLZ77Size >= prevSheafBaselineSize {
-		t.Fatalf("Post-LZ77 Sheaf failed to reduce compressed size: got %d, baseline %d", postLZ77Size, prevSheafBaselineSize)
+		t.Fatalf(
+			"Post-LZ77 Sheaf failed to reduce compressed size: got %d, baseline %d",
+			postLZ77Size,
+			prevSheafBaselineSize,
+		)
 	}
 	if reductionPct < 50.0 {
 		t.Fatalf("Reduction percentage %.2f%% is below 50.0%% threshold", reductionPct)

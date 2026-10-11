@@ -130,10 +130,9 @@ func BenchmarkSuperoptimizeOperator(b *testing.B) {
 	for i := range src {
 		src[i] = byte(i % 16)
 	}
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = SuperoptimizeOperator(src)
 	}
 }
@@ -142,10 +141,9 @@ func BenchmarkApplyGCTRForward(b *testing.B) {
 	src := make([]byte, 65536)
 	dst := make([]byte, 65536)
 	b.SetBytes(int64(len(src)))
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = ApplyGCTRForward(src, dst, OpGCTXORDelta4)
 	}
 }
@@ -154,10 +152,9 @@ func BenchmarkApplyGCTRInverse(b *testing.B) {
 	src := make([]byte, 65536)
 	dst := make([]byte, 65536)
 	b.SetBytes(int64(len(src)))
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = ApplyGCTRInverse(src, dst, OpGCTXORDelta4)
 	}
 }
@@ -166,10 +163,9 @@ func BenchmarkApplyGCTRForward_Delta8(b *testing.B) {
 	src := make([]byte, 65536)
 	dst := make([]byte, 65536)
 	b.SetBytes(int64(len(src)))
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = ApplyGCTRForward(src, dst, OpGCTXORDelta8)
 	}
 }
@@ -178,10 +174,9 @@ func BenchmarkApplyGCTRInverse_Delta8(b *testing.B) {
 	src := make([]byte, 65536)
 	dst := make([]byte, 65536)
 	b.SetBytes(int64(len(src)))
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = ApplyGCTRInverse(src, dst, OpGCTXORDelta8)
 	}
 }

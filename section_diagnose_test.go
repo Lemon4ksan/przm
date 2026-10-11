@@ -2,8 +2,8 @@ package przm
 
 import (
 	"fmt"
-	"testing"
 	"os"
+	"testing"
 )
 
 func TestDiagnoseSections(t *testing.T) {

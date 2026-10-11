@@ -207,8 +207,6 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 			return dst[:totalUSize], nil
 		}
 
-
-
 		// 32-bit magic formats (Symplectic, Mahler, Sheaf, GCTR, IsoQuant, Heisenberg, CellularSheaf, Mobius, Margolus, Padic, Hodge, HMDS, Spectral)
 		switch magic {
 		case HMDSMagic:
@@ -277,7 +275,12 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 	// Fast-path: Raw uncompressed payload
 	if (hdr.Flags & FlagUncompressed) != 0 {
 		if len(src)-HeaderSize < uSize {
-			return nil, fmt.Errorf("%w: truncated uncompressed payload (%d < %d)", ErrCorruptedFrame, len(src)-HeaderSize, uSize)
+			return nil, fmt.Errorf(
+				"%w: truncated uncompressed payload (%d < %d)",
+				ErrCorruptedFrame,
+				len(src)-HeaderSize,
+				uSize,
+			)
 		}
 		copy(dst[:uSize], src[HeaderSize:HeaderSize+uSize])
 		return dst[:uSize], nil
@@ -298,8 +301,17 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 	sec2Offset := sec1Offset + sec1Size
 	sec3Offset := sec2Offset + hdr.CmdStreamSize
 	sec4Offset := sec3Offset + hdr.OffsetStreamSize
-	if sec1Offset < 0 || sec1Size < 0 || hdr.CmdStreamSize < 0 || hdr.OffsetStreamSize < 0 || sec2Offset > len(src) || sec3Offset > len(src) || sec4Offset > len(src) {
-		return nil, fmt.Errorf("%w: corrupted section directory offsets (sec2=%d, sec3=%d, sec4=%d, len=%d)", ErrCorruptedFrame, sec2Offset, sec3Offset, sec4Offset, len(src))
+	if sec1Offset < 0 || sec1Size < 0 || hdr.CmdStreamSize < 0 || hdr.OffsetStreamSize < 0 || sec2Offset > len(src) ||
+		sec3Offset > len(src) ||
+		sec4Offset > len(src) {
+		return nil, fmt.Errorf(
+			"%w: corrupted section directory offsets (sec2=%d, sec3=%d, sec4=%d, len=%d)",
+			ErrCorruptedFrame,
+			sec2Offset,
+			sec3Offset,
+			sec4Offset,
+			len(src),
+		)
 	}
 
 	var cmds []byte
@@ -309,10 +321,8 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 
 	outBuf := dst
 	if hdr.NormMode != NormModeNone {
-		if pad == nil {
-			pad = decScratchPool.Get()
-			defer decScratchPool.Put(pad)
-		}
+		pad = decScratchPool.Get()
+		defer decScratchPool.Put(pad)
 		if cap(pad.normBuf) < allocSize+64 {
 			pad.normBuf = bufkit.AlignedBytes(allocSize+64, bufkit.CacheLineSize)
 		}
@@ -329,12 +339,13 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 		}
 		sec2Mode := src[sec2Offset]
 		sec2OrigLen := int(binary.LittleEndian.Uint32(src[sec2Offset+1 : sec2Offset+5]))
-		if sec2Mode == ModeFlat {
+		switch sec2Mode {
+		case ModeFlat:
 			if sec2Offset+5+sec2OrigLen > sec2Offset+hdr.CmdStreamSize || sec2Offset+5+sec2OrigLen > len(src) {
 				return nil, fmt.Errorf("%w: truncated flat command stream", ErrCorruptedFrame)
 			}
 			cmds = src[sec2Offset+5 : sec2Offset+5+sec2OrigLen]
-		} else if sec2Mode == ModeHuffman4X || sec2Mode == ModeHuffmanCompact || sec2Mode == ModeHuffmanCompact4X || sec2Mode == ModeRecursiveLZ {
+		case ModeHuffman4X, ModeHuffmanCompact, ModeHuffmanCompact4X, ModeRecursiveLZ:
 			if pad == nil {
 				pad = decScratchPool.Get()
 				defer decScratchPool.Put(pad)
@@ -347,7 +358,7 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 				return nil, err
 			}
 			cmds = pad.cmdBuf[:n]
-		} else {
+		default:
 			return nil, fmt.Errorf("%w: unknown command stream mode %d", ErrCorruptedFrame, sec2Mode)
 		}
 	}
@@ -374,7 +385,11 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 			if cap(pad.offBuf) < sec3OrigLen+64 {
 				pad.offBuf = bufkit.AlignedBytes(sec3OrigLen+64, bufkit.CacheLineSize)
 			}
-			n, err := UnpackStream(pad.offBuf[:sec3OrigLen], src[sec3Offset:sec3Offset+hdr.OffsetStreamSize], &pad.table)
+			n, err := UnpackStream(
+				pad.offBuf[:sec3OrigLen],
+				src[sec3Offset:sec3Offset+hdr.OffsetStreamSize],
+				&pad.table,
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -464,12 +479,22 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 		switch hdr.NormMode {
 		case NormModeHex, NormModeHexUpper:
 			if uSize != allocSize*2 {
-				return nil, fmt.Errorf("%w: hex expanded size mismatch (%d != %d)", ErrCorruptedFrame, uSize, allocSize*2)
+				return nil, fmt.Errorf(
+					"%w: hex expanded size mismatch (%d != %d)",
+					ErrCorruptedFrame,
+					uSize,
+					allocSize*2,
+				)
 			}
 			ExpandHexTo(dst[:uSize], outBuf[:allocSize], hdr.NormMode == NormModeHexUpper)
 		case NormModeBase64, NormModeBase64URL:
 			if allocSize%3 != 0 || uSize != (allocSize/3)*4 {
-				return nil, fmt.Errorf("%w: base64 expanded size mismatch (%d != %d)", ErrCorruptedFrame, uSize, (allocSize/3)*4)
+				return nil, fmt.Errorf(
+					"%w: base64 expanded size mismatch (%d != %d)",
+					ErrCorruptedFrame,
+					uSize,
+					(allocSize/3)*4,
+				)
 			}
 			ExpandBase64To(dst[:uSize], outBuf[:allocSize], 0, hdr.NormMode == NormModeBase64URL)
 		case NormModeBase64Pad1, NormModeBase64URLP1:

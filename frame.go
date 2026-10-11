@@ -13,19 +13,18 @@ import (
 
 // Frame constants and magic signatures.
 const (
-	MagicPRZM      uint32 = 0x4D5A5250 // ASCII 'P', 'R', 'Z', 'M' (Little-Endian)
-	MagicPRZS      uint32 = 0x535A5250 // ASCII 'P', 'R', 'Z', 'S' (Little-Endian)
-	HeaderSize     int    = 8
-	StreamHeaderSize int  = 17
-	MaxBlockSize   int    = 16 * 1024 * 1024 // 16 MiB max frame size
-	DedupBlockSize        = 65536           // 64 KiB block granularity for cross-block deduplication
+	MagicPRZM        uint32 = 0x4D5A5250 // ASCII 'P', 'R', 'Z', 'M' (Little-Endian)
+	MagicPRZS        uint32 = 0x535A5250 // ASCII 'P', 'R', 'Z', 'S' (Little-Endian)
+	HeaderSize       int    = 8
+	StreamHeaderSize int    = 17
+	MaxBlockSize     int    = 16 * 1024 * 1024 // 16 MiB max frame size
+	DedupBlockSize          = 65536            // 64 KiB block granularity for cross-block deduplication
 )
 
 // Stream configuration bitmasks.
 const (
 	StreamFlagIndependentChunks uint8 = 0x01 // Bit 0: Independent Chunks
 )
-
 
 // Frame configuration bitmasks (PRZM-SPEC-0.5 Section 3.2).
 const (
@@ -59,30 +58,30 @@ const (
 
 // Fused Opcode Constants (PRZM-SPEC-0.5 Fused Engine)
 const (
-	OpcodeMaskFusedRepeat  uint8 = 0x80
-	OpcodeFlagFusedRepeat  uint8 = 0x00
-	OpcodeMaskFusedExt     uint8 = 0xC0
-	OpcodeFlagFusedExt     uint8 = 0x80
-	OpcodePrefixLongRepeat uint8 = 0xC0 // 0xC0 .. 0xCF: Locality queue indices 0..15
-	OpcodePrefixStride     uint8 = 0xD0 // 0xD0 .. 0xD7
-	OpcodePrefixShortDict  uint8 = 0xD8 // 0xD8 .. 0xDF: Top-8 direct 1-byte schema tokens
-	OpcodePrefixDeltaRing  uint8 = 0xE0 // 0xE0 .. 0xE7
-	OpcodePrefixDeltaExpl  uint8 = 0xE8
-	OpcodePrefixRawDict    uint8 = 0xE9 // 0xE9: Direct Raw Dictionary Match (offset inside rawDict)
-	OpcodePrefixTransSpace uint8 = 0xEA // 0xEA <tokID>: " " + tok
-	OpcodePrefixTransQuote uint8 = 0xEB // 0xEB <tokID>: tok + "\""
-	OpcodePrefixTransBrace uint8 = 0xEC // 0xEC <tokID>: tok + "{"
-	OpcodePrefixTransUpper uint8 = 0xED // 0xED <tokID>: UppercaseFirst(tok)
-	OpcodePrefixTransSemi  uint8 = 0xEE // 0xEE <tokID>: tok + ";"
+	OpcodeMaskFusedRepeat       uint8 = 0x80
+	OpcodeFlagFusedRepeat       uint8 = 0x00
+	OpcodeMaskFusedExt          uint8 = 0xC0
+	OpcodeFlagFusedExt          uint8 = 0x80
+	OpcodePrefixLongRepeat      uint8 = 0xC0 // 0xC0 .. 0xCF: Locality queue indices 0..15
+	OpcodePrefixStride          uint8 = 0xD0 // 0xD0 .. 0xD7
+	OpcodePrefixShortDict       uint8 = 0xD8 // 0xD8 .. 0xDF: Top-8 direct 1-byte schema tokens
+	OpcodePrefixDeltaRing       uint8 = 0xE0 // 0xE0 .. 0xE7
+	OpcodePrefixDeltaExpl       uint8 = 0xE8
+	OpcodePrefixRawDict         uint8 = 0xE9 // 0xE9: Direct Raw Dictionary Match (offset inside rawDict)
+	OpcodePrefixTransSpace      uint8 = 0xEA // 0xEA <tokID>: " " + tok
+	OpcodePrefixTransQuote      uint8 = 0xEB // 0xEB <tokID>: tok + "\""
+	OpcodePrefixTransBrace      uint8 = 0xEC // 0xEC <tokID>: tok + "{"
+	OpcodePrefixTransUpper      uint8 = 0xED // 0xED <tokID>: UppercaseFirst(tok)
+	OpcodePrefixTransSemi       uint8 = 0xEE // 0xEE <tokID>: tok + ";"
 	OpcodePrefixTransSpaceSpace uint8 = 0xEF // 0xEF <tokID>: " " + tok + " "
-	OpcodePrefixLiteral    uint8 = 0xF0
-	OpcodePrefixRLE        uint8 = 0xF1
-	OpcodePrefixDictToken  uint8 = 0xF2 // 0xF2 <tokenID>: 2-byte schema token from active DictID
-	OpcodePrefixLitShort   uint8 = 0xF3 // 0xF3 .. 0xFA: 1-byte direct literal run for 1..8 literals
-	OpcodePrefixTransEqQuote uint8 = 0xFB // 0xFB <tokID>: tok + "=\""
-	OpcodePrefixTransTagClose uint8 = 0xFC // 0xFC <tokID>: tok + ">"
-	OpCopyBlock            uint8 = 0xFD // 0xFD: Aligned 64 KiB block replication (Milestone 5)
-	OpcodePrefixTransPair  uint8 = 0xFF // 0xFF <tok1> <tok2>: Sub-4-byte token pair (tok1 + tok2)
+	OpcodePrefixLiteral         uint8 = 0xF0
+	OpcodePrefixRLE             uint8 = 0xF1
+	OpcodePrefixDictToken       uint8 = 0xF2 // 0xF2 <tokenID>: 2-byte schema token from active DictID
+	OpcodePrefixLitShort        uint8 = 0xF3 // 0xF3 .. 0xFA: 1-byte direct literal run for 1..8 literals
+	OpcodePrefixTransEqQuote    uint8 = 0xFB // 0xFB <tokID>: tok + "=\""
+	OpcodePrefixTransTagClose   uint8 = 0xFC // 0xFC <tokID>: tok + ">"
+	OpCopyBlock                 uint8 = 0xFD // 0xFD: Aligned 64 KiB block replication (Milestone 5)
+	OpcodePrefixTransPair       uint8 = 0xFF // 0xFF <tok1> <tok2>: Sub-4-byte token pair (tok1 + tok2)
 )
 
 // Extended match opcode flags (Category 10).
@@ -120,7 +119,6 @@ const (
 const (
 	ArchivalPNGMagic uint32 = 0x504E4741 // 'P','N','G','A' (Archival PNG container)
 )
-
 
 // FrameHeader holds parsed frame metadata.
 type FrameHeader struct {
@@ -238,7 +236,12 @@ type StreamHeader struct {
 // ParseStreamHeader parses the 17-byte PRZS stream container header.
 func ParseStreamHeader(src []byte) (StreamHeader, error) {
 	if len(src) < StreamHeaderSize {
-		return StreamHeader{}, fmt.Errorf("%w: stream header smaller than %d bytes (%d bytes)", ErrCorruptedFrame, StreamHeaderSize, len(src))
+		return StreamHeader{}, fmt.Errorf(
+			"%w: stream header smaller than %d bytes (%d bytes)",
+			ErrCorruptedFrame,
+			StreamHeaderSize,
+			len(src),
+		)
 	}
 
 	magic := binary.LittleEndian.Uint32(src[0:4])
@@ -279,4 +282,3 @@ func BuildStreamContainer(chunks [][]byte, totalUSize uint64) []byte {
 
 	return buf
 }
-

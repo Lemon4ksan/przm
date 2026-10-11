@@ -10,7 +10,9 @@ import (
 )
 
 func TestDict_NoBuiltinDictLeak(t *testing.T) {
-	jsonPayload := []byte(`{"status":200,"level":"INFO","method":"GET","uri":"/api/v1/billing/checkout","user_id":"123","message":"ok"}`)
+	jsonPayload := []byte(
+		`{"status":200,"level":"INFO","method":"GET","uri":"/api/v1/billing/checkout","user_id":"123","message":"ok"}`,
+	)
 
 	compressed, err := Compress(jsonPayload, 2)
 	if err != nil {
@@ -106,7 +108,9 @@ func TestDict_RegistryAndExplicitCodec(t *testing.T) {
 		t.Fatalf("GetDictionary failed to retrieve registered dictionary")
 	}
 
-	telemetryData := []byte("device_uuid_prefix-001: temperature_celsius=23.5, humidity_relative_percent=45, pressure_hectopascals=1013")
+	telemetryData := []byte(
+		"device_uuid_prefix-001: temperature_celsius=23.5, humidity_relative_percent=45, pressure_hectopascals=1013",
+	)
 	compressed, err := CompressWithDict(telemetryData, 2, dict)
 	if err != nil {
 		t.Fatalf("CompressWithDict error: %v", err)
@@ -178,10 +182,14 @@ func TestDict_TrainDictionary(t *testing.T) {
 }
 
 func TestDict_RawDictionaryPrefix(t *testing.T) {
-	rawDict := []byte("<!DOCTYPE html><html><head><title>Standard Web Dictionary Prefix Buffer</title></head><body><div class=\"container\"><header><h1>Welcome</h1></header>")
+	rawDict := []byte(
+		"<!DOCTYPE html><html><head><title>Standard Web Dictionary Prefix Buffer</title></head><body><div class=\"container\"><header><h1>Welcome</h1></header>",
+	)
 	dictID := uint32(0x57454231) // "WEB1"
 
-	payload := []byte("<!DOCTYPE html><html><head><title>Standard Web Dictionary Prefix Buffer</title></head><body><div class=\"container\"><header><h1>Welcome</h1></header><p>Custom content page here</p></div></body></html>")
+	payload := []byte(
+		"<!DOCTYPE html><html><head><title>Standard Web Dictionary Prefix Buffer</title></head><body><div class=\"container\"><header><h1>Welcome</h1></header><p>Custom content page here</p></div></body></html>",
+	)
 
 	for _, level := range []int{1, 3, 5} {
 		opts := CompressOptions{
@@ -226,7 +234,9 @@ func TestDict_RawDictionaryPrefix(t *testing.T) {
 func TestDict_RawDictionaryLargeBrotliLike(t *testing.T) {
 	// Construct a realistic 122,784 byte external dictionary
 	dictBuf := make([]byte, 122784)
-	pattern := []byte("https://schema.org/WebPage application/json charset=utf-8 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"> ")
+	pattern := []byte(
+		"https://schema.org/WebPage application/json charset=utf-8 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"> ",
+	)
 	for i := 0; i < len(dictBuf); i += len(pattern) {
 		copy(dictBuf[i:], pattern[:min(len(pattern), len(dictBuf)-i)])
 	}
@@ -260,7 +270,12 @@ func TestDict_RawDictionaryLargeBrotliLike(t *testing.T) {
 		}
 
 		if len(comp) >= len(rawPayload) {
-			t.Fatalf("level %d: expected dictionary compression savings, got %d >= %d", level, len(comp), len(rawPayload))
+			t.Fatalf(
+				"level %d: expected dictionary compression savings, got %d >= %d",
+				level,
+				len(comp),
+				len(rawPayload),
+			)
 		}
 
 		RegisterRawDictionary(dictID, dictBuf)
@@ -345,11 +360,15 @@ func TestDict_Level6_HenselUltrametric(t *testing.T) {
 	var payload bytes.Buffer
 	for i := 0; i < 20; i++ {
 		payload.WriteString("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">")
-		payload.WriteString("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>PRZM L6 Test</title>")
+		payload.WriteString(
+			"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>PRZM L6 Test</title>",
+		)
 		payload.WriteString("<link rel=\"stylesheet\" href=\"style.css\"></head><body>")
 		payload.WriteString("<div class=\"main\"><header><nav><ul><li><a href=\"#home\">Home</a></li>")
 		payload.WriteString("<li><a href=\"#about\">About</a></li></ul></nav></header>")
-		payload.WriteString("<main class=\"content\"><section class=\"hero\"><h1>Welcome</h1><p>Fast decompression</p></section></main>")
+		payload.WriteString(
+			"<main class=\"content\"><section class=\"hero\"><h1>Welcome</h1><p>Fast decompression</p></section></main>",
+		)
 		payload.WriteString("<footer><p>&copy; 2026</p></footer></div></body></html>\n")
 	}
 
@@ -366,7 +385,12 @@ func TestDict_Level6_HenselUltrametric(t *testing.T) {
 		t.Fatalf("Level 6 CompressWithOptions failed: %v", err)
 	}
 
-	t.Logf("Raw size: %d B, L6 Compressed size: %d B (Ratio: %.2fx)", len(raw), len(comp), float64(len(raw))/float64(len(comp)))
+	t.Logf(
+		"Raw size: %d B, L6 Compressed size: %d B (Ratio: %.2fx)",
+		len(raw),
+		len(comp),
+		float64(len(raw))/float64(len(comp)),
+	)
 
 	decomp, err := Decompress(comp)
 	if err != nil {

@@ -299,7 +299,8 @@ func induceGrammarWithScratchpadNoPrune(src []byte, sp *grammarScratchpad) (*Gra
 		prev := sp.matchTable[slot]
 		if prev > 0 {
 			pIdx := int(prev - 1)
-			if binary.LittleEndian.Uint64(src[pIdx:pIdx+8]) == h1 && binary.LittleEndian.Uint64(src[pIdx+8:pIdx+16]) == h2 {
+			if binary.LittleEndian.Uint64(src[pIdx:pIdx+8]) == h1 &&
+				binary.LittleEndian.Uint64(src[pIdx+8:pIdx+16]) == h2 {
 				for j := 0; j < 16; j += 2 {
 					pk := (uint32(src[i+j]) << 8) | uint32(src[i+j+1])
 					if sp.pairToL1[pk] < 40 {

@@ -46,8 +46,12 @@ var (
 	jsonMethods  = []string{"GET", "POST", "PUT", "DELETE"}
 	jsonStatuses = []int{200, 201, 204, 400, 401, 403, 404, 500}
 
-	goPkgHeader       = []byte("// Package service generated for PRZM benchmarking.\npackage service\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\t\"time\"\n)\n\n")
-	goNestedPkgHeader = []byte("// Package nested generated for PRZM benchmarking.\npackage nested\n\nimport (\n\t\"context\"\n\t\"fmt\"\n)\n\n")
+	goPkgHeader = []byte(
+		"// Package service generated for PRZM benchmarking.\npackage service\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\t\"time\"\n)\n\n",
+	)
+	goNestedPkgHeader = []byte(
+		"// Package nested generated for PRZM benchmarking.\npackage nested\n\nimport (\n\t\"context\"\n\t\"fmt\"\n)\n\n",
+	)
 )
 
 func fastFormatUint(dst []byte, val uint64) int {
@@ -119,18 +123,24 @@ func renderGoASTFunctionBlock(dst []byte, i int) int {
 	p += fastFormatUint(dst[p:], uint64(i%10))
 	p += copy(dst[p:], ") (*TaskResponse, error) {\n\tif req == nil {\n\t\treturn nil, fmt.Errorf(\"task ")
 	p += fastFormatUint(dst[p:], uint64(i))
-	p += copy(dst[p:], ": request payload cannot be nil\")\n\t}\n\tselect {\n\tcase <-ctx.Done():\n\t\treturn nil, ctx.Err()\n\tdefault:\n\t}\n\tstart := time.Now()\n\tres, err := s.client.ProcessItem(ctx, req.ItemID, ")
+	p += copy(
+		dst[p:],
+		": request payload cannot be nil\")\n\t}\n\tselect {\n\tcase <-ctx.Done():\n\t\treturn nil, ctx.Err()\n\tdefault:\n\t}\n\tstart := time.Now()\n\tres, err := s.client.ProcessItem(ctx, req.ItemID, ",
+	)
 	p += fastFormatUint(dst[p:], uint64(i*100))
 	p += copy(dst[p:], ")\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"task ")
 	p += fastFormatUint(dst[p:], uint64(i))
 	p += copy(dst[p:], " failed to process item %d: %w\", req.ItemID, err)\n\t}\n\ts.logger.Info(\"Task ")
 	p += fastFormatUint(dst[p:], uint64(i))
-	p += copy(dst[p:], " completed successfully\", \"duration_ms\", time.Since(start).Milliseconds())\n\treturn &TaskResponse{Status: \"SUCCESS\", Result: res}, nil\n}\n\n")
+	p += copy(
+		dst[p:],
+		" completed successfully\", \"duration_ms\", time.Since(start).Milliseconds())\n\treturn &TaskResponse{Status: \"SUCCESS\", Result: res}, nil\n}\n\n",
+	)
 
 	return p
 }
 
-func renderNestedASTTree(dst []byte, funcIdx int, maxDepth int) int {
+func renderNestedASTTree(dst []byte, funcIdx, maxDepth int) int {
 	const tabBuf = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t"
 	p := 0
 	p += copy(dst[p:], "// NestedTree_")
@@ -174,7 +184,7 @@ func renderNestedASTTree(dst []byte, funcIdx int, maxDepth int) int {
 	return p
 }
 
-func renderNestedJSONRecord(dst []byte, recordIdx int, maxDepth int) int {
+func renderNestedJSONRecord(dst []byte, recordIdx, maxDepth int) int {
 	p := 0
 	for d := 0; d < maxDepth; d++ {
 		p += copy(dst[p:], `{"depth":`)
@@ -438,8 +448,8 @@ func AnalyzeGridComplex(src []byte, M, W int, twist uint8) *HodgeGridRep {
 }
 
 func ReconstructGridComplex(dst []byte, origLen, M, W int, anchor, twist uint8, flags uint16,
-	gammaH, gammaV uint8, eh, ev []byte, curlData []byte, nnz int, remainder []byte) error {
-
+	gammaH, gammaV uint8, eh, ev, curlData []byte, nnz int, remainder []byte,
+) error {
 	if len(dst) < origLen {
 		return ErrHodgeBufferTooSmall
 	}

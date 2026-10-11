@@ -11,7 +11,7 @@ func TestGPUDetection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to init GPU: %v", err)
 	}
-	defer comp.Close()
+	defer func() { _ = comp.Close() }()
 
 	t.Logf("Detected GPU: %s, SMs: %d, VRAM: %d MB, Compute: %d.%d",
 		comp.DeviceName, comp.SMCount, comp.TotalVRAMBytes/(1024*1024), comp.ComputeMajor, comp.ComputeMinor)
@@ -68,14 +68,16 @@ func TestPTXKernelExecutionAndAccuracy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to init GPU: %v", err)
 	}
-	defer comp.Close()
+	defer func() { _ = comp.Close() }()
 
 	testDatasets := map[string][]byte{
 		"repeated_pattern": bytes.Repeat([]byte("PRZM_GPU_ACCELERATION_TEST_DATA_BLOCK_1234567890_"), 1000),
 		"structured_json": []byte(`{"status":"success","code":200,"records":[{"id":1,"name":"alpha","val":100},` +
 			`{"id":2,"name":"alpha","val":100},{"id":3,"name":"alpha","val":100}]}` +
 			strings.Repeat(`{"event":"heartbeat","stream":"archival","seq":9999,"active":true},`, 200)),
-		"go_source_code": []byte(strings.Repeat("func BenchmarkKernel(b *testing.B) { for i := 0; i < b.N; i++ { run(); } }\n", 300)),
+		"go_source_code": []byte(
+			strings.Repeat("func BenchmarkKernel(b *testing.B) { for i := 0; i < b.N; i++ { run(); } }\n", 300),
+		),
 	}
 
 	for name, data := range testDatasets {
@@ -122,7 +124,7 @@ func TestVRAMBandwidth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to init GPU: %v", err)
 	}
-	defer comp.Close()
+	defer func() { _ = comp.Close() }()
 
 	var maxBW float64
 	for trial := 0; trial < 10; trial++ {
@@ -149,7 +151,7 @@ func TestPinnedMemoryPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPinnedBufferPool failed: %v", err)
 	}
-	defer pool.Close()
+	defer func() { _ = pool.Close() }()
 
 	buf, err := pool.Get()
 	if err != nil {
@@ -228,4 +230,3 @@ func TestPackUnpackMatch(t *testing.T) {
 		t.Errorf("PackMatch32 with offset == 0 should return 0")
 	}
 }
-

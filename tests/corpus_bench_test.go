@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/lemon4ksan/foundation/bufkit"
+
 	"github.com/lemon4ksan/przm"
 	"github.com/lemon4ksan/przm/bench"
 )
@@ -77,7 +78,7 @@ func loadOrGenerateCorpus(t testing.TB) []CorpusItem {
 	if csvPath != "" {
 		f, err := os.Open(csvPath)
 		if err == nil {
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			r := csv.NewReader(f)
 			_, _ = r.Read() // skip CSV header
 			idx := 0
@@ -253,7 +254,6 @@ func BenchmarkCorpus_Decompress_MultiCore(b *testing.B) {
 		}
 		origLen := len(item.Data)
 		extra := 0
-
 
 		b.Run(item.Name, func(b *testing.B) {
 			b.SetBytes(int64(origLen))

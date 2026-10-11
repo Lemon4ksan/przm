@@ -76,24 +76,29 @@ func TestChallenger_GPU_AdversarialChaosMonkey(t *testing.T) {
 
 			// Create distinct payload shapes
 			payloads := [][]byte{
-				{},                                 // 0 bytes
-				{0x55},                             // 1 byte
-				{0xAA, 0x55},                       // 2 bytes
-				{0x01, 0x02, 0x03},                 // 3 bytes
-				bytes.Repeat([]byte("A"), 128),     // Small repetitive
-				bytes.Repeat([]byte("B"), 65536),   // 64 KiB repetitive
-				make([]byte, 104729),               // Prime size zero-fill
-				func() []byte {                     // High-entropy random 32KB
+				{},                               // 0 bytes
+				{0x55},                           // 1 byte
+				{0xAA, 0x55},                     // 2 bytes
+				{0x01, 0x02, 0x03},               // 3 bytes
+				bytes.Repeat([]byte("A"), 128),   // Small repetitive
+				bytes.Repeat([]byte("B"), 65536), // 64 KiB repetitive
+				make([]byte, 104729),             // Prime size zero-fill
+				func() []byte { // High-entropy random 32KB
 					b := make([]byte, 32768)
 					for i := range b {
-						b[i] = byte((i * 109 + 37) ^ (i >> 5))
+						b[i] = byte((i*109 + 37) ^ (i >> 5))
 					}
 					return b
 				}(),
 				func() []byte { // Structured JSON-like
 					var b bytes.Buffer
 					for i := 0; i < 500; i++ {
-						fmt.Fprintf(&b, `{"worker":%d,"idx":%d,"timestamp":1700000000,"status":"ACTIVE"}`+"\n", workerID, i)
+						fmt.Fprintf(
+							&b,
+							`{"worker":%d,"idx":%d,"timestamp":1700000000,"status":"ACTIVE"}`+"\n",
+							workerID,
+							i,
+						)
 					}
 					return b.Bytes()
 				}(),
@@ -145,8 +150,11 @@ func TestChallenger_GPU_AdversarialChaosMonkey(t *testing.T) {
 		t.Fatalf("Expected %d successful roundtrips, got %d", totalExpected, completedCount.Load())
 	}
 
-	t.Logf("Adversarial Chaos Monkey PASSED: %d operations completed across %d fault injections with 0 panics and 100%% bit-exact roundtrips",
-		completedCount.Load(), faultInjections.Load())
+	t.Logf(
+		"Adversarial Chaos Monkey PASSED: %d operations completed across %d fault injections with 0 panics and 100%% bit-exact roundtrips",
+		completedCount.Load(),
+		faultInjections.Load(),
+	)
 }
 
 // TestChallenger_GPU_ScratchpadContamination verifies that when GPU compression

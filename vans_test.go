@@ -26,7 +26,14 @@ func TestVANS_Matrix16x16(t *testing.T) {
 		{"code_64K", bench.GenerateSourceCode(64 * 1024)},
 	}
 
-	t.Logf("%-16s | %-12s | %-12s | %-12s | %-16s", "Dataset", "H(H) bits", "H(L) bits", "H(H,L) bits", "I(H; L) bits/sym")
+	t.Logf(
+		"%-16s | %-12s | %-12s | %-12s | %-16s",
+		"Dataset",
+		"H(H) bits",
+		"H(L) bits",
+		"H(H,L) bits",
+		"I(H; L) bits/sym",
+	)
 	t.Logf("-------------------------------------------------------------------------------")
 
 	for _, c := range corpora {
@@ -36,7 +43,7 @@ func TestVANS_Matrix16x16(t *testing.T) {
 		for _, f := range fH {
 			if f > 0 {
 				p := float64(f) / float64(mat.Total)
-				hH -= p * (mat.JointEntropy()) // placeholder for logging
+				hH -= p * mat.JointEntropy() // placeholder for logging
 			}
 		}
 		mi := mat.MutualInformation()

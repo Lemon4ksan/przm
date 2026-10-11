@@ -229,7 +229,7 @@ func (mf *HenselMatchFinder) Insert(pos int, src []byte, uSize int) {
 }
 
 // FindMatchHensel executes ultrametric match search for the target at pos.
-func (mf *HenselMatchFinder) FindMatchHensel(src []byte, pos int, maxDepth int, minLen int) (bestOffset int, bestLen int) {
+func (mf *HenselMatchFinder) FindMatchHensel(src []byte, pos, maxDepth, minLen int) (bestOffset, bestLen int) {
 	switch mf.windowLog {
 	case WindowLog1M:
 		if mf.sp1M != nil {
@@ -541,7 +541,7 @@ func Hash4(w4 uint32) uint32 {
 // computeHenselHash calculates the multiplicative Fibonacci hash for a 4-byte prefix.
 //
 //go:nosplit
-func computeHenselHash(w4 uint32, headBits int, headMask int) int {
+func computeHenselHash(w4 uint32, headBits, headMask int) int {
 	return int(hash4(w4)>>(32-headBits)) & headMask
 }
 
@@ -778,7 +778,17 @@ func HenselInsert(sp *HenselScratchpad, p int, src []byte, uSize int) {
 	if sp == nil {
 		return
 	}
-	HenselInsertGeneric(sp.head[:], sp.prev[:], sp.fp32[:], p, src, uSize, HenselWindowMask, HenselHashBits, HenselHashMask)
+	HenselInsertGeneric(
+		sp.head[:],
+		sp.prev[:],
+		sp.fp32[:],
+		p,
+		src,
+		uSize,
+		HenselWindowMask,
+		HenselHashBits,
+		HenselHashMask,
+	)
 }
 
 // HenselFindMatch performs ultrametric match search up to maxDepth with Theorem HL-2 pruning (64 KiB window).
@@ -892,7 +902,7 @@ func HenselInsertL6(sp *HenselScratchpadL6, p int, src []byte, uSize int) {
 	// Tier 3: Macro-hash (sample every 8 bytes)
 	if (p&7) == 0 && p+8 <= uSize {
 		w8 := *(*uint64)(unsafe.Add(srcPtr, p))
-		mHash := uint32((w8 ^ (w8 >> 32)) * 0x9E3779B9) >> 16
+		mHash := uint32((w8^(w8>>32))*0x9E3779B9) >> 16
 		sp.macroHead[mHash&0xFFFF] = int32(p + 1)
 	}
 }
@@ -954,7 +964,7 @@ func HenselFindMatchL6(
 	// 1. Tier 3: Macro Anchor check (for big structural blocks >= 16 bytes)
 	if pos+8 <= uSize {
 		w8 := *(*uint64)(unsafe.Add(srcPtr, pos))
-		mHash := uint32((w8 ^ (w8 >> 32)) * 0x9E3779B9) >> 16
+		mHash := uint32((w8^(w8>>32))*0x9E3779B9) >> 16
 		candMacro := int(sp.macroHead[mHash&0xFFFF]) - 1
 		if candMacro >= 0 && candMacro < pos {
 			d := pos - candMacro

@@ -177,13 +177,28 @@ func EstimateOptimalIsoQuant(src []byte) (qL, qR Quaternion4, benefited bool) {
 		c2 := GF256Mul(m2, GF256Inv(m0))
 		c3 := GF256Mul(m3, GF256Inv(m0))
 		if c1 != 0 {
-			candidates = append(candidates, Quaternion4{1, c1, c1, 0}, Quaternion4{1, 0, c1, c1}, Quaternion4{1, c1, 0, c1})
+			candidates = append(
+				candidates,
+				Quaternion4{1, c1, c1, 0},
+				Quaternion4{1, 0, c1, c1},
+				Quaternion4{1, c1, 0, c1},
+			)
 		}
 		if c2 != 0 {
-			candidates = append(candidates, Quaternion4{1, c2, c2, 0}, Quaternion4{1, 0, c2, c2}, Quaternion4{1, c2, 0, c2})
+			candidates = append(
+				candidates,
+				Quaternion4{1, c2, c2, 0},
+				Quaternion4{1, 0, c2, c2},
+				Quaternion4{1, c2, 0, c2},
+			)
 		}
 		if c3 != 0 {
-			candidates = append(candidates, Quaternion4{1, c3, c3, 0}, Quaternion4{1, 0, c3, c3}, Quaternion4{1, c3, 0, c3})
+			candidates = append(
+				candidates,
+				Quaternion4{1, c3, c3, 0},
+				Quaternion4{1, 0, c3, c3},
+				Quaternion4{1, c3, 0, c3},
+			)
 		}
 	}
 
@@ -217,10 +232,58 @@ func EstimateOptimalIsoQuant(src []byte) (qL, qR Quaternion4, benefited bool) {
 		zerosSingle := 0
 		for i := 0; i < sampleLen; i += 4 {
 			d0, d1, d2, d3 := src[i], src[i+1], src[i+2], src[i+3]
-			t0 := GF256Mul(qEffSingle[0], d0) ^ GF256Mul(qEffSingle[1], d1) ^ GF256Mul(qEffSingle[2], d2) ^ GF256Mul(qEffSingle[3], d3)
-			t1 := GF256Mul(qEffSingle[0], d1) ^ GF256Mul(qEffSingle[1], d0) ^ GF256Mul(qEffSingle[2], d3) ^ GF256Mul(qEffSingle[3], d2)
-			t2 := GF256Mul(qEffSingle[0], d2) ^ GF256Mul(qEffSingle[2], d0) ^ GF256Mul(qEffSingle[1], d3) ^ GF256Mul(qEffSingle[3], d1)
-			t3 := GF256Mul(qEffSingle[0], d3) ^ GF256Mul(qEffSingle[3], d0) ^ GF256Mul(qEffSingle[1], d2) ^ GF256Mul(qEffSingle[2], d1)
+			t0 := GF256Mul(
+				qEffSingle[0],
+				d0,
+			) ^ GF256Mul(
+				qEffSingle[1],
+				d1,
+			) ^ GF256Mul(
+				qEffSingle[2],
+				d2,
+			) ^ GF256Mul(
+				qEffSingle[3],
+				d3,
+			)
+			t1 := GF256Mul(
+				qEffSingle[0],
+				d1,
+			) ^ GF256Mul(
+				qEffSingle[1],
+				d0,
+			) ^ GF256Mul(
+				qEffSingle[2],
+				d3,
+			) ^ GF256Mul(
+				qEffSingle[3],
+				d2,
+			)
+			t2 := GF256Mul(
+				qEffSingle[0],
+				d2,
+			) ^ GF256Mul(
+				qEffSingle[2],
+				d0,
+			) ^ GF256Mul(
+				qEffSingle[1],
+				d3,
+			) ^ GF256Mul(
+				qEffSingle[3],
+				d1,
+			)
+			t3 := GF256Mul(
+				qEffSingle[0],
+				d3,
+			) ^ GF256Mul(
+				qEffSingle[3],
+				d0,
+			) ^ GF256Mul(
+				qEffSingle[1],
+				d2,
+			) ^ GF256Mul(
+				qEffSingle[2],
+				d1,
+			)
 
 			if t0 == 0 {
 				zerosSingle++

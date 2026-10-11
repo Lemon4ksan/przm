@@ -18,8 +18,8 @@ import (
 
 // Global singleton compressor for test speed & context reuse across test suites.
 var (
-	testGPUComp  *gpu.GPUCompressor
-	testGPUOnce  sync.Once
+	testGPUComp    *gpu.GPUCompressor
+	testGPUOnce    sync.Once
 	testGPUInitErr error
 )
 
@@ -188,8 +188,14 @@ func generateSyntheticJSON(records int) []byte {
 		if i > 0 {
 			sb.WriteString(",")
 		}
-		fmt.Fprintf(&sb, `{"id":%d,"sku":"PRZM-GPU-%06d","metric":{"val":%d,"score":%.4f},"tags":["gpu","lz77","archival"]}`,
-			i, i, (i*37)%1000, float64(i)*0.125)
+		fmt.Fprintf(
+			&sb,
+			`{"id":%d,"sku":"PRZM-GPU-%06d","metric":{"val":%d,"score":%.4f},"tags":["gpu","lz77","archival"]}`,
+			i,
+			i,
+			(i*37)%1000,
+			float64(i)*0.125,
+		)
 	}
 	sb.WriteString("]}")
 	return []byte(sb.String())
@@ -197,7 +203,9 @@ func generateSyntheticJSON(records int) []byte {
 
 func generateSyntheticSourceCode(lines int) []byte {
 	var sb strings.Builder
-	sb.WriteString("// Package auto-generated synthetic source corpus for GPU testing\npackage main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n)\n\n")
+	sb.WriteString(
+		"// Package auto-generated synthetic source corpus for GPU testing\npackage main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n)\n\n",
+	)
 	for i := 0; i < lines; i++ {
 		fmt.Fprintf(&sb, "func WorkerFunction_%04d(id int, ch chan int, wg *sync.WaitGroup) {\n", i)
 		fmt.Fprintf(&sb, "\tdefer wg.Done()\n\tresult := id * 42 + %d\n", i%100)

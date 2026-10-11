@@ -444,7 +444,7 @@ func VANSEncode4x(src []byte) ([]byte, error) {
 
 // VANSDecode4xTo decodes a 4-way interleaved Vector-State ANS stream into dst using preallocated model.
 // Guarantees strictly 0 dynamic heap allocations if cap(dst) >= origLen.
-func VANSDecode4xTo(dst []byte, src []byte, model *VANSModel) ([]byte, error) {
+func VANSDecode4xTo(dst, src []byte, model *VANSModel) ([]byte, error) {
 	if len(src) == 0 {
 		return dst[:0], nil
 	}
@@ -527,5 +527,3 @@ func VANSDecode4x(src []byte) ([]byte, error) {
 	var model VANSModel
 	return VANSDecode4xTo(dst, src, &model)
 }
-
-

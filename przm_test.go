@@ -172,7 +172,6 @@ func TestPRZM_IncompressibleRandomFallback(t *testing.T) {
 	}
 }
 
-
 func TestPRZM_CorpusRoundtrip(t *testing.T) {
 	corpus := bench.GenerateCorpus([]int{16 * 1024, 64 * 1024, 256 * 1024})
 	for _, item := range corpus {
@@ -188,7 +187,14 @@ func TestPRZM_CorpusRoundtrip(t *testing.T) {
 			if !bytes.Equal(dec, item.Data) {
 				for i := 0; i < len(item.Data); i++ {
 					if dec[i] != item.Data[i] {
-						t.Fatalf("mismatch at byte %d (len %d vs %d): dec=0x%02X, want=0x%02X", i, len(dec), len(item.Data), dec[i], item.Data[i])
+						t.Fatalf(
+							"mismatch at byte %d (len %d vs %d): dec=0x%02X, want=0x%02X",
+							i,
+							len(dec),
+							len(item.Data),
+							dec[i],
+							item.Data[i],
+						)
 					}
 				}
 			}
@@ -272,7 +278,12 @@ func TestPRZM_StreamRoundtrip(t *testing.T) {
 
 	compressedData := compBuf.Bytes()
 	ratio := float64(len(original)) / float64(len(compressedData))
-	t.Logf("Stream Compression (256 KiB JSON): %d -> %d bytes (Ratio: %.2fx)", len(original), len(compressedData), ratio)
+	t.Logf(
+		"Stream Compression (256 KiB JSON): %d -> %d bytes (Ratio: %.2fx)",
+		len(original),
+		len(compressedData),
+		ratio,
+	)
 
 	// Decompress stream
 	var decBuf bytes.Buffer
@@ -337,7 +348,10 @@ func TestPRZM_Unified_v03_Engines(t *testing.T) {
 
 	// 2. Hyperbolic AST: Deep JSON brackets
 	t.Run("Hyperbolic_AST_JSON", func(t *testing.T) {
-		raw := bytes.Repeat([]byte(`{"user": {"id": 12345, "roles": ["admin", "developer"], "meta": {"active": true}}}, `), 32)
+		raw := bytes.Repeat(
+			[]byte(`{"user": {"id": 12345, "roles": ["admin", "developer"], "meta": {"active": true}}}, `),
+			32,
+		)
 		comp, err := przm.Compress(raw, 3)
 		if err != nil {
 			t.Fatalf("Compress level 3 failed: %v", err)

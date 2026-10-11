@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/lemon4ksan/foundation/bufkit"
+
 	"github.com/lemon4ksan/przm"
 )
 
@@ -331,15 +332,23 @@ func TestMilestone3_PureC_50RandomFrames(t *testing.T) {
 		inPath := filepath.Join(tmpDir, fmt.Sprintf("frame_%02d.przm", frameID))
 		outPath := filepath.Join(tmpDir, fmt.Sprintf("frame_%02d.out", frameID))
 
-		if err := os.WriteFile(inPath, comp, 0644); err != nil {
+		if err := os.WriteFile(inPath, comp, 0o644); err != nil {
 			t.Fatalf("Frame %d: failed to write przm file: %v", frameID, err)
 		}
 
 		cmd := exec.Command(cBinPath, inPath, outPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("Frame %d (W=%d, M=%d, mode=%d, len=%d): C decompressor crashed or returned error %v:\nOutput:\n%s",
-				frameID, W, M, mode, totalLen, err, string(output))
+			t.Fatalf(
+				"Frame %d (W=%d, M=%d, mode=%d, len=%d): C decompressor crashed or returned error %v:\nOutput:\n%s",
+				frameID,
+				W,
+				M,
+				mode,
+				totalLen,
+				err,
+				string(output),
+			)
 		}
 
 		dec, err := os.ReadFile(outPath)
@@ -400,7 +409,7 @@ func TestMilestone3_TwistGreaterThanOne_Evaluation(t *testing.T) {
 
 	inPath := filepath.Join(tmpDir, "twist2.przm")
 	outPath := filepath.Join(tmpDir, "twist2.out")
-	if err := os.WriteFile(inPath, frame, 0644); err != nil {
+	if err := os.WriteFile(inPath, frame, 0o644); err != nil {
 		t.Fatalf("failed to write twist2.przm: %v", err)
 	}
 
@@ -482,7 +491,7 @@ func TestMilestone3_MultiplicativeProgression_EndToEndInterop(t *testing.T) {
 	// Decompress in Pure C
 	inPath := filepath.Join(tmpDir, "mult.przm")
 	outPath := filepath.Join(tmpDir, "mult.out")
-	if err := os.WriteFile(inPath, comp, 0644); err != nil {
+	if err := os.WriteFile(inPath, comp, 0o644); err != nil {
 		t.Fatalf("failed to write mult.przm: %v", err)
 	}
 
@@ -565,7 +574,7 @@ func TestMilestone3_Twist2_NonZeroEv_EndToEndInterop(t *testing.T) {
 	// Pure C decompress
 	inPath := filepath.Join(tmpDir, "twist2_ev.przm")
 	outPath := filepath.Join(tmpDir, "twist2_ev.out")
-	if err := os.WriteFile(inPath, comp, 0644); err != nil {
+	if err := os.WriteFile(inPath, comp, 0o644); err != nil {
 		t.Fatalf("failed to write przm: %v", err)
 	}
 

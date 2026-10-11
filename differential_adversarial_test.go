@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/lemon4ksan/foundation/bufkit"
+
 	"github.com/lemon4ksan/przm"
 )
 
@@ -111,7 +112,10 @@ func TestDifferential_Sheaf_AllTwistsAndModes_10k(t *testing.T) {
 					binary.LittleEndian.PutUint16(frame[10:12], uint16(M))
 					frame[12] = anchor
 					frame[13] = twist
-					binary.LittleEndian.PutUint16(frame[16:18], przm.CSHDFlagCurlFree|przm.CSHDFlagConstEh|przm.CSHDFlagConstEv)
+					binary.LittleEndian.PutUint16(
+						frame[16:18],
+						przm.CSHDFlagCurlFree|przm.CSHDFlagConstEh|przm.CSHDFlagConstEv,
+					)
 					frame[24] = gammaH
 					frame[25] = gammaV
 
@@ -493,7 +497,10 @@ func TestAdversarial_Heisenberg_0Byte_Contract_Bug(t *testing.T) {
 	goDec, goErr := przm.DecompressHeisenberg([]byte{}, dst)
 
 	if goErr != nil {
-		t.Fatalf("[REGRESSION] DecompressHeisenberg([]byte{}, dst) returned error: '%v' (expected []byte{}, nil)", goErr)
+		t.Fatalf(
+			"[REGRESSION] DecompressHeisenberg([]byte{}, dst) returned error: '%v' (expected []byte{}, nil)",
+			goErr,
+		)
 	} else if len(goDec) != 0 {
 		t.Errorf("Expected 0 bytes, got %d bytes", len(goDec))
 	} else {
@@ -625,7 +632,9 @@ func TestAdversarial_ZeroAllocations_Audit(t *testing.T) {
 		})
 		if allocs > 0.0 {
 			t.Logf("[BUG CONFIRMED] Heisenberg Mode 3 violated zero-allocation invariant: got %.2f allocs/op!", allocs)
-			t.Logf("[BUG DETAILS] heisenberg.go:330 calls DecompressTo(payload, dst). DecompressTo routes PWS frames to PWSDecode(src) which allocates bufkit.AlignedBytes, bypassing PWSDecodeTo(dst, payload).")
+			t.Logf(
+				"[BUG DETAILS] heisenberg.go:330 calls DecompressTo(payload, dst). DecompressTo routes PWS frames to PWSDecode(src) which allocates bufkit.AlignedBytes, bypassing PWSDecodeTo(dst, payload).",
+			)
 		} else {
 			t.Logf("[PASS] Heisenberg Mode 3: %.6f allocs/op", allocs)
 		}
@@ -685,7 +694,10 @@ func TestGo_ConcurrencyStress_100Goroutines(t *testing.T) {
 					binary.LittleEndian.PutUint16(frame[10:12], 8)
 					frame[12] = uint8(rng.Intn(256))
 					frame[13] = twist
-					binary.LittleEndian.PutUint16(frame[16:18], przm.CSHDFlagCurlFree|przm.CSHDFlagConstEh|przm.CSHDFlagConstEv)
+					binary.LittleEndian.PutUint16(
+						frame[16:18],
+						przm.CSHDFlagCurlFree|przm.CSHDFlagConstEh|przm.CSHDFlagConstEv,
+					)
 					frame[24] = 0x33
 					frame[25] = 0x77
 
