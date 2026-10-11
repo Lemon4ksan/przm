@@ -1211,6 +1211,11 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		if hasStride {
 			flags |= FlagStride
 		}
+	} else {
+		stride, hasStride = detectStride(origSrc)
+		if hasStride {
+			flags |= FlagStride
+		}
 	}
 
 	var activeMatcher *dictMatcher
@@ -1665,6 +1670,23 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			}
 		}
 
+		// 2. Check 3 repeat offset registers (rep0, rep1, rep2) with repeat alignment
+		if rep0 > 0 && rep0 != d0 {
+			if cand := evalCandidate(pos, rep0, maxBlockLen); cand.score > best.score || (cand.length >= best.length && cand.length >= minMatch) {
+				best = cand
+			}
+		}
+		if rep1 > 0 && rep1 != d0 && rep1 != rep0 {
+			if cand := evalCandidate(pos, rep1, maxBlockLen); cand.score > best.score || (cand.length >= best.length && cand.length >= minMatch) {
+				best = cand
+			}
+		}
+		if rep2 > 0 && rep2 != d0 && rep2 != rep1 && rep2 != rep0 {
+			if cand := evalCandidate(pos, rep2, maxBlockLen); cand.score > best.score || (cand.length >= best.length && cand.length >= minMatch) {
+				best = cand
+			}
+		}
+
 		// If strong match found, skip smaller checks
 		if level <= 2 {
 			if best.length >= 8 && best.score >= 6 {
@@ -1673,23 +1695,6 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		} else {
 			if best.length >= 64 {
 				return best
-			}
-		}
-
-		// 2. Check 3 repeat offset registers (rep0, rep1, rep2)
-		if rep0 != d0 {
-			if cand := evalCandidate(pos, rep0, maxBlockLen); cand.score > best.score {
-				best = cand
-			}
-		}
-		if rep1 != d0 && rep1 != rep0 {
-			if cand := evalCandidate(pos, rep1, maxBlockLen); cand.score > best.score {
-				best = cand
-			}
-		}
-		if rep2 != d0 && rep2 != rep1 && rep2 != rep0 {
-			if cand := evalCandidate(pos, rep2, maxBlockLen); cand.score > best.score {
-				best = cand
 			}
 		}
 

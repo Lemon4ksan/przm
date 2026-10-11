@@ -106,12 +106,13 @@ func (sp *HenselScratchpad8M) PrevSlice() []int32 {
 	return sp.prev[:]
 }
 
-// HenselScratchpadL6 encapsulates multi-tier ultrametric search tables for Level 6 (~69.25 MiB total).
+// HenselScratchpadL6 encapsulates multi-tier ultrametric search tables for Level 6 (~73.25 MiB total).
 type HenselScratchpadL6 struct {
 	head24    [HashSize1M]int32    // 1,024 KiB (262,144 entries)
 	head32    [HashSize8M]int32    // 4,096 KiB (1,048,576 entries)
 	macroHead [65536]int32         // 256 KiB (65,536 entries)
 	prev      [WindowSize8M]int32  // 32,768 KiB (8,388,608 entries)
+	prev24    [WindowSize1M]int32  // 4,096 KiB (1,048,576 entries)
 	fp32      [WindowSize8M]uint32 // 32,768 KiB (8,388,608 entries)
 }
 
@@ -863,12 +864,15 @@ func HenselInsertL6(sp *HenselScratchpadL6, p int, src []byte, uSize int) {
 	srcPtr := unsafe.Pointer(unsafe.SliceData(src))
 	slot := p & WindowMask8M
 
-	// Tier 1: 3-byte hash
+	// Tier 1: 3-byte hash with 24-bit collision chaining
 	b0 := uint32(*(*byte)(unsafe.Add(srcPtr, p)))
 	b1 := uint32(*(*byte)(unsafe.Add(srcPtr, p+1)))
 	b2 := uint32(*(*byte)(unsafe.Add(srcPtr, p+2)))
 	h24 := ((b0 | (b1 << 8) | (b2 << 16)) * HenselHashPrime) >> (32 - HashBits1M)
-	sp.head24[h24&HashMask1M] = int32(p + 1)
+	hIdx24 := int(h24) & HashMask1M
+	slot24 := p & WindowMask1M
+	sp.prev24[slot24] = sp.head24[hIdx24]
+	sp.head24[hIdx24] = int32(p + 1)
 
 	// Tier 2: 4-byte hash
 	if p+4 <= uSize {
@@ -1004,27 +1008,41 @@ func HenselFindMatchL6(
 		}
 	}
 
-	// 3. Tier 1: If minLen <= 3 and no match found >= 3 bytes, check head24
-	if bestLen < 3 && minLen <= 3 {
+	// 3. Tier 1: If minLen <= 3 and bestLen < 4, search 24-bit hash collision chain
+	if bestLen < 4 && minLen <= 3 {
 		b0 := uint32(*(*byte)(unsafe.Add(srcPtr, pos)))
 		b1 := uint32(*(*byte)(unsafe.Add(srcPtr, pos+1)))
 		b2 := uint32(*(*byte)(unsafe.Add(srcPtr, pos+2)))
 		h24 := ((b0 | (b1 << 8) | (b2 << 16)) * HenselHashPrime) >> (32 - HashBits1M)
 		cand24 := int(sp.head24[h24&HashMask1M]) - 1
-		if cand24 >= 0 && cand24 < pos {
-			d := pos - cand24
-			if d < WindowSize8M && d > 0 {
-				c0 := *(*byte)(unsafe.Add(srcPtr, cand24))
-				c1 := *(*byte)(unsafe.Add(srcPtr, cand24+1))
-				c2 := *(*byte)(unsafe.Add(srcPtr, cand24+2))
-				if c0 == byte(b0) && c1 == byte(b1) && c2 == byte(b2) {
-					mLen := HenselLCPPos(src, pos, cand24, maxSearchLen)
-					if mLen > bestLen {
-						bestLen = mLen
-						bestDist = d
+		depth24 := 0
+		maxDepth24 := 16
+		for cand24 >= 0 && depth24 < maxDepth24 {
+			if cand24 < pos {
+				d := pos - cand24
+				if d < WindowSize8M && d > 0 {
+					c0 := *(*byte)(unsafe.Add(srcPtr, cand24))
+					c1 := *(*byte)(unsafe.Add(srcPtr, cand24+1))
+					c2 := *(*byte)(unsafe.Add(srcPtr, cand24+2))
+					if c0 == byte(b0) && c1 == byte(b1) && c2 == byte(b2) {
+						mLen := HenselLCPPos(src, pos, cand24, maxSearchLen)
+						if mLen > bestLen {
+							bestLen = mLen
+							bestDist = d
+							if bestLen >= 32 {
+								break
+							}
+						}
 					}
 				}
 			}
+			candSlot := cand24 & WindowMask1M
+			nextCand := int(sp.prev24[candSlot]) - 1
+			if nextCand >= cand24 || nextCand < 0 {
+				break
+			}
+			cand24 = nextCand
+			depth24++
 		}
 	}
 
