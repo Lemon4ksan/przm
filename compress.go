@@ -6,6 +6,7 @@ package przm
 
 import (
 	"encoding/binary"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -172,6 +173,9 @@ func shouldUseMultiChunk(srcLen int, opts CompressOptions) bool {
 	if opts.StandardStreamOnly {
 		return false
 	}
+	if opts.GPUAcceleration && srcLen < MaxBlockSize && opts.ChunkSize == 0 {
+		return false
+	}
 	threads, chunkSize := resolveConcurrencyOptions(opts)
 	if srcLen > MaxBlockSize {
 		return true
@@ -260,6 +264,9 @@ func compressMultiChunk(src []byte, opts CompressOptions) ([]byte, error) {
 func CompressWithOptions(src []byte, opts CompressOptions, optList ...Option) ([]byte, error) {
 	for _, o := range optList {
 		o(&opts)
+	}
+	if !opts.GPUAcceleration && os.Getenv("PRZM_GPU") == "1" {
+		opts.GPUAcceleration = true
 	}
 	if opts.ChunkSize > MaxBlockSize {
 		return nil, ErrExceedsMaxBlock
