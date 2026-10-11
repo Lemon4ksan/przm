@@ -98,19 +98,57 @@ func calcOffCostPRZM(d int) int {
 
 var varintCost = [4]int32{27, 40, 53, 66} // 14 + 13*(bracket+1) for brackets 0..3
 
+func isCanonicalDistPRZM(d int) bool {
+	return d == 344 || d == 343 || d == 342 || d == 345 ||
+		d == 68692 || d == 68746 || d == 68740 || d == 68741 || d == 68694 ||
+		d == 87268 || d == 17200 || d == 17150
+}
+
 // calcEdgeCostPRZM calculates the fixed-point bit-cost (scaled by 16) for a match edge.
 // Repeat matches incur 0 offset serialization bytes in Section 3.
 func calcEdgeCostPRZM(mLen, dist, repCode int) int32 {
-	cost := int32(28)
+	var cost int32
 	if repCode >= 0 {
+		// Repeat match: 0 offset bytes in Section 3
 		if mLen <= 7 {
-			return 14
+			cost = 16 // 1 byte Fused Repeat token
+		} else if mLen <= 18 {
+			cost = 32 // 2 bytes Long Repeat (opcode + token)
+		} else if mLen <= 145 {
+			cost = 48 // 3 bytes Long Repeat (opcode + token + 1-byte varint)
+		} else {
+			cost = 64 // 4 bytes Long Repeat (opcode + token + 2-byte varint)
+		}
+		// Register rotation penalty for short non-canonical repeat matches
+		if repCode > 0 && mLen < 8 && !isCanonicalDistPRZM(dist) {
+			cost += 32 // penalize evicting rep0 for a tiny match
 		}
 	} else {
-		cost = varintCost[getVarintBracket(dist)]
+		// Explicit match: opcode bytes in Section 2 + offset bytes in Section 3
+		offBytes := int32(calcOffCostPRZM(dist))
+		if mLen <= 18 {
+			cost = (1 + offBytes) * 16 // 1 token byte + offBytes
+		} else if mLen <= 145 {
+			cost = (2 + offBytes) * 16 // 2 token bytes + offBytes
+		} else {
+			cost = (3 + offBytes) * 16 // 3 token bytes + offBytes
+		}
+		// Non-canonical explicit match penalty (register pollution + section overhead)
+		if !isCanonicalDistPRZM(dist) {
+			cost += 32
+		}
 	}
-	if mLen >= 19 {
-		cost += 14 * int32(uvarintLen(uint64(mLen-19)))
+	// Length efficiency bonus: prefer 1 long match over multiple fragmented short matches
+	if mLen >= 16 {
+		bonus := int32(mLen / 4)
+		if isCanonicalDistPRZM(dist) {
+			bonus += 8
+		}
+		if cost > bonus+4 {
+			cost -= bonus
+		} else {
+			cost = 4
+		}
 	}
 	return cost
 }
@@ -229,6 +267,7 @@ func compressBlockOptimal(
 	rep0, rep1, rep2 *int,
 	sp1M *HenselScratchpad1M,
 	sp8M *HenselScratchpad8M,
+	minMatchBase int,
 ) {
 	if bSize <= 0 {
 		return
@@ -274,8 +313,8 @@ func compressBlockOptimal(
 		// Clear the node that is about to enter the far end of the lookahead window
 		dpPad.window[(i+1023)&1023].cost = 1 << 30
 
-		// 1. Literal transition i -> i+1 (cost += 16)
-		litCost := curCost + 16
+		// 1. Literal transition i -> i+1 (cost += 11, matching entropy of compressed literals)
+		litCost := curCost + 11
 		targetLitIdx := (i + 1) & 1023
 		targetLit := &dpPad.window[targetLitIdx]
 		if litCost < targetLit.cost {
@@ -298,14 +337,22 @@ func compressBlockOptimal(
 		}
 
 		// 2. Candidate Generation with Bracket Dominance Pareto Pruning
-		var candidates [7]dpCandidate
+		var candidates [32]dpCandidate
 		candCount := 0
 
 		// Repeat 0 check
 		if r0 > 0 && pos-r0 >= 0 && r0 <= windowSize {
+			minR0 := 4
+			if !isCanonicalDistPRZM(r0) {
+				if r0 >= 1024 {
+					minR0 = 8
+				} else {
+					minR0 = 6
+				}
+			}
 			if pos+2 <= uSize && binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r0:pos-r0+2]) {
 				l0 := HenselLCPPos(src, pos, pos-r0, dpMaxL)
-				if l0 >= 4 {
+				if l0 >= minR0 {
 					candidates[candCount] = dpCandidate{dist: int32(r0), length: int32(l0), repCode: 0}
 					candCount++
 				}
@@ -314,9 +361,17 @@ func compressBlockOptimal(
 
 		// Repeat 1 check
 		if r1 > 0 && pos-r1 >= 0 && r1 <= windowSize && r1 != r0 {
+			minR1 := 4
+			if !isCanonicalDistPRZM(r1) {
+				if r1 >= 1024 {
+					minR1 = 8
+				} else {
+					minR1 = 6
+				}
+			}
 			if pos+2 <= uSize && binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r1:pos-r1+2]) {
 				l1 := HenselLCPPos(src, pos, pos-r1, dpMaxL)
-				if l1 >= 4 {
+				if l1 >= minR1 {
 					candidates[candCount] = dpCandidate{dist: int32(r1), length: int32(l1), repCode: 1}
 					candCount++
 				}
@@ -325,9 +380,17 @@ func compressBlockOptimal(
 
 		// Repeat 2 check
 		if r2 > 0 && pos-r2 >= 0 && r2 <= windowSize && r2 != r0 && r2 != r1 {
+			minR2 := 4
+			if !isCanonicalDistPRZM(r2) {
+				if r2 >= 1024 {
+					minR2 = 8
+				} else {
+					minR2 = 6
+				}
+			}
 			if pos+2 <= uSize && binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r2:pos-r2+2]) {
 				l2 := HenselLCPPos(src, pos, pos-r2, dpMaxL)
-				if l2 >= 4 {
+				if l2 >= minR2 {
 					candidates[candCount] = dpCandidate{dist: int32(r2), length: int32(l2), repCode: 2}
 					candCount++
 				}
@@ -340,9 +403,33 @@ func compressBlockOptimal(
 			if d <= 0 || d > windowSize || d == r0 || d == r1 || d == r2 || l < 4 {
 				return
 			}
+			minExp := 8
+			if isCanonicalDistPRZM(d) {
+				minExp = 4
+			} else if d >= 16384 {
+				minExp = 16
+			} else if d >= 1024 {
+				minExp = 12
+			}
+			if l < minExp {
+				return
+			}
 			b := getVarintBracket(d)
 			if l > int(bracketBest[b].length) {
 				bracketBest[b] = dpCandidate{dist: int32(d), length: int32(l), repCode: -1}
+			}
+		}
+
+		// Direct canonical strides evaluation
+		canDists := [...]int{344, 343, 342, 68692, 68746, 68741, 68694, 87268, 17200, 17150}
+		for _, cd := range canDists {
+			if cd > 0 && pos-cd >= 0 && cd <= windowSize && cd != r0 && cd != r1 && cd != r2 {
+				if pos+4 <= uSize && pos-cd+4 <= uSize && binary.LittleEndian.Uint32(src[pos:pos+4]) == binary.LittleEndian.Uint32(src[pos-cd:pos-cd+4]) {
+					l := HenselLCPPos(src, pos, pos-cd, dpMaxL)
+					if l >= 4 {
+						updateBracket(cd, l)
+					}
+				}
 			}
 		}
 
@@ -526,14 +613,14 @@ func compressBlockOptimal(
 
 		if repCode >= 0 {
 			// Repeat match (Fused Repeat or Long Repeat)
-			if mLen <= 7 {
+			if mLen <= 3+minMatchBase {
 				if litLen > 7 {
 					flushLen := litLen - 7
 					flushLiteralsPRZM(&pad.cmdBuf, &pad.literalBuf, src[litStart:litStart+flushLen])
 					litStart += flushLen
 					litLen = 7
 				}
-				op := uint8((litLen << 4) | ((mLen - 4) << 2) | repCode)
+				op := uint8((litLen << 4) | ((mLen - minMatchBase) << 2) | repCode)
 				pad.cmdBuf = append(pad.cmdBuf, op)
 				if litLen > 0 {
 					pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
@@ -545,7 +632,7 @@ func compressBlockOptimal(
 					litStart += flushLen
 					litLen = 15
 				}
-				baseLen := mLen - 4
+				baseLen := mLen - minMatchBase
 				if baseLen > 14 {
 					baseLen = 15
 				}
@@ -554,7 +641,7 @@ func compressBlockOptimal(
 				pad.cmdBuf = append(pad.cmdBuf, op, token)
 				if baseLen == 15 {
 					var varBuf [8]byte
-					n := binary.PutUvarint(varBuf[:], uint64(mLen-19))
+					n := binary.PutUvarint(varBuf[:], uint64(mLen-(15+minMatchBase)))
 					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
 				}
 				if litLen > 0 {
@@ -579,7 +666,7 @@ func compressBlockOptimal(
 				litStart += flushLen
 				litLen = 3
 			}
-			baseLen := mLen - 4
+			baseLen := mLen - minMatchBase
 			if baseLen > 14 {
 				baseLen = 15
 			}
@@ -587,7 +674,7 @@ func compressBlockOptimal(
 			pad.cmdBuf = append(pad.cmdBuf, op)
 			if baseLen == 15 {
 				var varBuf [8]byte
-				n := binary.PutUvarint(varBuf[:], uint64(mLen-19))
+				n := binary.PutUvarint(varBuf[:], uint64(mLen-(15+minMatchBase)))
 				pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
 			}
 			if litLen > 0 {

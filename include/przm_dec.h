@@ -157,6 +157,7 @@ typedef struct {
 #define PRZM_ENTROPY_MODE_HUFFMAN_4X         1
 #define PRZM_ENTROPY_MODE_HUFFMAN_COMPACT    2
 #define PRZM_ENTROPY_MODE_HUFFMAN_COMPACT_4X 3
+#define PRZM_ENTROPY_MODE_RECURSIVE_LZ       4
 
 /* WindowLog levels (PRZM-SPEC-0.5 Milestone 2 Window Scaling) */
 #define PRZM_WINDOW_LOG_64K           16

@@ -17,6 +17,7 @@ const (
 	ModeHuffman4X        uint8 = 1 // 4-stream interleaved Table-Driven Canonical Huffman (RAM-speed focus: >10 GB/s)
 	ModeHuffmanCompact   uint8 = 2 // Single-stream Table-Driven Canonical Huffman with 32B Active-Mask (<65B header)
 	ModeHuffmanCompact4X uint8 = 3 // 4-stream interleaved Table-Driven Canonical Huffman with 32B Active-Mask
+	ModeRecursiveLZ      uint8 = 4 // Recursive PRZM LZ77 frame (for structured, highly-repetitive command streams)
 )
 
 var (
@@ -999,8 +1000,30 @@ func DecodeHuffmanCompact4X(dst []byte, src []byte, decTable *CanonicalHuffmanTa
 // Unified Stream Packing & Flat Fallback Policy
 // -----------------------------------------------------------------------------
 
+// EncodeRecursiveLZ compresses a repetitive command or offset stream using standard PRZM LZ77.
+func EncodeRecursiveLZ(src []byte) ([]byte, error) {
+	if len(src) < 512 {
+		return nil, ErrCorruptedStream
+	}
+	comp, err := CompressWithOptions(src, CompressOptions{
+		Level:              5,
+		StandardStreamOnly: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(comp)+5 >= len(src) {
+		return nil, ErrCorruptedStream
+	}
+	out := make([]byte, 5+len(comp))
+	out[0] = ModeRecursiveLZ
+	binary.LittleEndian.PutUint32(out[1:5], uint32(len(src)))
+	copy(out[5:], comp)
+	return out, nil
+}
+
 // PackStream compresses a byte stream (Section 2 or Section 3).
-// It evaluates Compact, Compact4X, and standard 4X Huffman formats and
+// It evaluates Compact, Compact4X, standard 4X Huffman, and Recursive LZ formats and
 // selects whichever yields the minimum packed size, falling back to ModeFlat
 // if compression does not beat raw size.
 func PackStream(src []byte, prefMode uint8) ([]byte, error) {
@@ -1035,6 +1058,11 @@ func PackStream(src []byte, prefMode uint8) ([]byte, error) {
 	if m1, err := EncodeHuffman4X(src); err == nil && len(m1) < len(best) {
 		best = m1
 	}
+	if n >= 512 {
+		if rec, err := EncodeRecursiveLZ(src); err == nil && len(rec) < len(best) {
+			best = rec
+		}
+	}
 
 	return best, nil
 }
@@ -1066,6 +1094,13 @@ func UnpackStream(dst []byte, src []byte, scratchTable *CanonicalHuffmanTable) (
 
 	case ModeHuffmanCompact4X:
 		return DecodeHuffmanCompact4X(dst, src, scratchTable)
+
+	case ModeRecursiveLZ:
+		decomp, err := DecompressTo(src[5:], dst[:origLen])
+		if err != nil {
+			return 0, fmt.Errorf("%w: recursive lz decode failed: %v", ErrCorruptedStream, err)
+		}
+		return len(decomp), nil
 
 	default:
 		return 0, fmt.Errorf("%w: unknown mode %d", ErrCorruptedStream, mode)

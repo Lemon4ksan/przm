@@ -2357,6 +2357,13 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             if (dec_n < 0) return (int)dec_n;
             cmds = tls_cmd_scratch;
             cmds_len = (size_t)dec_n;
+        } else if (sec2_mode == PRZM_ENTROPY_MODE_RECURSIVE_LZ) {
+            if (sec2_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            int64_t dec_n = przm_decompress(src + sec2_offset + 5, cmd_size - 5, tls_archival_scratch, sizeof(tls_archival_scratch));
+            if (dec_n < 0 || (uint32_t)dec_n != sec2_orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(tls_cmd_scratch, tls_archival_scratch, (size_t)dec_n);
+            cmds = tls_cmd_scratch;
+            cmds_len = (size_t)dec_n;
         } else {
             return PRZM_ERR_CORRUPTED_FRAME;
         }
@@ -2400,6 +2407,13 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
             int64_t dec_n = huffman_compact4x_decode(src + sec3_offset, off_size, tls_off_scratch, sizeof(tls_off_scratch), &tls_huff_table);
             if (dec_n < 0) return (int)dec_n;
+            offs = tls_off_scratch;
+            offs_len = (size_t)dec_n;
+        } else if (sec3_mode == PRZM_ENTROPY_MODE_RECURSIVE_LZ) {
+            if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            int64_t dec_n = przm_decompress(src + sec3_offset + 5, off_size - 5, tls_archival_scratch, sizeof(tls_archival_scratch));
+            if (dec_n < 0 || (uint32_t)dec_n != sec3_orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(tls_off_scratch, tls_archival_scratch, (size_t)dec_n);
             offs = tls_off_scratch;
             offs_len = (size_t)dec_n;
         } else {

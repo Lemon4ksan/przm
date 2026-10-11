@@ -2262,7 +2262,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	} else if uSize >= 131072 {
 		pad.dedup.Reset()
 		var dpPad *dpScratchpad
-		if level >= 4 && level < ModeArchival && customDict == nil && dictID == 0 {
+		if level >= 4 && customDict == nil && dictID == 0 {
 			dpPad = dpScratchPool.Get()
 			defer dpScratchPool.Put(dpPad)
 			clear(dpPad.table3[:])
@@ -2283,14 +2283,14 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					continue
 				}
 				if dpPad != nil {
-					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M)
+					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M, minMatchBase)
 				} else {
 					generic.Ternary[func(int, int)](level <= 3, compressBlockFast, compressBlockGreedy)(bStart, bSize)
 				}
 				pad.dedup.Insert(h, blockIdx)
 			} else if bSize == DedupBlockSize && blockIdx == 0 {
 				if dpPad != nil {
-					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M)
+					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M, minMatchBase)
 				} else {
 					generic.Ternary[func(int, int)](level <= 3, compressBlockFast, compressBlockGreedy)(bStart, bSize)
 				}
@@ -2299,7 +2299,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			} else {
 				// Tail block (< 65536 bytes) compressed via standard LZ77
 				if dpPad != nil {
-					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M)
+					compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M, minMatchBase)
 				} else {
 					generic.Ternary[func(int, int)](level <= 3, compressBlockFast, compressBlockGreedy)(bStart, bSize)
 				}
@@ -2309,7 +2309,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	} else {
 		// Under 128 KiB: bypass deduplication entirely
-		if level >= 4 && level < ModeArchival && customDict == nil && dictID == 0 {
+		if level >= 4 && customDict == nil && dictID == 0 {
 			dpPad := dpScratchPool.Get()
 			defer dpScratchPool.Put(dpPad)
 			clear(dpPad.table3[:])
@@ -2317,7 +2317,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			bStart := 0
 			for bStart < uSize {
 				bSize := min(uSize-bStart, BlockSize64K)
-				compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M)
+				compressBlockOptimal(src, bStart, bSize, uSize, windowSize, windowLog, level, pad, dpPad, &rep0, &rep1, &rep2, sp1M, sp8M, minMatchBase)
 				bStart += bSize
 			}
 		} else {
