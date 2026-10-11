@@ -69,3 +69,32 @@ type GPUProfile struct {
 	TotalVRAMBytes            uint64
 	PipelinedChunks           int
 }
+
+// TokenizerProfile contains timing and throughput metrics for GPU fused tokenization.
+type TokenizerProfile struct {
+	KernelTimeMs     float64
+	Pass1Ms          float64
+	Pass2Ms          float64
+	Pass3Ms          float64
+	TotalRoundTripMs float64
+	ThroughputGBps   float64
+	CmdBytes         int
+	OffsetBytes      int
+	LiteralBytes     int
+	NumChunks        int
+}
+
+// DeviceTokenStreams holds zero-copy device VRAM pointers and length metadata
+// enabling downstream GPU stages (Tensor-ANS, Stream-Citadel) to consume
+// tokenized outputs directly in VRAM without host round-trip synchronization.
+type DeviceTokenStreams struct {
+	DFinalCmds uint64  // Device pointer to compacted command stream in VRAM
+	DFinalOffs uint64  // Device pointer to compacted offset stream in VRAM
+	DFinalLits uint64  // Device pointer to compacted literal stream in VRAM
+	DTotals    uint64  // Device pointer to [3]uint32 {cmdLen, offLen, litLen} in VRAM
+	CmdLen     uint32  // Host-cached command stream byte length
+	OffLen     uint32  // Host-cached offset stream byte length
+	LitLen     uint32  // Host-cached literal stream byte length
+	NumChunks  uint32  // Number of 32 KiB tiles
+	Stream     uintptr // CUDA stream on which kernels executed
+}

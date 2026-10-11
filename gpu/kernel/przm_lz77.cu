@@ -27,7 +27,7 @@
 #define COMPACT_BLOCK_SIZE 256
 #define COMPACT_NUM_WARPS  (COMPACT_BLOCK_SIZE / WARP_SIZE)
 
-#define RADIX_STRIKE_NUM_BUCKETS 2097152U // 2^21 buckets = 8 MB table
+#define RADIX_STRIKE_NUM_BUCKETS 524288U // 2^19 buckets = 2 MB table
 #define RADIX_STRIKE_BUCKET_MASK (RADIX_STRIKE_NUM_BUCKETS - 1U)
 #define RADIX_STRIKE_GOLDEN_PRIME 0x9E3779B97F4A7C15ULL
 #define RADIX_STRIKE_STRIDE 8
@@ -167,8 +167,8 @@ extern "C" __global__ void przm_lz77_radix_strike_kernel(
         uint32_t p = idx * RADIX_STRIKE_STRIDE;
         if ((uint64_t)p + 8 > input_len) break;
 
-        // 1. Extract 8-byte k-mer via coalesced 64-bit load
-        uint64_t kmer = read_u64_global_aligned(d_input + p);
+        // 1. Extract 8-byte k-mer via safe unaligned 64-bit load
+        uint64_t kmer = read_u64_unaligned(d_input + p);
 
         // 2. Radix hash (Golden ratio multiplicative distribution)
         uint32_t h = (uint32_t)((kmer * RADIX_STRIKE_GOLDEN_PRIME) >> 43) & RADIX_STRIKE_BUCKET_MASK;
@@ -182,20 +182,30 @@ extern "C" __global__ void przm_lz77_radix_strike_kernel(
             uint32_t dist = p - cpos;
 
             if (dist <= window_size && dist > 0 && dist <= PRZM_MAX_OFFSET_32) {
-                // Verify 8-byte k-mer identity
-                uint64_t cand_kmer = read_u64_global_aligned(d_input + cpos);
+                // Verify 8-byte k-mer identity via safe unaligned load
+                uint64_t cand_kmer = read_u64_unaligned(d_input + cpos);
                 if (cand_kmer == kmer) {
-                    uint32_t match_p = 0;
-                    uint32_t match_len = 0;
-                    przm_lcp_full_extend(d_input, p, cpos, (uint32_t)input_len, &match_p, &match_len);
-
-                    if (match_len >= PRZM_MIN_MATCH_LEN && (uint64_t)match_p < input_len) {
-                        if (match_len > PRZM_MAX_MATCH_LEN_32) {
-                            match_len = PRZM_MAX_MATCH_LEN_32;
+                    uint32_t match_len = 8;
+                    while ((uint64_t)p + match_len + 8 <= input_len &&
+                           (uint64_t)cpos + match_len + 8 <= input_len &&
+                           match_len + 8 <= PRZM_MAX_MATCH_LEN_32) {
+                        uint64_t v1 = read_u64_unaligned(d_input + p + match_len);
+                        uint64_t v2 = read_u64_unaligned(d_input + cpos + match_len);
+                        uint64_t diff = v1 ^ v2;
+                        if (diff != 0) {
+                            match_len += (__ffsll(diff) - 1) / 8;
+                            goto strike_match_done;
                         }
-                        uint32_t desc = przm_pack_match32((uint16_t)match_len, dist);
-                        d_matches[match_p] = desc;
+                        match_len += 8;
                     }
+                    while ((uint64_t)p + match_len < input_len &&
+                           d_input[p + match_len] == d_input[cpos + match_len] &&
+                           match_len < PRZM_MAX_MATCH_LEN_32) {
+                        match_len++;
+                    }
+                strike_match_done:
+                    uint32_t desc = przm_pack_match32((uint16_t)match_len, dist);
+                    d_matches[p] = desc;
                 }
             }
         }
@@ -336,12 +346,12 @@ extern "C" __global__ void przm_lz77_search_matches_kernel(
 
             __syncthreads();
 
-            // Update shared hash table: push previous head to slot 1, record current pos
+            // Update shared hash table deterministically: largest p (latest position) always wins
             if (valid_pos) {
                 uint32_t old_val = s_head[h];
                 uint16_t old_head = (uint16_t)(old_val >> 16);
                 uint32_t new_val = (((uint32_t)(p + 1)) << 16) | (uint32_t)old_head;
-                s_head[h] = new_val;
+                atomicMax((unsigned int*)&s_head[h], (unsigned int)new_val);
             }
 
             __syncthreads();
@@ -680,4 +690,8 @@ extern "C" int cuda_lz77_compact_stream(
     );
     return 0;
 }
+
+#include "przm_tokenizer.cuh"
+#include "przm_ans.cu"
+
 

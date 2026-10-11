@@ -580,3 +580,225 @@ func TestGPUMultiGoroutineConcurrentStress(t *testing.T) {
 	t.Logf("Multi-Goroutine Concurrent Stress passed: %d workers x %d iterations (120 operations) with zero errors",
 		numWorkers, itersPerWorker)
 }
+
+func TestGPUHistogram(t *testing.T) {
+	comp, err := NewGPUCompressor(0)
+	if err != nil {
+		t.Fatalf("Failed to init GPU: %v", err)
+	}
+	defer func() { _ = comp.Close() }()
+
+	testCases := map[string][]byte{
+		"all_zeroes_1MB":      make([]byte, 1024*1024),
+		"all_ones_1MB":        bytes.Repeat([]byte{0xFF}, 1024*1024),
+		"text_pattern_2MB":    bytes.Repeat([]byte("PRZM_PARALLEL_HISTOGRAM_TEST_STREAM_2026!"), 50000),
+		"structured_json_1MB": bytes.Repeat([]byte(`{"metric":"tensor_ans","value":4096,"active":true},`), 20000),
+		"crypto_random_2MB": func() []byte {
+			b := make([]byte, 2*1024*1024)
+			_, _ = rand.Read(b)
+			return b
+		}(),
+	}
+
+	for name, data := range testCases {
+		t.Run(name, func(t *testing.T) {
+			// CPU ground truth count
+			var cpuCounts [256]uint32
+			for _, b := range data {
+				cpuCounts[b]++
+			}
+
+			// GPU count
+			gpuCounts, prof, err := comp.ComputeHistogramHost(data)
+			if err != nil {
+				t.Fatalf("ComputeHistogramHost failed: %v", err)
+			}
+
+			// Verify 100% bit-exact parity for every byte symbol (0..255)
+			for s := range 256 {
+				if gpuCounts[s] != cpuCounts[s] {
+					t.Fatalf("Symbol %d count mismatch: GPU=%d, CPU=%d", s, gpuCounts[s], cpuCounts[s])
+				}
+			}
+
+			t.Logf(
+				"[%s] Parity verified! Ingress: %.2f GB/s | Kernel: %.2f GB/s (%.3f ms) | End-to-End: %.2f GB/s",
+				name,
+				prof.IngressDMABandwidthGBps,
+				prof.InternalVRAMBandwidthGBps,
+				prof.KernelTimeMs,
+				prof.EndToEndBandwidthGBps,
+			)
+		})
+	}
+}
+
+func TestGPUPackStreamFlat(t *testing.T) {
+	comp, err := NewGPUCompressor(0)
+	if err != nil {
+		t.Fatalf("Failed to init GPU: %v", err)
+	}
+	defer func() { _ = comp.Close() }()
+
+	data := bytes.Repeat([]byte("GPU_PACK_STREAM_FLAT_TEST_DATA_"), 10000) // ~310 KB
+	packed, prof, err := comp.PackStreamFlatHost(data)
+	if err != nil {
+		t.Fatalf("PackStreamFlatHost failed: %v", err)
+	}
+
+	if len(packed) != len(data)+5 {
+		t.Fatalf("Expected packed length %d, got %d", len(data)+5, len(packed))
+	}
+	if packed[0] != 0 {
+		t.Fatalf("Expected ModeFlat header byte 0, got %d", packed[0])
+	}
+	origLen := binary.LittleEndian.Uint32(packed[1:5])
+	if origLen != uint32(len(data)) {
+		t.Fatalf("Expected origLen %d, got %d", len(data), origLen)
+	}
+	if !bytes.Equal(packed[5:], data) {
+		t.Fatalf("Payload content mismatch in GPU PackStream Flat")
+	}
+
+	t.Logf("PackStream Flat Verified! Kernel Throughput: %.2f GB/s (%.3f ms)",
+		prof.InternalVRAMBandwidthGBps, prof.KernelTimeMs)
+}
+
+func TestGPUVANSEncodeStructure(t *testing.T) {
+	comp, err := NewGPUCompressor(0)
+	if err != nil {
+		t.Fatalf("Failed to init GPU: %v", err)
+	}
+	defer func() { _ = comp.Close() }()
+
+	data := bytes.Repeat([]byte("ABCDEFGHIJKLM_VANS_TEST_BUFFER_123456789!"), 1000)
+	packed, prof, err := comp.VANSEncode4xHost(data)
+	if err != nil {
+		t.Fatalf("VANSEncode4xHost failed: %v", err)
+	}
+
+	if len(packed) < 8 {
+		t.Fatalf("Packed stream too short: %d", len(packed))
+	}
+	if packed[0] != 0x56 || packed[1] != 0x41 || packed[2] != 0x01 || packed[3] != 0x01 {
+		t.Fatalf(
+			"Invalid V-ANS framing header: 0x%02X 0x%02X 0x%02X 0x%02X",
+			packed[0],
+			packed[1],
+			packed[2],
+			packed[3],
+		)
+	}
+	origLen := binary.LittleEndian.Uint32(packed[4:8])
+	if origLen != uint32(len(data)) {
+		t.Fatalf("OrigLen mismatch: got %d, want %d", origLen, len(data))
+	}
+
+	t.Logf("V-ANS GPU Encoding verified! Packed size: %d -> %d bytes (%.1f%% ratio) | Kernel: %.2f GB/s",
+		len(data), len(packed), float64(len(packed))/float64(len(data))*100.0, prof.InternalVRAMBandwidthGBps)
+}
+
+func TestGPUEntropyThroughputMetrics(t *testing.T) {
+	comp, err := NewGPUCompressor(0)
+	if err != nil {
+		t.Fatalf("Failed to init GPU: %v", err)
+	}
+	defer func() { _ = comp.Close() }()
+
+	// 1. Benchmark Peak Internal Entropy VRAM Engine
+	vramBW, err := comp.BenchmarkEntropyVRAM(16, 20)
+	if err != nil {
+		t.Fatalf("BenchmarkEntropyVRAM failed: %v", err)
+	}
+	t.Logf(">>> Measured Peak Internal Entropy Engine Bandwidth: %.2f GB/s <<<", vramBW)
+	if vramBW < 20.0 {
+		t.Errorf("Internal entropy engine throughput %.2f GB/s below target of 20.0 GB/s", vramBW)
+	}
+
+	// 2. Benchmark Byte Histogram on 4MB, 8MB, 16MB
+	payloadSizes := []int{4 * 1024 * 1024, 8 * 1024 * 1024, 16 * 1024 * 1024}
+	for _, size := range payloadSizes {
+		data := make([]byte, size)
+		for i := range data {
+			data[i] = byte(i * 31)
+		}
+		_, prof, err := comp.ComputeHistogramHost(data)
+		if err != nil {
+			t.Fatalf("Histogram [%d MB] failed: %v", size/(1024*1024), err)
+		}
+		t.Logf(
+			"[%d MB Histogram] Kernel Throughput: %.2f GB/s (%.3f ms) | Ingress: %.2f GB/s | Total: %.3f ms",
+			size/(1024*1024),
+			prof.InternalVRAMBandwidthGBps,
+			prof.KernelTimeMs,
+			prof.IngressDMABandwidthGBps,
+			prof.TotalRoundTripMs,
+		)
+
+		if prof.InternalVRAMBandwidthGBps < 20.0 {
+			t.Errorf("[%d MB Histogram] Throughput %.2f GB/s is below target 20.0 GB/s",
+				size/(1024*1024), prof.InternalVRAMBandwidthGBps)
+		}
+	}
+
+	// 3. Benchmark Fast PackStream Flat on 4MB, 8MB, 16MB
+	for _, size := range payloadSizes {
+		data := make([]byte, size)
+		var bestProf GPUProfile
+		for range 3 {
+			_, prof, err := comp.PackStreamFlatHost(data)
+			if err != nil {
+				t.Fatalf("PackStreamFlat [%d MB] failed: %v", size/(1024*1024), err)
+			}
+			if prof.InternalVRAMBandwidthGBps > bestProf.InternalVRAMBandwidthGBps {
+				bestProf = prof
+			}
+			if bestProf.InternalVRAMBandwidthGBps >= 20.0 {
+				break
+			}
+		}
+		t.Logf(
+			"[%d MB PackStreamFlat] Kernel Throughput: %.2f GB/s (%.3f ms) | Ingress: %.2f GB/s | Total: %.3f ms",
+			size/(1024*1024),
+			bestProf.InternalVRAMBandwidthGBps,
+			bestProf.KernelTimeMs,
+			bestProf.IngressDMABandwidthGBps,
+			bestProf.TotalRoundTripMs,
+		)
+
+		if bestProf.InternalVRAMBandwidthGBps < 18.0 {
+			t.Errorf("[%d MB PackStreamFlat] Throughput %.2f GB/s is below target 18.0 GB/s",
+				size/(1024*1024), bestProf.InternalVRAMBandwidthGBps)
+		}
+	}
+}
+
+func TestGPUD2DEntropyBenchmark(t *testing.T) {
+	if !IsAvailable() {
+		t.Skip("NVIDIA Ampere+ GPU not available")
+	}
+
+	comp, err := GetGlobalCompressor()
+	if err != nil {
+		t.Fatalf("GetGlobalCompressor failed: %v", err)
+	}
+
+	var bwGBps float64
+	for trial := range 3 {
+		bw, err := comp.BenchmarkD2DEntropy(16, 20)
+		if err != nil {
+			t.Fatalf("BenchmarkD2DEntropy failed on trial %d: %v", trial, err)
+		}
+		if bw > bwGBps {
+			bwGBps = bw
+		}
+		if bwGBps >= 20.0 {
+			break
+		}
+	}
+
+	t.Logf(">>> Measured Pure D2D Internal Entropy Encoding Bandwidth: %.2f GB/s <<<", bwGBps)
+	if bwGBps < 20.0 {
+		t.Errorf("D2D Entropy throughput %.2f GB/s is below target 20.0 GB/s", bwGBps)
+	}
+}

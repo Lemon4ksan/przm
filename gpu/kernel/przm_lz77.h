@@ -144,6 +144,31 @@ int cuda_lz77_compact_stream(
     void* stream
 );
 
+int cuda_lz77_tokenize_stream(
+    const uint8_t* d_input,
+    size_t input_len,
+    const uint32_t* d_matches,
+    uint8_t* d_chunk_cmds,
+    uint8_t* d_chunk_offs,
+    uint8_t* d_chunk_lits,
+    uint32_t* d_chunk_cmd_len,
+    uint32_t* d_chunk_off_len,
+    uint32_t* d_chunk_lit_len,
+    uint32_t* d_chunk_cmd_offset,
+    uint32_t* d_chunk_off_offset,
+    uint32_t* d_chunk_lit_offset,
+    uint32_t* d_totals,
+    uint8_t* d_final_cmds,
+    uint8_t* d_final_offs,
+    uint8_t* d_final_lits,
+    uint32_t tile_size,
+    uint32_t max_cmd_slot,
+    uint32_t max_off_slot,
+    uint32_t max_lit_slot,
+    uint32_t num_chunks,
+    void* stream
+);
+
 #ifdef __cplusplus
 }
 #endif

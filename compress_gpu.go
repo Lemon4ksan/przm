@@ -35,6 +35,15 @@ func tryCompressGPU(src []byte, opts CompressOptions, pad *scratchpad) (out []by
 		return nil, false
 	}
 
+	// 1. Autonomous Device-to-Device (D2D) GPU Compression Pipeline
+	// Offloads Ingress -> Radix Match -> Fused Warp Tokenizer -> D2D Entropy Encoding -> Egress to GPU
+	if !opts.ArchivalMode && opts.Level <= 3 && len(src) >= 4096 {
+		frame, _, err := comp.CompressD2D(src)
+		if err == nil && len(frame) > 0 && len(frame) < len(src) {
+			return frame, true
+		}
+	}
+
 	matches, _, err := comp.MatchLZ77(src)
 	if err != nil {
 		return nil, false
@@ -249,7 +258,14 @@ func tryCompressGPU(src []byte, opts CompressOptions, pad *scratchpad) (out []by
 		if !opts.StandardStreamOnly && level >= 2 {
 			sheafOut, sheafOk := packSheafVANS(pad.literalBuf, pad)
 			ctxSheafOut, ctxSheafOk := packContextSheafVANS(pad.literalBuf, pad)
-			stdOut, stdErr := VANSEncode4x(pad.literalBuf)
+			var stdOut []byte
+			var stdErr error
+			if comp != nil {
+				stdOut, _, stdErr = comp.VANSEncode4xHost(pad.literalBuf)
+			}
+			if stdErr != nil || len(stdOut) == 0 {
+				stdOut, stdErr = VANSEncode4x(pad.literalBuf)
+			}
 			stdOk := stdErr == nil && len(stdOut) < int(float64(len(pad.literalBuf))*0.95)
 
 			if isProbablyText(src) && level <= 3 && sheafOk {
@@ -292,13 +308,26 @@ func tryCompressGPU(src []byte, opts CompressOptions, pad *scratchpad) (out []by
 	if level <= 3 {
 		cmdMode = ModeFlat
 	}
-	cmdSection, err := PackStream(pad.cmdBuf, cmdMode)
-	if err != nil {
-		return nil, false
+	var cmdSection, offSection []byte
+	if cmdMode == ModeFlat && comp != nil {
+		var cErr, oErr error
+		cmdSection, _, cErr = comp.PackStreamFlatHost(pad.cmdBuf)
+		offSection, _, oErr = comp.PackStreamFlatHost(pad.offsetBuf)
+		if cErr != nil || oErr != nil {
+			cmdSection = nil
+			offSection = nil
+		}
 	}
-	offSection, err := PackStream(pad.offsetBuf, cmdMode)
-	if err != nil {
-		return nil, false
+	if len(cmdSection) == 0 {
+		var err error
+		cmdSection, err = PackStream(pad.cmdBuf, cmdMode)
+		if err != nil {
+			return nil, false
+		}
+		offSection, err = PackStream(pad.offsetBuf, cmdMode)
+		if err != nil {
+			return nil, false
+		}
 	}
 
 	windowLog := opts.WindowLog
