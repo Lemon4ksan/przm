@@ -1385,6 +1385,16 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 
 		if ringK >= 0 {
+			repBonus := 0
+			if level >= 4 {
+				if ringK == 0 {
+					repBonus = 4
+				} else if ringK == 1 {
+					repBonus = 2
+				} else {
+					repBonus = 1
+				}
+			}
 			if ringK <= 2 && mLen <= 3+minMatchBase {
 				return matchCandidate{
 					mType:    1,
@@ -1392,7 +1402,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					distance: d,
 					ringK:    ringK,
 					cost:     1,
-					score:    mLen - 1,
+					score:    mLen - 1 + repBonus,
 				}
 			}
 			cost := 2
@@ -1405,25 +1415,52 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 				distance: d,
 				ringK:    ringK,
 				cost:     cost,
-				score:    mLen - cost,
+				score:    mLen - cost + repBonus,
 			}
 		}
 
 		// Explicit Extended Match
 		offCost := calcOffCost(d)
-		if mLen < minMatchBase || (mLen < minMatchBase+1 && d >= 128) {
+		minExpLen := minMatchBase
+		distPenalty := 0
+		if level >= 4 {
+			if d >= 16384 {
+				minExpLen = minMatchBase + 3
+				if d >= 65536 {
+					distPenalty = 4
+				} else {
+					distPenalty = 3
+				}
+			} else if d >= 1024 {
+				minExpLen = minMatchBase + 2
+				distPenalty = 2
+			} else if d >= 128 {
+				minExpLen = minMatchBase + 1
+				distPenalty = 1
+			}
+		} else {
+			if d >= 128 {
+				minExpLen = minMatchBase + 1
+			}
+		}
+		if mLen < minExpLen {
 			return matchCandidate{}
 		}
+
 		cost := 1 + offCost
 		if mLen > 14+minMatchBase {
 			cost += uvarintLen(uint64(mLen - (15 + minMatchBase)))
+		}
+		score := mLen - (cost + distPenalty)
+		if score < 0 {
+			return matchCandidate{}
 		}
 		return matchCandidate{
 			mType:    4,
 			length:   mLen,
 			distance: d,
 			cost:     cost,
-			score:    mLen - cost,
+			score:    score,
 		}
 	}
 
@@ -1444,14 +1481,21 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			if tokLen >= 3 && tokLen <= maxBlockLen {
 				var cost int
 				var mType int
+				dictBonus := 0
 				if tokIdx < 8 {
 					cost = 1
 					mType = 7 // OpcodePrefixShortDict
+					if level >= 4 {
+						dictBonus = 4
+					}
 				} else {
 					cost = 2
 					mType = 8 // OpcodePrefixDictToken
+					if level >= 4 {
+						dictBonus = 2
+					}
 				}
-				score := tokLen - cost
+				score := tokLen - cost + dictBonus
 				if score > best.score && score >= 1 {
 					best = matchCandidate{
 						mType:   mType,
@@ -1678,17 +1722,17 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 
 		// 2. Check 3 repeat offset registers (rep0, rep1, rep2) with repeat alignment
 		if rep0 > 0 && rep0 != d0 {
-			if cand := evalCandidate(pos, rep0, maxBlockLen); cand.score > best.score || (cand.length >= best.length && cand.length >= minMatch) {
+			if cand := evalCandidate(pos, rep0, maxBlockLen); cand.score > best.score || (cand.length >= best.length-1 && cand.length >= minMatch && best.mType >= 4) || (cand.length >= best.length && cand.length >= minMatch) {
 				best = cand
 			}
 		}
 		if rep1 > 0 && rep1 != d0 && rep1 != rep0 {
-			if cand := evalCandidate(pos, rep1, maxBlockLen); cand.score > best.score || (cand.length >= best.length && cand.length >= minMatch) {
+			if cand := evalCandidate(pos, rep1, maxBlockLen); cand.score > best.score || (cand.length >= best.length-1 && cand.length >= minMatch && best.mType >= 4) || (cand.length >= best.length && cand.length >= minMatch) {
 				best = cand
 			}
 		}
 		if rep2 > 0 && rep2 != d0 && rep2 != rep1 && rep2 != rep0 {
-			if cand := evalCandidate(pos, rep2, maxBlockLen); cand.score > best.score || (cand.length >= best.length && cand.length >= minMatch) {
+			if cand := evalCandidate(pos, rep2, maxBlockLen); cand.score > best.score || (cand.length >= best.length-1 && cand.length >= minMatch && best.mType >= 4) || (cand.length >= best.length && cand.length >= minMatch) {
 				best = cand
 			}
 		}
@@ -1983,7 +2027,11 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 
 			if best.score >= 1 && best.length >= minMatch {
 				// Deterministic lazy lookahead evaluation at pos+1 to select higher-scoring match candidates
-				if level >= 3 && best.length <= 6 && pos+1+minMatch <= bEnd {
+				lookaheadMax := 6
+				if level >= 5 {
+					lookaheadMax = 16
+				}
+				if level >= 3 && (best.length <= lookaheadMax || best.mType >= 4) && pos+1+minMatch <= bEnd {
 					insertHash(pos)
 					nextBest := findBest(pos+1, bEnd)
 					// Lookahead comparison between match candidate at pos and pos+1
@@ -1999,6 +2047,10 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						if nextBest.mType <= 2 && best.mType > 2 {
 							preferNext = true
 						}
+					} else if best.mType >= 4 && (nextBest.mType == 1 || nextBest.mType == 3 || nextBest.mType == 7 || nextBest.mType == 8) && nextBest.length >= best.length-2 {
+						// 4. Aggressively protect repeat registers and dictionary tokens!
+						// 1 literal + repeat/dict match costs fewer total stream bytes and protects registers
+						preferNext = true
 					}
 					if preferNext {
 						pos++

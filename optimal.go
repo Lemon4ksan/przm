@@ -98,52 +98,60 @@ func calcOffCostPRZM(d int) int {
 
 var varintCost = [4]int32{27, 40, 53, 66} // 14 + 13*(bracket+1) for brackets 0..3
 
-func isCanonicalDistPRZM(d int) bool {
-	return d == 344 || d == 343 || d == 342 || d == 345 ||
-		d == 68692 || d == 68746 || d == 68740 || d == 68741 || d == 68694 ||
-		d == 87268 || d == 17200 || d == 17150
-}
-
 // calcEdgeCostPRZM calculates the fixed-point bit-cost (scaled by 16) for a match edge.
 // Repeat matches incur 0 offset serialization bytes in Section 3.
-func calcEdgeCostPRZM(mLen, dist, repCode int) int32 {
+func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int) int32 {
+	if repCode == -2 {
+		// ShortDict token: 1 byte opcode (0xD8..0xDF), 0 offset bytes
+		return 12
+	}
+	if repCode == -3 {
+		// DictToken: 2 bytes opcode (0xF2 <tokID>), 0 offset bytes
+		return 24
+	}
 	var cost int32
 	if repCode >= 0 {
 		// Repeat match: 0 offset bytes in Section 3
-		if mLen <= 7 {
+		if mLen <= 3+minMatchBase {
 			cost = 16 // 1 byte Fused Repeat token
-		} else if mLen <= 18 {
+		} else if mLen <= 14+minMatchBase {
 			cost = 32 // 2 bytes Long Repeat (opcode + token)
-		} else if mLen <= 145 {
-			cost = 48 // 3 bytes Long Repeat (opcode + token + 1-byte varint)
+		} else if mLen <= 14+minMatchBase+127 {
+			cost = 48 // 3 bytes Long Repeat
 		} else {
-			cost = 64 // 4 bytes Long Repeat (opcode + token + 2-byte varint)
+			cost = 64 // 4 bytes Long Repeat
 		}
-		// Register rotation penalty for short non-canonical repeat matches
-		if repCode > 0 && mLen < 8 && !isCanonicalDistPRZM(dist) {
-			cost += 32 // penalize evicting rep0 for a tiny match
+		// Register conservation bonus for rep0 / rep1:
+		if repCode == 0 {
+			cost -= 8 // 0.5 byte bonus: rep0 is free and conserved
+		} else if repCode == 1 {
+			cost -= 4 // 0.25 byte bonus
+		} else {
+			cost += 4
 		}
 	} else {
 		// Explicit match: opcode bytes in Section 2 + offset bytes in Section 3
 		offBytes := int32(calcOffCostPRZM(dist))
-		if mLen <= 18 {
-			cost = (1 + offBytes) * 16 // 1 token byte + offBytes
-		} else if mLen <= 145 {
-			cost = (2 + offBytes) * 16 // 2 token bytes + offBytes
+		if mLen <= 14+minMatchBase {
+			cost = (1 + offBytes) * 16
+		} else if mLen <= 14+minMatchBase+127 {
+			cost = (2 + offBytes) * 16
 		} else {
-			cost = (3 + offBytes) * 16 // 3 token bytes + offBytes
+			cost = (3 + offBytes) * 16
 		}
-		// Non-canonical explicit match penalty (register pollution + section overhead)
-		if !isCanonicalDistPRZM(dist) {
+		// Shannon Distance Entropy Cost Penalty:
+		if dist >= 65536 {
+			cost += 40
+		} else if dist >= 16384 {
 			cost += 32
+		} else if dist >= 1024 {
+			cost += 20
+		} else if dist >= 128 {
+			cost += 12
 		}
 	}
-	// Length efficiency bonus: prefer 1 long match over multiple fragmented short matches
 	if mLen >= 16 {
 		bonus := int32(mLen / 4)
-		if isCanonicalDistPRZM(dist) {
-			bonus += 8
-		}
 		if cost > bonus+4 {
 			cost -= bonus
 		} else {
@@ -154,9 +162,10 @@ func calcEdgeCostPRZM(mLen, dist, repCode int) int32 {
 }
 
 var subLenLUT = [19][8]uint8{
+	3:  {3},
 	4:  {4},
-	5:  {4, 5},
-	6:  {4, 5, 6},
+	5:  {3, 4, 5},
+	6:  {3, 4, 5, 6},
 	7:  {4, 5, 6, 7},
 	8:  {4, 5, 6, 8},
 	9:  {4, 5, 6, 8, 9},
@@ -172,26 +181,34 @@ var subLenLUT = [19][8]uint8{
 }
 
 var subLenCounts = [19]uint8{
-	4: 1, 5: 2, 6: 3, 7: 4, 8: 4, 9: 5, 10: 5, 11: 5, 12: 5,
+	3: 1, 4: 1, 5: 3, 6: 4, 7: 4, 8: 4, 9: 5, 10: 5, 11: 5, 12: 5,
 	13: 6, 14: 6, 15: 6, 16: 6, 17: 7, 18: 7,
 }
 
-// generateSubLengths writes sub-lengths S(L) = {4, 5, 6, 8, 12, 16, min(L, 18), L}
-// into out without dynamic slice appends or heap allocations.
+// generateSubLengths writes sub-lengths S(L) into out without dynamic slice appends.
 // Returns the number of sub-lengths written (at most 8).
-func generateSubLengths(L int, out *[maxSubLenCandidates]int) int {
-	if L < 4 {
+func generateSubLengths(L, minMatchBase int, out *[maxSubLenCandidates]int) int {
+	if L < minMatchBase {
 		return 0
 	}
 	if L > 18 {
-		*out = [maxSubLenCandidates]int{4, 5, 6, 8, 12, 16, 18, L}
+		if minMatchBase == 3 {
+			*out = [maxSubLenCandidates]int{3, 4, 6, 8, 12, 16, 18, L}
+		} else {
+			*out = [maxSubLenCandidates]int{4, 5, 6, 8, 12, 16, 18, L}
+		}
 		return 8
 	}
 	n := int(subLenCounts[L])
+	cnt := 0
 	for j := range n {
-		out[j] = int(subLenLUT[L][j])
+		sl := int(subLenLUT[L][j])
+		if sl >= minMatchBase {
+			out[cnt] = sl
+			cnt++
+		}
 	}
-	return n
+	return cnt
 }
 
 func flushLiteralsPRZM(cmdBuf, litBuf *[]byte, lits []byte) {
