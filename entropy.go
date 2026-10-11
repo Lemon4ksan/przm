@@ -1006,7 +1006,7 @@ func EncodeRecursiveLZ(src []byte) ([]byte, error) {
 		return nil, ErrCorruptedStream
 	}
 	comp, err := CompressWithOptions(src, CompressOptions{
-		Level:              5,
+		Level:              3,
 		StandardStreamOnly: true,
 	})
 	if err != nil {

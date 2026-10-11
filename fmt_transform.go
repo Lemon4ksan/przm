@@ -25,6 +25,7 @@ const (
 	FMTFlagBitLevel uint8 = 0x10
 
 	DefaultFMTBlockLog2 uint8 = 6 // 64 bytes (1 cache line / PRZM-VM vector register)
+	OpMOBIUS            uint8 = 0x11
 )
 
 var (

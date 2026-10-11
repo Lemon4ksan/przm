@@ -311,7 +311,7 @@ PRZM_INLINE const char* get_schema_token(uint32_t dict_id, uint8_t token_idx,
             return ext_dict->tokens[token_idx].str;
         }
     }
-    if ((dict_id == PRZM_DICT_ID_BROTLI_WEB || dict_id == 0) && token_idx < 256) {
+    if (dict_id == PRZM_DICT_ID_BROTLI_WEB || dict_id == 0) {
         *out_len = przm_brotli_web_tokens[token_idx].len;
         return przm_brotli_web_tokens[token_idx].str;
     }
@@ -2212,6 +2212,7 @@ static const char* const przm_b64_lut_std = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi
 static const char* const przm_b64_lut_url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 void przm_expand_base64(uint8_t* dst, const uint8_t* src, size_t src_len, int pad_count, int url_safe) {
+    (void)pad_count;
     const char* lut = url_safe ? przm_b64_lut_url : przm_b64_lut_std;
     size_t full_triplets = src_len / 3;
     size_t rem = src_len % 3;
