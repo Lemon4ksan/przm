@@ -47,25 +47,34 @@ type scratchpad struct {
 	dedup        DedupTable
 	sheafSBuf    []byte
 	sheafCBuf    []byte
-	sheafMaskBuf []byte
-	sheafWorkBuf []byte
+	sheafMaskBuf    []byte
+	sheafWorkBuf    []byte
+	ctxSheafWorkBuf []byte
+	sheafFBuf       [4][]byte
 }
 
 var padPool = generic.NewPool(func() *scratchpad {
 	return &scratchpad{
-		head:         make([]int32, hashTableSize*4),
-		cmdBuf:       bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		offsetBuf:    bufkit.AlignedBytes(initPadSize/2, bufkit.CacheLineSize)[:0],
-		literalBuf:   bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		transBuf:     bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		nibbleBuf:    bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		nibbleLowBuf: bufkit.AlignedBytes(initPadSize/2, bufkit.CacheLineSize)[:0],
-		splitBuf:     bufkit.AlignedBytes(initPadSize*2, bufkit.CacheLineSize)[:0],
-		normBuf:      bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		sheafSBuf:    bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		sheafCBuf:    bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		sheafMaskBuf: bufkit.AlignedBytes(initPadSize/8+128, bufkit.CacheLineSize)[:0],
-		sheafWorkBuf: bufkit.AlignedBytes(initPadSize+1024, bufkit.CacheLineSize)[:0],
+		head:            make([]int32, hashTableSize*4),
+		cmdBuf:          bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+		offsetBuf:       bufkit.AlignedBytes(initPadSize/2, bufkit.CacheLineSize)[:0],
+		literalBuf:      bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+		transBuf:        bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+		nibbleBuf:       bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+		nibbleLowBuf:    bufkit.AlignedBytes(initPadSize/2, bufkit.CacheLineSize)[:0],
+		splitBuf:        bufkit.AlignedBytes(initPadSize*2, bufkit.CacheLineSize)[:0],
+		normBuf:         bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+		sheafSBuf:       bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+		sheafCBuf:       bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+		sheafMaskBuf:    bufkit.AlignedBytes(initPadSize/8+128, bufkit.CacheLineSize)[:0],
+		sheafWorkBuf:    bufkit.AlignedBytes(initPadSize+1024, bufkit.CacheLineSize)[:0],
+		ctxSheafWorkBuf: bufkit.AlignedBytes(initPadSize+1024, bufkit.CacheLineSize)[:0],
+		sheafFBuf: [4][]byte{
+			bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+			bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+			bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+			bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
+		},
 	}
 })
 
@@ -81,6 +90,8 @@ type matchCandidate struct {
 	mismatches int
 	diffOffs   [2]int
 	diffXORs   [2]byte
+	transOp    uint8
+	pairTok2   int
 }
 
 func uvarintLen(x uint64) int {
@@ -198,7 +209,7 @@ func packSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 		return nil, false
 	}
 
-	if cap(pad.sheafWorkBuf) < totalPayload {
+	if cap(pad.sheafWorkBuf) < totalPayload+1024 {
 		pad.sheafWorkBuf = bufkit.AlignedBytes(totalPayload+1024, bufkit.CacheLineSize)
 	}
 	workBuf := pad.sheafWorkBuf[:totalPayload]
@@ -217,6 +228,133 @@ func packSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 	copy(workBuf[24:24+maskLen], pad.sheafMaskBuf[:maskLen])
 	copy(workBuf[24+maskLen:24+maskLen+len(encS)], encS)
 	copy(workBuf[24+maskLen+len(encS):], encC)
+
+	return workBuf[:totalPayload], true
+}
+
+// packContextSheafVANS encodes residual literals using 2D Context Sheaf splitting and V-ANS.
+// Returns the packed bytes, or (nil, false) if not compressible or invalid.
+func packContextSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
+	n := len(lits)
+	if n < 32 {
+		return nil, false
+	}
+
+	reqCap := n + 64
+	for c := 0; c < 4; c++ {
+		if cap(pad.sheafFBuf[c]) < reqCap {
+			pad.sheafFBuf[c] = bufkit.AlignedBytes(reqCap, bufkit.CacheLineSize)[:0]
+		}
+	}
+	f0 := pad.sheafFBuf[0][:0]
+	f1 := pad.sheafFBuf[1][:0]
+	f2 := pad.sheafFBuf[2][:0]
+	f3 := pad.sheafFBuf[3][:0]
+
+	prev := byte(0)
+	for _, b := range lits {
+		c := SheafContextTable[prev]
+		switch c {
+		case 0:
+			f0 = append(f0, b)
+		case 1:
+			f1 = append(f1, b)
+		case 2:
+			f2 = append(f2, b)
+		default:
+			f3 = append(f3, b)
+		}
+		prev = b
+	}
+
+	// Require at least two non-trivial fibers to justify context splitting
+	nonEmpty := 0
+	if len(f0) >= 8 {
+		nonEmpty++
+	}
+	if len(f1) >= 8 {
+		nonEmpty++
+	}
+	if len(f2) >= 8 {
+		nonEmpty++
+	}
+	if len(f3) >= 8 {
+		nonEmpty++
+	}
+	if nonEmpty < 2 {
+		return nil, false
+	}
+
+	var enc0, enc1, enc2, enc3 []byte
+	var err error
+	if len(f0) > 0 {
+		enc0, err = VANSEncode4x(f0)
+		if err != nil {
+			return nil, false
+		}
+	}
+	if len(f1) > 0 {
+		enc1, err = VANSEncode4x(f1)
+		if err != nil {
+			return nil, false
+		}
+	}
+	if len(f2) > 0 {
+		enc2, err = VANSEncode4x(f2)
+		if err != nil {
+			return nil, false
+		}
+	}
+	if len(f3) > 0 {
+		enc3, err = VANSEncode4x(f3)
+		if err != nil {
+			return nil, false
+		}
+	}
+
+	totalPayload := 40 + len(enc0) + len(enc1) + len(enc2) + len(enc3)
+	if totalPayload >= int(float64(n)*0.95) {
+		return nil, false
+	}
+
+	if cap(pad.ctxSheafWorkBuf) < totalPayload+1024 {
+		pad.ctxSheafWorkBuf = bufkit.AlignedBytes(totalPayload+1024, bufkit.CacheLineSize)
+	}
+	workBuf := pad.ctxSheafWorkBuf[:totalPayload]
+
+	workBuf[0] = vansMagic0
+	workBuf[1] = vansMagic1
+	workBuf[2] = vansVer1
+	workBuf[3] = vansFlag4X | vansFlagCtxSheaf
+
+	binary.LittleEndian.PutUint32(workBuf[4:8], uint32(n))
+	binary.LittleEndian.PutUint32(workBuf[8:12], uint32(len(f0)))
+	binary.LittleEndian.PutUint32(workBuf[12:16], uint32(len(f1)))
+	binary.LittleEndian.PutUint32(workBuf[16:20], uint32(len(f2)))
+	binary.LittleEndian.PutUint32(workBuf[20:24], uint32(len(f3)))
+
+	binary.LittleEndian.PutUint32(workBuf[24:28], uint32(len(enc0)))
+	binary.LittleEndian.PutUint32(workBuf[28:32], uint32(len(enc1)))
+	binary.LittleEndian.PutUint32(workBuf[32:36], uint32(len(enc2)))
+	binary.LittleEndian.PutUint32(workBuf[36:40], uint32(len(enc3)))
+
+	off := 40
+	if len(enc0) > 0 {
+		copy(workBuf[off:], enc0)
+		off += len(enc0)
+	}
+	if len(enc1) > 0 {
+		copy(workBuf[off:], enc1)
+		off += len(enc1)
+	}
+	if len(enc2) > 0 {
+		copy(workBuf[off:], enc2)
+		off += len(enc2)
+	}
+	if len(enc3) > 0 {
+		copy(workBuf[off:], enc3)
+		off += len(enc3)
+	}
 
 	return workBuf[:totalPayload], true
 }
@@ -412,6 +550,7 @@ type CompressOptions struct {
 	GPUAcceleration    bool        // Offload LZ77 dictionary search to NVIDIA Ampere GPU via CUDA Driver API
 	MinMatch           int         // Minimum match length: 3 or 4 (default 4; 3 enables FlagMinMatch3)
 	CompactDict        bool        // Enable dedicated OpcodePrefixRawDict (0xE9) for constant raw dictionary offsets
+	LiteralProbe       func([]byte) // Optional probe hook for testing/diagnostics
 }
 
 // Option configures CompressOptions.
@@ -793,25 +932,30 @@ func tryCompressGPU(src []byte, opts CompressOptions, pad *scratchpad) (out []by
 		var vansBeatsRaw bool
 		if !opts.StandardStreamOnly && level >= 2 {
 			sheafOut, sheafOk := packSheafVANS(pad.literalBuf, pad)
+			ctxSheafOut, ctxSheafOk := packContextSheafVANS(pad.literalBuf, pad)
 			stdOut, stdErr := VANSEncode4x(pad.literalBuf)
 			stdOk := stdErr == nil && len(stdOut) < int(float64(len(pad.literalBuf))*0.95)
 
-			if isProbablyText(src) && sheafOk {
+			if isProbablyText(src) && level <= 3 && sheafOk {
 				vansOut = sheafOut
 				vansBeatsRaw = true
-			} else if sheafOk && stdOk {
-				if len(sheafOut) <= len(stdOut) {
-					vansOut = sheafOut
-				} else {
+			} else {
+				bestLen := int(float64(len(pad.literalBuf)) * 0.95)
+				if stdOk && len(stdOut) < bestLen {
 					vansOut = stdOut
+					bestLen = len(stdOut)
+					vansBeatsRaw = true
 				}
-				vansBeatsRaw = true
-			} else if sheafOk {
-				vansOut = sheafOut
-				vansBeatsRaw = true
-			} else if stdOk {
-				vansOut = stdOut
-				vansBeatsRaw = true
+				if sheafOk && len(sheafOut) < bestLen {
+					vansOut = sheafOut
+					bestLen = len(sheafOut)
+					vansBeatsRaw = true
+				}
+				if ctxSheafOk && len(ctxSheafOut) < bestLen {
+					vansOut = ctxSheafOut
+					bestLen = len(ctxSheafOut)
+					vansBeatsRaw = true
+				}
 			}
 		}
 
@@ -1500,32 +1644,32 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		best := matchCandidate{}
 
 		if activeMatcher != nil {
-			tokIdx, tokLen := activeMatcher.match(src, pos)
+			tokIdx, transOp, tokLen, cost, score, pairTok2 := activeMatcher.match(src, pos)
 			if tokLen >= 3 && tokLen <= maxBlockLen {
-				var cost int
 				var mType int
 				dictBonus := 0
-				if tokIdx < 8 {
+				if transOp == 0 && tokIdx < 8 {
 					cost = 1
 					mType = 7 // OpcodePrefixShortDict
 					if level >= 4 {
 						dictBonus = 4
 					}
 				} else {
-					cost = 2
-					mType = 8 // OpcodePrefixDictToken
+					mType = 8 // OpcodePrefixDictToken or Transformed Token
 					if level >= 4 {
 						dictBonus = 2
 					}
 				}
-				score := tokLen - cost + dictBonus
+				score = tokLen - cost + dictBonus
 				if score > best.score && score >= 1 {
 					best = matchCandidate{
-						mType:   mType,
-						length:  tokLen,
-						dictTok: tokIdx,
-						cost:    cost,
-						score:   score,
+						mType:    mType,
+						length:   tokLen,
+						dictTok:  tokIdx,
+						cost:     cost,
+						score:    score,
+						transOp:  transOp,
+						pairTok2: pairTok2,
 					}
 				}
 			}
@@ -2273,11 +2417,17 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					op := OpcodePrefixShortDict | uint8(best.dictTok)
 					pad.cmdBuf = append(pad.cmdBuf, op)
 
-				case 8: // OpcodePrefixDictToken (0xF2 <tokID>)
+				case 8: // OpcodePrefixDictToken (0xF2 <tokID>) or Transformed Token
 					if litLen > 0 {
 						flushLiterals(src[litStart:pos])
 					}
-					pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixDictToken, uint8(best.dictTok))
+					if best.transOp == OpcodePrefixTransPair {
+						pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixTransPair, uint8(best.dictTok), uint8(best.pairTok2))
+					} else if best.transOp != 0 {
+						pad.cmdBuf = append(pad.cmdBuf, best.transOp, uint8(best.dictTok))
+					} else {
+						pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixDictToken, uint8(best.dictTok))
+					}
 
 				case 9: // OpcodePrefixRawDict (0xE9) - Direct raw dictionary match
 					if litLen > 15 {
@@ -2405,6 +2555,10 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	}
 
+	if opts.LiteralProbe != nil {
+		opts.LiteralProbe(pad.literalBuf)
+	}
+
 	// Try Post-LZ77 Etale Sheaf (Vector C) stream splitting + V-ANS, standard V-ANS, and SIMD Nibble-Plane packing on literalBuf
 	litSection := pad.literalBuf
 	if len(pad.literalBuf) >= 32 {
@@ -2412,25 +2566,30 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		var vansBeatsRaw bool
 		if !opts.StandardStreamOnly && level >= 2 {
 			sheafOut, sheafOk := packSheafVANS(pad.literalBuf, pad)
+			ctxSheafOut, ctxSheafOk := packContextSheafVANS(pad.literalBuf, pad)
 			stdOut, stdErr := VANSEncode4x(pad.literalBuf)
 			stdOk := stdErr == nil && len(stdOut) < int(float64(len(pad.literalBuf))*0.95)
 
 			if isProbablyText(origSrc) && level <= 3 && sheafOk {
 				vansOut = sheafOut
 				vansBeatsRaw = true
-			} else if sheafOk && stdOk {
-				if len(sheafOut) <= len(stdOut) {
-					vansOut = sheafOut
-				} else {
+			} else {
+				bestLen := int(float64(len(pad.literalBuf)) * 0.95)
+				if stdOk && len(stdOut) < bestLen {
 					vansOut = stdOut
+					bestLen = len(stdOut)
+					vansBeatsRaw = true
 				}
-				vansBeatsRaw = true
-			} else if sheafOk {
-				vansOut = sheafOut
-				vansBeatsRaw = true
-			} else if stdOk {
-				vansOut = stdOut
-				vansBeatsRaw = true
+				if sheafOk && len(sheafOut) < bestLen {
+					vansOut = sheafOut
+					bestLen = len(sheafOut)
+					vansBeatsRaw = true
+				}
+				if ctxSheafOk && len(ctxSheafOut) < bestLen {
+					vansOut = ctxSheafOut
+					bestLen = len(ctxSheafOut)
+					vansBeatsRaw = true
+				}
 			}
 		}
 

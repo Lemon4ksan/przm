@@ -33,6 +33,7 @@ type decompressScratchpad struct {
 	vansModelS  VANSModel
 	vansModelC  VANSModel
 	vansModel   VANSModel
+	vansModels  [4]VANSModel
 }
 
 var decScratchPool = generic.NewPool(func() *decompressScratchpad {
@@ -246,6 +247,86 @@ func validateSheafMask(mask []byte, origLen, sLen int) bool {
 func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 	if len(src) >= 8 && src[0] == vansMagic0 && src[1] == vansMagic1 && src[2] == vansVer1 {
 		flags := src[3]
+		if (flags & vansFlagCtxSheaf) != 0 {
+			if len(src) < 40 {
+				return nil, fmt.Errorf("%w: truncated context sheaf vans header", ErrCorruptedFrame)
+			}
+			origLen := int(binary.LittleEndian.Uint32(src[4:8]))
+			fLen0 := int(binary.LittleEndian.Uint32(src[8:12]))
+			fLen1 := int(binary.LittleEndian.Uint32(src[12:16]))
+			fLen2 := int(binary.LittleEndian.Uint32(src[16:20]))
+			fLen3 := int(binary.LittleEndian.Uint32(src[20:24]))
+
+			encLen0 := int(binary.LittleEndian.Uint32(src[24:28]))
+			encLen1 := int(binary.LittleEndian.Uint32(src[28:32]))
+			encLen2 := int(binary.LittleEndian.Uint32(src[32:36]))
+			encLen3 := int(binary.LittleEndian.Uint32(src[36:40]))
+
+			if origLen < 0 || origLen > MaxBlockSize ||
+				fLen0 < 0 || fLen1 < 0 || fLen2 < 0 || fLen3 < 0 ||
+				encLen0 < 0 || encLen1 < 0 || encLen2 < 0 || encLen3 < 0 ||
+				fLen0+fLen1+fLen2+fLen3 != origLen {
+				return nil, fmt.Errorf("%w: invalid context sheaf vans dimensions", ErrCorruptedFrame)
+			}
+
+			if 40+encLen0+encLen1+encLen2+encLen3 > len(src) {
+				return nil, fmt.Errorf("%w: truncated context sheaf payload", ErrCorruptedFrame)
+			}
+
+			if cap(pad.litBuf) < origLen+64 {
+				pad.litBuf = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
+			}
+			if cap(pad.sheafSBuf) < origLen+64 {
+				pad.sheafSBuf = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
+			}
+
+			f0 := pad.sheafSBuf[0 : fLen0]
+			f1 := pad.sheafSBuf[fLen0 : fLen0+fLen1]
+			f2 := pad.sheafSBuf[fLen0+fLen1 : fLen0+fLen1+fLen2]
+			f3 := pad.sheafSBuf[fLen0+fLen1+fLen2 : origLen]
+
+			off := 40
+			if fLen0 > 0 {
+				if encLen0 == 0 {
+					return nil, ErrCorruptedFrame
+				}
+				if _, err := VANSDecode4xTo(f0, src[off:off+encLen0], &pad.vansModels[0]); err != nil {
+					return nil, fmt.Errorf("%w: decoding fiber 0: %v", ErrCorruptedFrame, err)
+				}
+				off += encLen0
+			}
+			if fLen1 > 0 {
+				if encLen1 == 0 {
+					return nil, ErrCorruptedFrame
+				}
+				if _, err := VANSDecode4xTo(f1, src[off:off+encLen1], &pad.vansModels[1]); err != nil {
+					return nil, fmt.Errorf("%w: decoding fiber 1: %v", ErrCorruptedFrame, err)
+				}
+				off += encLen1
+			}
+			if fLen2 > 0 {
+				if encLen2 == 0 {
+					return nil, ErrCorruptedFrame
+				}
+				if _, err := VANSDecode4xTo(f2, src[off:off+encLen2], &pad.vansModels[2]); err != nil {
+					return nil, fmt.Errorf("%w: decoding fiber 2: %v", ErrCorruptedFrame, err)
+				}
+				off += encLen2
+			}
+			if fLen3 > 0 {
+				if encLen3 == 0 {
+					return nil, ErrCorruptedFrame
+				}
+				if _, err := VANSDecode4xTo(f3, src[off:off+encLen3], &pad.vansModels[3]); err != nil {
+					return nil, fmt.Errorf("%w: decoding fiber 3: %v", ErrCorruptedFrame, err)
+				}
+				off += encLen3
+			}
+
+			dst := pad.litBuf[:origLen]
+			InterleaveContextSheaf4(dst, f0, f1, f2, f3, origLen)
+			return dst, nil
+		}
 		if (flags & vansFlagSheaf) != 0 {
 			if len(src) < 24 {
 				return nil, fmt.Errorf("%w: truncated sheaf vans literal header", ErrCorruptedFrame)
@@ -1356,6 +1437,210 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 			}
 			copy(outBuf[dstPos:], tok)
 			dstPos += len(tok)
+
+		case op == OpcodePrefixTransSpace:
+			// 0xEA: " " + tok
+			if len(activeDict) == 0 {
+				return nil, fmt.Errorf("%w: dictionary token without active dictionary", ErrCorruptedFrame)
+			}
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated transformed token opcode", ErrCorruptedFrame)
+			}
+			tokIdx := int(cmds[cmdPtr])
+			cmdPtr++
+			if tokIdx >= len(activeDict) {
+				return nil, fmt.Errorf("%w: invalid dictionary token ID %d", ErrCorruptedFrame, tokIdx)
+			}
+			tok := activeDict[tokIdx]
+			tLen := len(tok) + 1
+			if dstPos+tLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: dictionary token overflow", ErrCorruptedFrame)
+			}
+			outBuf[dstPos] = ' '
+			copy(outBuf[dstPos+1:], tok)
+			dstPos += tLen
+
+		case op == OpcodePrefixTransQuote:
+			// 0xEB: tok + "\""
+			if len(activeDict) == 0 {
+				return nil, fmt.Errorf("%w: dictionary token without active dictionary", ErrCorruptedFrame)
+			}
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated transformed token opcode", ErrCorruptedFrame)
+			}
+			tokIdx := int(cmds[cmdPtr])
+			cmdPtr++
+			if tokIdx >= len(activeDict) {
+				return nil, fmt.Errorf("%w: invalid dictionary token ID %d", ErrCorruptedFrame, tokIdx)
+			}
+			tok := activeDict[tokIdx]
+			tLen := len(tok) + 1
+			if dstPos+tLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: dictionary token overflow", ErrCorruptedFrame)
+			}
+			copy(outBuf[dstPos:], tok)
+			outBuf[dstPos+len(tok)] = '"'
+			dstPos += tLen
+
+		case op == OpcodePrefixTransBrace:
+			// 0xEC: tok + "{"
+			if len(activeDict) == 0 {
+				return nil, fmt.Errorf("%w: dictionary token without active dictionary", ErrCorruptedFrame)
+			}
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated transformed token opcode", ErrCorruptedFrame)
+			}
+			tokIdx := int(cmds[cmdPtr])
+			cmdPtr++
+			if tokIdx >= len(activeDict) {
+				return nil, fmt.Errorf("%w: invalid dictionary token ID %d", ErrCorruptedFrame, tokIdx)
+			}
+			tok := activeDict[tokIdx]
+			tLen := len(tok) + 1
+			if dstPos+tLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: dictionary token overflow", ErrCorruptedFrame)
+			}
+			copy(outBuf[dstPos:], tok)
+			outBuf[dstPos+len(tok)] = '{'
+			dstPos += tLen
+
+		case op == OpcodePrefixTransUpper:
+			// 0xED: UppercaseFirst(tok)
+			if len(activeDict) == 0 {
+				return nil, fmt.Errorf("%w: dictionary token without active dictionary", ErrCorruptedFrame)
+			}
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated transformed token opcode", ErrCorruptedFrame)
+			}
+			tokIdx := int(cmds[cmdPtr])
+			cmdPtr++
+			if tokIdx >= len(activeDict) {
+				return nil, fmt.Errorf("%w: invalid dictionary token ID %d", ErrCorruptedFrame, tokIdx)
+			}
+			tok := activeDict[tokIdx]
+			tLen := len(tok)
+			if dstPos+tLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: dictionary token overflow", ErrCorruptedFrame)
+			}
+			copy(outBuf[dstPos:], tok)
+			if tok[0] >= 'a' && tok[0] <= 'z' {
+				outBuf[dstPos] = tok[0] - ('a' - 'A')
+			}
+			dstPos += tLen
+
+		case op == OpcodePrefixTransSemi:
+			// 0xEE: tok + ";"
+			if len(activeDict) == 0 {
+				return nil, fmt.Errorf("%w: dictionary token without active dictionary", ErrCorruptedFrame)
+			}
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated transformed token opcode", ErrCorruptedFrame)
+			}
+			tokIdx := int(cmds[cmdPtr])
+			cmdPtr++
+			if tokIdx >= len(activeDict) {
+				return nil, fmt.Errorf("%w: invalid dictionary token ID %d", ErrCorruptedFrame, tokIdx)
+			}
+			tok := activeDict[tokIdx]
+			tLen := len(tok) + 1
+			if dstPos+tLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: dictionary token overflow", ErrCorruptedFrame)
+			}
+			copy(outBuf[dstPos:], tok)
+			outBuf[dstPos+len(tok)] = ';'
+			dstPos += tLen
+
+		case op == OpcodePrefixTransSpaceSpace:
+			// 0xEF: " " + tok + " "
+			if len(activeDict) == 0 {
+				return nil, fmt.Errorf("%w: dictionary token without active dictionary", ErrCorruptedFrame)
+			}
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated transformed token opcode", ErrCorruptedFrame)
+			}
+			tokIdx := int(cmds[cmdPtr])
+			cmdPtr++
+			if tokIdx >= len(activeDict) {
+				return nil, fmt.Errorf("%w: invalid dictionary token ID %d", ErrCorruptedFrame, tokIdx)
+			}
+			tok := activeDict[tokIdx]
+			tLen := len(tok) + 2
+			if dstPos+tLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: dictionary token overflow", ErrCorruptedFrame)
+			}
+			outBuf[dstPos] = ' '
+			copy(outBuf[dstPos+1:], tok)
+			outBuf[dstPos+len(tok)+1] = ' '
+			dstPos += tLen
+
+		case op == OpcodePrefixTransEqQuote:
+			// 0xFB: tok + "=\""
+			if len(activeDict) == 0 {
+				return nil, fmt.Errorf("%w: dictionary token without active dictionary", ErrCorruptedFrame)
+			}
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated transformed token opcode", ErrCorruptedFrame)
+			}
+			tokIdx := int(cmds[cmdPtr])
+			cmdPtr++
+			if tokIdx >= len(activeDict) {
+				return nil, fmt.Errorf("%w: invalid dictionary token ID %d", ErrCorruptedFrame, tokIdx)
+			}
+			tok := activeDict[tokIdx]
+			tLen := len(tok) + 2
+			if dstPos+tLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: dictionary token overflow", ErrCorruptedFrame)
+			}
+			copy(outBuf[dstPos:], tok)
+			outBuf[dstPos+len(tok)] = '='
+			outBuf[dstPos+len(tok)+1] = '"'
+			dstPos += tLen
+
+		case op == OpcodePrefixTransTagClose:
+			// 0xFC: tok + ">"
+			if len(activeDict) == 0 {
+				return nil, fmt.Errorf("%w: dictionary token without active dictionary", ErrCorruptedFrame)
+			}
+			if cmdPtr >= cmdEnd {
+				return nil, fmt.Errorf("%w: truncated transformed token opcode", ErrCorruptedFrame)
+			}
+			tokIdx := int(cmds[cmdPtr])
+			cmdPtr++
+			if tokIdx >= len(activeDict) {
+				return nil, fmt.Errorf("%w: invalid dictionary token ID %d", ErrCorruptedFrame, tokIdx)
+			}
+			tok := activeDict[tokIdx]
+			tLen := len(tok) + 1
+			if dstPos+tLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: dictionary token overflow", ErrCorruptedFrame)
+			}
+			copy(outBuf[dstPos:], tok)
+			outBuf[dstPos+len(tok)] = '>'
+			dstPos += tLen
+
+		case op == OpcodePrefixTransPair:
+			// 0xFF: tok1 + tok2
+			if len(activeDict) == 0 {
+				return nil, fmt.Errorf("%w: dictionary token without active dictionary", ErrCorruptedFrame)
+			}
+			if cmdPtr+2 > cmdEnd {
+				return nil, fmt.Errorf("%w: truncated token pair opcode", ErrCorruptedFrame)
+			}
+			tok1Idx := int(cmds[cmdPtr])
+			tok2Idx := int(cmds[cmdPtr+1])
+			cmdPtr += 2
+			if tok1Idx >= len(activeDict) || tok2Idx >= len(activeDict) {
+				return nil, fmt.Errorf("%w: invalid token pair IDs %d, %d", ErrCorruptedFrame, tok1Idx, tok2Idx)
+			}
+			tok1 := activeDict[tok1Idx]
+			tok2 := activeDict[tok2Idx]
+			tLen := len(tok1) + len(tok2)
+			if dstPos+tLen > len(outBuf) {
+				return nil, fmt.Errorf("%w: dictionary token overflow", ErrCorruptedFrame)
+			}
+			copy(outBuf[dstPos:], tok1)
+			copy(outBuf[dstPos+len(tok1):], tok2)
+			dstPos += tLen
 
 		case op >= 0xF3 && op <= 0xFA:
 			// Direct 1-byte Literal Run (1..8 literals)

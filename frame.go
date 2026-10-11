@@ -69,11 +69,20 @@ const (
 	OpcodePrefixDeltaRing  uint8 = 0xE0 // 0xE0 .. 0xE7
 	OpcodePrefixDeltaExpl  uint8 = 0xE8
 	OpcodePrefixRawDict    uint8 = 0xE9 // 0xE9: Direct Raw Dictionary Match (offset inside rawDict)
+	OpcodePrefixTransSpace uint8 = 0xEA // 0xEA <tokID>: " " + tok
+	OpcodePrefixTransQuote uint8 = 0xEB // 0xEB <tokID>: tok + "\""
+	OpcodePrefixTransBrace uint8 = 0xEC // 0xEC <tokID>: tok + "{"
+	OpcodePrefixTransUpper uint8 = 0xED // 0xED <tokID>: UppercaseFirst(tok)
+	OpcodePrefixTransSemi  uint8 = 0xEE // 0xEE <tokID>: tok + ";"
+	OpcodePrefixTransSpaceSpace uint8 = 0xEF // 0xEF <tokID>: " " + tok + " "
 	OpcodePrefixLiteral    uint8 = 0xF0
 	OpcodePrefixRLE        uint8 = 0xF1
 	OpcodePrefixDictToken  uint8 = 0xF2 // 0xF2 <tokenID>: 2-byte schema token from active DictID
 	OpcodePrefixLitShort   uint8 = 0xF3 // 0xF3 .. 0xFA: 1-byte direct literal run for 1..8 literals
+	OpcodePrefixTransEqQuote uint8 = 0xFB // 0xFB <tokID>: tok + "=\""
+	OpcodePrefixTransTagClose uint8 = 0xFC // 0xFC <tokID>: tok + ">"
 	OpCopyBlock            uint8 = 0xFD // 0xFD: Aligned 64 KiB block replication (Milestone 5)
+	OpcodePrefixTransPair  uint8 = 0xFF // 0xFF <tok1> <tok2>: Sub-4-byte token pair (tok1 + tok2)
 )
 
 // Extended match opcode flags (Category 10).

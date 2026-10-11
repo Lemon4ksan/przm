@@ -13,11 +13,23 @@ import (
 	"sync"
 )
 
+type dictEntry struct {
+	pattern []byte
+	tokIdx  uint8
+	transOp uint8
+	length  uint8
+	cost    uint8
+}
+
 type dictMatcher struct {
-	id     uint32
-	tokens [][]byte
-	head   [65536]int16
-	chain  [256]int16
+	id      uint32
+	tokens  [][]byte
+	entries []dictEntry
+	head    [65536]int32
+	chain   []int32
+	head3   [65536]int32
+	chain3  []int32
+	head2   [65536]int16
 }
 
 func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
@@ -26,41 +38,251 @@ func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
 	for i := range m.head {
 		m.head[i] = -1
 	}
-	for i := range m.chain {
-		m.chain[i] = -1
+	for i := range m.head3 {
+		m.head3[i] = -1
+	}
+	for i := range m.head2 {
+		m.head2[i] = -1
 	}
 
 	for i, s := range rawTokens {
-		b := []byte(s)
-		m.tokens[i] = b
-		if len(b) >= 4 {
-			h := (binary.LittleEndian.Uint32(b[:4]) * 0x1E35A7BD) >> 16
-			m.chain[i] = m.head[h]
-			m.head[h] = int16(i)
+		m.tokens[i] = []byte(s)
+	}
+
+	addEntry := func(pattern []byte, tokIdx uint8, transOp uint8, cost uint8) {
+		if len(pattern) < 2 || len(pattern) > 255 {
+			return
 		}
-	}
-}
-
-func (m *dictMatcher) match(src []byte, pos int) (bestIdx int, bestLen int) {
-	uSize := len(src)
-	if pos+4 > uSize {
-		return -1, 0
-	}
-	h := (binary.LittleEndian.Uint32(src[pos:pos+4]) * 0x1E35A7BD) >> 16
-	bestIdx = -1
-	bestLen = 0
-
-	for idx := m.head[h]; idx >= 0; idx = m.chain[idx] {
-		tok := m.tokens[idx]
-		tLen := len(tok)
-		if tLen > bestLen && pos+tLen <= uSize {
-			if bytes.Equal(src[pos:pos+tLen], tok) {
-				bestIdx = int(idx)
-				bestLen = tLen
+		eIdx := int32(len(m.entries))
+		m.entries = append(m.entries, dictEntry{
+			pattern: pattern,
+			tokIdx:  tokIdx,
+			transOp: transOp,
+			length:  uint8(len(pattern)),
+			cost:    cost,
+		})
+		pLen := len(pattern)
+		if pLen >= 4 {
+			h := (binary.LittleEndian.Uint32(pattern[:4]) * 0x1E35A7BD) >> 16
+			m.chain = append(m.chain, m.head[h])
+			m.head[h] = eIdx
+		} else if pLen == 3 {
+			u24 := uint32(pattern[0]) | (uint32(pattern[1]) << 8) | (uint32(pattern[2]) << 16)
+			h3 := (u24 * 0x1E35A7BD) >> 16
+			m.chain3 = append(m.chain3, m.head3[h3])
+			m.head3[h3] = eIdx
+		} else if pLen == 2 {
+			u16 := uint16(pattern[0]) | (uint16(pattern[1]) << 8)
+			if m.head2[u16] == -1 || cost < m.entries[m.head2[u16]].cost {
+				m.head2[u16] = int16(eIdx)
 			}
 		}
 	}
-	return bestIdx, bestLen
+
+	// 1. Base tokens
+	for i, b := range m.tokens {
+		cost := uint8(2)
+		if i < 8 {
+			cost = 1
+		}
+		addEntry(b, uint8(i), 0, cost)
+	}
+
+	// 2. Static Word Transforms (only for tokens where len >= 2 and <= 32)
+	for i, b := range m.tokens {
+		if len(b) < 2 || len(b) > 32 {
+			continue
+		}
+		tokIdx := uint8(i)
+
+		// 0xEA: Prefix space: " " + tok
+		sp := make([]byte, len(b)+1)
+		sp[0] = ' '
+		copy(sp[1:], b)
+		addEntry(sp, tokIdx, OpcodePrefixTransSpace, 2)
+
+		// 0xEB: Suffix quote: tok + "\""
+		sq := make([]byte, len(b)+1)
+		copy(sq, b)
+		sq[len(b)] = '"'
+		addEntry(sq, tokIdx, OpcodePrefixTransQuote, 2)
+
+		// 0xEC: Suffix brace: tok + "{"
+		sb := make([]byte, len(b)+1)
+		copy(sb, b)
+		sb[len(b)] = '{'
+		addEntry(sb, tokIdx, OpcodePrefixTransBrace, 2)
+
+		// 0xED: Uppercase first letter: upper(b[0]) + b[1:]
+		if b[0] >= 'a' && b[0] <= 'z' {
+			uf := make([]byte, len(b))
+			copy(uf, b)
+			uf[0] -= ('a' - 'A')
+			addEntry(uf, tokIdx, OpcodePrefixTransUpper, 2)
+		}
+
+		// 0xEE: Suffix semicolon: tok + ";"
+		ss := make([]byte, len(b)+1)
+		copy(ss, b)
+		ss[len(b)] = ';'
+		addEntry(ss, tokIdx, OpcodePrefixTransSemi, 2)
+
+		// 0xEF: Space around: " " + tok + " "
+		sa := make([]byte, len(b)+2)
+		sa[0] = ' '
+		copy(sa[1:], b)
+		sa[len(b)+1] = ' '
+		addEntry(sa, tokIdx, OpcodePrefixTransSpaceSpace, 2)
+
+		// 0xFB: Suffix equal quote: tok + "=\""
+		seq := make([]byte, len(b)+2)
+		copy(seq, b)
+		seq[len(b)] = '='
+		seq[len(b)+1] = '"'
+		addEntry(seq, tokIdx, OpcodePrefixTransEqQuote, 2)
+
+		// 0xFC: Suffix tag close: tok + ">"
+		stc := make([]byte, len(b)+1)
+		copy(stc, b)
+		stc[len(b)] = '>'
+		addEntry(stc, tokIdx, OpcodePrefixTransTagClose, 2)
+	}
+}
+
+func (m *dictMatcher) match(src []byte, pos int) (bestIdx int, bestTransOp uint8, bestLen int, bestCost int, bestScore int, pairTok2 int) {
+	uSize := len(src)
+	bestIdx = -1
+	pairTok2 = -1
+	bestScore = 0
+
+	// 1. Length >= 4 matches via head/chain
+	if pos+4 <= uSize {
+		u32 := binary.LittleEndian.Uint32(src[pos : pos+4])
+		h := (u32 * 0x1E35A7BD) >> 16
+		for idx := m.head[h]; idx >= 0; idx = m.chain[idx] {
+			e := &m.entries[idx]
+			pLen := int(e.length)
+			score := pLen - int(e.cost)
+			if score > bestScore && pos+pLen <= uSize {
+				if bytes.Equal(src[pos:pos+pLen], e.pattern) {
+					bestIdx = int(e.tokIdx)
+					bestTransOp = e.transOp
+					bestLen = pLen
+					bestCost = int(e.cost)
+					bestScore = score
+				}
+			}
+		}
+	}
+
+	// 2. Length 3 matches via head3/chain3
+	if pos+3 <= uSize && bestScore < 3 {
+		u24 := uint32(src[pos]) | (uint32(src[pos+1]) << 8) | (uint32(src[pos+2]) << 16)
+		h3 := (u24 * 0x1E35A7BD) >> 16
+		for idx := m.head3[h3]; idx >= 0; idx = m.chain3[idx] {
+			e := &m.entries[idx]
+			pLen := int(e.length)
+			score := pLen - int(e.cost)
+			if score > bestScore && pos+pLen <= uSize {
+				if bytes.Equal(src[pos:pos+pLen], e.pattern) {
+					bestIdx = int(e.tokIdx)
+					bestTransOp = e.transOp
+					bestLen = pLen
+					bestCost = int(e.cost)
+					bestScore = score
+				}
+			}
+		}
+	}
+
+	// 3. Length 2 matches via head2
+	if pos+2 <= uSize && bestScore < 1 {
+		u16 := uint16(src[pos]) | (uint16(src[pos+1]) << 8)
+		if idx := m.head2[u16]; idx >= 0 {
+			e := &m.entries[idx]
+			pLen := int(e.length)
+			score := pLen - int(e.cost)
+			if score > bestScore && pos+pLen <= uSize {
+				if bytes.Equal(src[pos:pos+pLen], e.pattern) {
+					bestIdx = int(e.tokIdx)
+					bestTransOp = e.transOp
+					bestLen = pLen
+					bestCost = int(e.cost)
+					bestScore = score
+				}
+			}
+		}
+	}
+
+	// 4. Sub-4-byte Token Pair probe (0xFF)
+	if bestLen >= 2 && bestTransOp == 0 && pos+bestLen+2 <= uSize {
+		pos2 := pos + bestLen
+		tok2Idx := -1
+		tok2Len := 0
+
+		if pos2+4 <= uSize {
+			u32 := binary.LittleEndian.Uint32(src[pos2 : pos2+4])
+			h := (u32 * 0x1E35A7BD) >> 16
+			for idx := m.head[h]; idx >= 0; idx = m.chain[idx] {
+				e := &m.entries[idx]
+				if e.transOp == 0 {
+					pLen := int(e.length)
+					if pLen > tok2Len && pos2+pLen <= uSize {
+						if bytes.Equal(src[pos2:pos2+pLen], e.pattern) {
+							tok2Idx = int(e.tokIdx)
+							tok2Len = pLen
+						}
+					}
+				}
+			}
+		}
+		if tok2Len == 0 && pos2+3 <= uSize {
+			u24 := uint32(src[pos2]) | (uint32(src[pos2+1]) << 8) | (uint32(src[pos2+2]) << 16)
+			h3 := (u24 * 0x1E35A7BD) >> 16
+			for idx := m.head3[h3]; idx >= 0; idx = m.chain3[idx] {
+				e := &m.entries[idx]
+				if e.transOp == 0 {
+					pLen := int(e.length)
+					if pLen > tok2Len && pos2+pLen <= uSize {
+						if bytes.Equal(src[pos2:pos2+pLen], e.pattern) {
+							tok2Idx = int(e.tokIdx)
+							tok2Len = pLen
+						}
+					}
+				}
+			}
+		}
+		if tok2Len == 0 && pos2+2 <= uSize {
+			u16 := uint16(src[pos2]) | (uint16(src[pos2+1]) << 8)
+			if idx := m.head2[u16]; idx >= 0 {
+				e := &m.entries[idx]
+				if e.transOp == 0 {
+					pLen := int(e.length)
+					if pLen > tok2Len && pos2+pLen <= uSize {
+						if bytes.Equal(src[pos2:pos2+pLen], e.pattern) {
+							tok2Idx = int(e.tokIdx)
+							tok2Len = pLen
+						}
+					}
+				}
+			}
+		}
+
+		if tok2Len >= 2 {
+			pairLen := bestLen + tok2Len
+			pairCost := 3 // 0xFF, byte(bestIdx), byte(tok2Idx)
+			pairScore := pairLen - pairCost
+			if pairScore > bestScore {
+				pairTok2 = tok2Idx
+				bestTransOp = OpcodePrefixTransPair
+				bestLen = pairLen
+				bestCost = pairCost
+				bestScore = pairScore
+			}
+		}
+	}
+
+	return bestIdx, bestTransOp, bestLen, bestCost, bestScore, pairTok2
 }
 
 // PRZMDMagic defines the 32-bit container magic for external dictionaries ('PRZD').
@@ -312,273 +534,262 @@ func GetRawDictionary(id uint32) []byte {
 const DictIDBrotliWeb uint32 = 0x4252544C // "BRTL"
 
 var webTokensRaw = []string{
-	// 0..7: Top-8 Direct 1-byte Opcode Tokens (0xD8 .. 0xDF)
-	"</div>",
-	"<div class=\"",
-	"</span>",
-	"<span class=\"",
-	"</a>",
-	"<li class=\"",
-	"</li>",
-	"class=\"",
-
-	// 8..: Extended 2-byte Opcode Tokens (0xF2 <tokenID>)
-	// HTML5 Structural Blocks
-	"<!DOCTYPE html>",
-	"<html lang=\"en\"",
-	"<head><meta charset=\"utf-8\">",
-	"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">",
-	"<title>",
-	"</title>",
-	"<link rel=\"stylesheet\" href=\"",
-	"<script src=\"",
-	" defer></script>",
-	"</script>",
-	"</head>",
-	"<body class=\"",
-	"</div></body></html>",
-	"<header class=\"",
-	"</header>",
-	"<main class=\"",
-	"<main>",
-	"</main>",
-	"<section class=\"",
-	"<section>",
-	"</section>",
-	"<article class=\"",
-	"</article>",
-	"<nav class=\"",
-	"<nav>",
-	"</nav>",
-	"<ul class=\"",
-	"<ul>",
-	"</ul>",
-	"<li>",
-	"<a href=\"",
-	"<button class=\"",
-	"<button type=\"",
-	"</button>",
-	"<input type=\"",
-	"<footer>",
-	"</footer>",
-	"<svg class=\"",
-	"\" fill=\"currentColor\" viewBox=\"0 0 24 24\">",
-	"<path d=\"",
-	"\"/></svg>",
-	"<div class=\"min-h-full flex flex-col\">",
-	"<div class=\"max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 ",
-	"h-16 flex items-center justify-between\">",
-	"<div class=\"flex items-center space-x-",
-	"flex items-center space-x-2 ",
-	"<nav class=\"hidden md:flex space-x-4\">",
-	"text-slate-600 hover:text-indigo-600 px-3 py-2 text-sm font-medium\">",
-	"inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700\">",
-	"<div class=\"grid grid-cols-1 md:grid-cols-3 gap-6 mb-8\">",
-	"<div class=\"bg-white overflow-hidden shadow rounded-lg p-5\">",
-	"<dt class=\"text-sm font-medium text-slate-500 truncate\">",
-	"<dd class=\"mt-1 text-3xl font-semibold text-slate-900\">",
-	"</dd></div>",
-	"Total Ingress Throughput",
-	"Mean Edge Latency (p99)",
-	"Active Global Replicas",
-	"CloudScale Infrastructure Control Plane",
-	"px-4 sm:px-6 lg:px-8 py-8\">",
-	"sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200\">",
-	"h-full font-sans antialiased text-slate-800\">",
-	"class=\"h-full bg-slate-50\"><head>",
-	"<a href=\"/overview\"",
-	"<a href=\"/clusters\"",
-	"<a href=\"/edge\"",
-	"<a href=\"/metrics\"",
-	"Kubernetes",
-	"Edge Nodes",
-	"Observability",
-	"Deploy Service",
-
-	// JavaScript & React Runtime Blocks
-	"\"use strict\";",
-	"!function(e,t){",
-	"\"object\"==typeof exports&&\"object\"==typeof module?module.exports=t():",
-	"\"function\"==typeof define&&define.amd?define([],t):",
-	"\"object\"==typeof exports?exports.App=t():e.App=t()}(self,(function(){",
-	"return function(e){var t={};function n(r){",
-	"if(t[r])return t[r].exports;",
-	"var o=t[r]={i:r,l:!1,exports:{}};",
-	"return e[r].call(o.exports,o,o.exports,n),o.l=!0,o.exports}",
-	"return n.m=e,n.c=t,n.d=function(e,t,r){",
-	"n.o(e,t)||Object.defineProperty(e,t,{enumerable:!0,get:r})},",
-	"n.r=function(e){",
-	"\"undefined\"!=typeof Symbol&&Symbol.toStringTag&&Object.defineProperty(e,Symbol.toStringTag,{value:\"Module\"}),",
-	"Object.defineProperty(e,\"__esModule\",{value:!0})},",
-	"n.t=function(e,t){",
-	"if(1&t&&(e=n(e)),8&t)return e;",
-	"if(4&t&&\"object\"==typeof e&&e&&e.__esModule)return e;",
-	"var r=Object.create(null);",
-	"if(n.r(r),Object.defineProperty(r,\"default\",{enumerable:!0,value:e}),2&t&&\"string\"!=typeof e)",
-	"for(var o in e)n.d(r,o,function(t){return e[t]}.bind(null,o));return r},",
-	"n.n=function(e){var t=e&&e.__esModule?function(){return e.default}:function(){return e};return n.d(t,\"a\",t),t},",
-	"n.o=function(e,t){return Object.prototype.hasOwnProperty.call(e,t)},n.p=\"\",n(n.s=102)}([",
-	"function(e,t,n){\"use strict\";",
-	"var r=n(1);Object.defineProperty(t,\"__esModule\",{value:!0}),",
-	"t.StateController=function(e,t){return{dispatch:function(n){",
-	"e.setState((function(e){return Object.assign({},e,n)}))},",
-	"subscribe:function(e){return t.listeners.push(e),function(){",
-	"t.listeners=t.listeners.filter((function(t){return t!==e}))}}}}]);",
-	"import React, { useState, useEffect } from 'react';",
-	"export default function ",
-	"export const ",
-	"const [state, setState] = useState(",
-	"useEffect(() => {",
-	"return () => {",
-	"onClick={() => ",
-	"onChange={(e) => ",
-	"className=\"",
-	"<React.Fragment>",
-	"</React.Fragment>",
-	"console.log(",
-	"JSON.stringify(",
-	"JSON.parse(",
-
-	// CSS & Tailwind
-	"display: flex;",
-	"display: grid;",
-	"display: none;",
-	"display: block;",
-	"flex-direction: column;",
-	"align-items: center;",
-	"justify-content: center;",
-	"justify-content: space-between;",
-	"position: relative;",
-	"position: absolute;",
-	"position: fixed;",
-	"margin: 0;",
-	"padding: 0;",
-	"box-sizing: border-box;",
-	"font-family: ",
-	"background-color: ",
-	"color: ",
-	"border: 1px solid ",
-	"border-radius: ",
-	"font-size: ",
-	"font-weight: ",
-	"cursor: pointer;",
-	"width: 100%;",
-	"height: 100%;",
-	"@media (min-width: 640px)",
-	"@media (min-width: 768px)",
-	"@media (min-width: 1024px)",
-	"@media (min-width: 1280px)",
-
-	// Technical Markdown & API Telemetry
-	"## 1. Architectural Overview",
-	"## Architecture Overview",
-	"## Table of Contents",
-	"### Specification",
-	"| Parameter | Type | Description |",
-	"| :--- | :--- | :--- |",
-	"{\"status\":\"ok\",",
-	"\"server\":\"edge-router-04\",",
-	"\"timestamp\":\"",
-	"\"roles\":[\"admin\",\"billing_manager\"]",
-	"\"organization\":\"Acme Systems International LLC\"",
-	"{\"id\":",
-	",\"name\":\"",
-	",\"type\":\"",
-	",\"status\":200",
-	",\"status\":\"success\"",
-	",\"error\":null",
-	",\"data\":[",
-	",\"message\":\"",
-	"https://schema.org/",
-	"application/json",
-	"text/html; charset=utf-8",
-
-	// Tailwind CSS Atomic Utility Classes & Structural Rules
-	".flex{display:flex}",
-	".inline-flex{display:inline-flex}",
-	".grid{display:grid}",
-	".hidden{display:none}",
-	".h-full{height:100%}",
-	".w-full{width:100%}",
-	".max-w-7xl{max-width:80rem}",
-	".items-center{align-items:center}",
-	".justify-between{justify-content:space-between}",
-	".rounded-lg{border-radius:0.5rem}",
-	".rounded-xl{border-radius:0.75rem}",
-	".border{border-width:1px}",
-	".border-slate-200{border-color:#e2e8f0}",
-	".bg-white{background-color:#ffffff}",
-	".bg-slate-50{background-color:#f8fafc}",
-	".bg-indigo-600{background-color:#4f46e5}",
-	".text-white{color:#ffffff}",
-	".text-slate-900{color:#0f172a}",
-	".text-slate-600{color:#475569}",
-	".shadow-sm{box-shadow:0 1px 2px 0 rgba(0,0,0,0.05)}",
-	".shadow{box-shadow:0 1px 3px 0 rgba(0,0,0,0.1),0 1px 2px -1px rgba(0,0,0,0.1)}",
-	".hover\\:bg-indigo-700:hover{background-color:#4338ca}",
-	".hover\\:text-indigo-600:hover{color:#4f46e5}",
-	"@media (min-width: 768px){.md\\:flex{display:flex}}",
-	"@media (min-width: 1024px){.lg\\:px-8{padding-left:2rem;padding-right:2rem}}",
-	".flex{",
-	".border-",
-	"hover\\:",
-	"max-w-",
-	"@media (min-width:",
-	"{display:flex}",
-	"{display:inline-flex}",
-	"{display:grid}",
-	"{display:none}",
-	"{height:100%}",
-	"{width:100%}",
-	"display:flex",
-	"display:inline-flex",
-	"display:grid",
-	"display:none",
-	"height:100%",
-	"width:100%",
-	"align-items:center",
-	"justify-content:space-between",
-	"border-radius:0.5rem",
-	"border-radius:0.75rem",
-	"border-width:1px",
-	"border-color:#",
-	"background-color:#",
-	"padding-left:2rem;padding-right:2rem",
- 
-	// Technical Markdown Specification Tokens
-	"# RFC Specification: Hyper-Scale Distributed Event Streaming Engine",
-	"## Abstract\nThis document specifies the protocol semantics, framing layers, and consensus mechanisms",
-	" for ultra-low latency distributed stream replication across geo-replicated heterogeneous storage clusters.",
-	" The architecture guarantees strict linearizability under Raft quorum while achieving sub-millisecond p99 latency across cross-datacenter fiber interlinks.",
-	"The protocol utilizes zero-copy vectored ring buffers with hardware timestamping at the network interface card (NIC)",
-	" layer. Each partition is partitioned across a deterministic topological sheaf over simplicial complexes:",
-	"1. **Section 1 (Control Plane):** Epoch synchronization and leader leases.",
-	"2. **Section 2 (Log Replication):** Multi-Paxos pipeline with pipelined commit indices.",
-	"3. **Section 3 (Storage Tiering):** Autonomous tiered compaction to append-only log segments.",
-	"### Performance Bounds",
-	"Under maximum saturation, each broker node sustains 12.8 million input/output operations per second (IOPS)",
-	" with memory footprint bounded by O(log N) where N represents active TCP/QUIC stream sessions.",
-
-	// Micro JSON API Payload Structural Tokens
-	`.99,"in_stock":true,"tags":["cloud","saas","premium"]},{"item_id":"it_`,
-	`.99,"in_stock":true,"tags":["cloud","saas","premium"]},`,
-	`{"item_id":"it_`,
-	`","sku":"SKU-`,
-	`-PRO","price":`,
-	`,"price":`,
-	`{"scope":"read:all","expires_at":`,
-	`{"scope":"write:deployments","expires_at":`,
-	`{"scope":"admin:billing","expires_at":`,
-	`,"profile":{"avatar":"https://cdn.corp/avatars/`,
-	`,"organization":"Acme Systems International LLC","tier":"enterprise_plus","mfa_enabled":true,"last_login_ip":"192.168.1.105"}},`,
-	`,"organization":"Acme Systems International LLC","tier":"enterprise_plus","mfa_enabled":true,"last_login_ip":"`,
-	`"username":"alex_developer","email":"alex@engineering.corp","roles":["admin","billing_manager"]`,
-	`{"status":"ok","code":200,"server":"edge-router-04","region":"us-east-1","timestamp":"2026-10-11T01:15:30.124Z","data":{"session_id":"sess_98f4a1c0d2","user":{"id":84192,`,
-	`{"status":"ok","code":200,"server":"edge-router-04","region":"us-east-1","timestamp":"`,
-	`","data":{"session_id":"sess_`,
-	`","user":{"id":`,
-	`"expires_at":1798761600}`,
-	`"expires_at":1798761600`,
+	"</div>", // [0]
+	"<div class=\"", // [1]
+	"</span>", // [2]
+	"<span class=\"", // [3]
+	"</a>", // [4]
+	"<li class=\"", // [5]
+	"</li>", // [6]
+	"class=\"", // [7]
+	"<!DOCTYPE html>", // [8]
+	"<html lang=\"en\"", // [9]
+	"<head><meta charset=\"utf-8\">", // [10]
+	"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">", // [11]
+	"<title>", // [12]
+	"</title>", // [13]
+	"<link rel=\"stylesheet\" href=\"", // [14]
+	"<script src=\"", // [15]
+	" defer></script>", // [16]
+	"</script>", // [17]
+	"</head>", // [18]
+	"<body class=\"", // [19]
+	"</div></body></html>", // [20]
+	"<header class=\"", // [21]
+	"</header>", // [22]
+	"<main class=\"", // [23]
+	"<main>", // [24]
+	"</main>", // [25]
+	"<section class=\"", // [26]
+	"<section>", // [27]
+	"</section>", // [28]
+	"<article class=\"", // [29]
+	"</article>", // [30]
+	"<nav class=\"", // [31]
+	"<nav>", // [32]
+	"</nav>", // [33]
+	"<ul class=\"", // [34]
+	"<ul>", // [35]
+	"</ul>", // [36]
+	"<li>", // [37]
+	"<a href=\"", // [38]
+	"<button class=\"", // [39]
+	"<button type=\"", // [40]
+	"</button>", // [41]
+	"<input type=\"", // [42]
+	"<footer>", // [43]
+	"</footer>", // [44]
+	"<svg class=\"", // [45]
+	"\" fill=\"currentColor\" viewBox=\"0 0 24 24\">", // [46]
+	"<path d=\"", // [47]
+	"\"/></svg>", // [48]
+	"<div class=\"min-h-full flex flex-col\">", // [49]
+	"<div class=\"max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 ", // [50]
+	"h-16 flex items-center justify-between\">", // [51]
+	"<div class=\"flex items-center space-x-", // [52]
+	"flex items-center space-x-2 ", // [53]
+	"<nav class=\"hidden md:flex space-x-4\">", // [54]
+	"text-slate-600 hover:text-indigo-600 px-3 py-2 text-sm font-medium\">", // [55]
+	"inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700\">", // [56]
+	"<div class=\"grid grid-cols-1 md:grid-cols-3 gap-6 mb-8\">", // [57]
+	"<div class=\"bg-white overflow-hidden shadow rounded-lg p-5\">", // [58]
+	"<dt class=\"text-sm font-medium text-slate-500 truncate\">", // [59]
+	"<dd class=\"mt-1 text-3xl font-semibold text-slate-900\">", // [60]
+	"</dd></div>", // [61]
+	"Total Ingress Throughput", // [62]
+	"Mean Edge Latency (p99)", // [63]
+	"Active Global Replicas", // [64]
+	"CloudScale Infrastructure Control Plane", // [65]
+	"px-4 sm:px-6 lg:px-8 py-8\">", // [66]
+	"sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200\">", // [67]
+	"h-full font-sans antialiased text-slate-800\">", // [68]
+	"class=\"h-full bg-slate-50\"><head>", // [69]
+	"<a href=\"/overview\"", // [70]
+	"<a href=\"/clusters\"", // [71]
+	"<a href=\"/edge\"", // [72]
+	"<a href=\"/metrics\"", // [73]
+	"Kubernetes", // [74]
+	"Edge Nodes", // [75]
+	"Observability", // [76]
+	"Deploy Service", // [77]
+	"\"use strict\";", // [78]
+	"!function(e,t){", // [79]
+	"\"object\"==typeof exports&&\"object\"==typeof module?module.exports=t():", // [80]
+	"\"function\"==typeof define&&define.amd?define([],t):", // [81]
+	"\"object\"==typeof exports?exports.App=t():e.App=t()}(self,(function(){", // [82]
+	"return function(e){var t={};function n(r){", // [83]
+	"if(t[r])return t[r].exports;", // [84]
+	"var o=t[r]={i:r,l:!1,exports:{}};", // [85]
+	"return e[r].call(o.exports,o,o.exports,n),o.l=!0,o.exports}", // [86]
+	"return n.m=e,n.c=t,n.d=function(e,t,r){", // [87]
+	"n.o(e,t)||Object.defineProperty(e,t,{enumerable:!0,get:r})},", // [88]
+	"n.r=function(e){", // [89]
+	"\"undefined\"!=typeof Symbol&&Symbol.toStringTag&&Object.defineProperty(e,Symbol.toStringTag,{value:\"Module\"}),", // [90]
+	"Object.defineProperty(e,\"__esModule\",{value:!0})},", // [91]
+	"n.t=function(e,t){", // [92]
+	"if(1&t&&(e=n(e)),8&t)return e;", // [93]
+	"if(4&t&&\"object\"==typeof e&&e&&e.__esModule)return e;", // [94]
+	"var r=Object.create(null);", // [95]
+	"if(n.r(r),Object.defineProperty(r,\"default\",{enumerable:!0,value:e}),2&t&&\"string\"!=typeof e)", // [96]
+	"for(var o in e)n.d(r,o,function(t){return e[t]}.bind(null,o));return r},", // [97]
+	"n.n=function(e){var t=e&&e.__esModule?function(){return e.default}:function(){return e};return n.d(t,\"a\",t),t},", // [98]
+	"n.o=function(e,t){return Object.prototype.hasOwnProperty.call(e,t)},n.p=\"\",n(n.s=102)}([", // [99]
+	"function(e,t,n){\"use strict\";", // [100]
+	"var r=n(1);Object.defineProperty(t,\"__esModule\",{value:!0}),", // [101]
+	"t.StateController=function(e,t){return{dispatch:function(n){", // [102]
+	"e.setState((function(e){return Object.assign({},e,n)}))},", // [103]
+	"subscribe:function(e){return t.listeners.push(e),function(){", // [104]
+	"t.listeners=t.listeners.filter((function(t){return t!==e}))}}}}]);", // [105]
+	"import React, { useState, useEffect } from 'react';", // [106]
+	"export default function ", // [107]
+	"export const ", // [108]
+	"const [state, setState] = useState(", // [109]
+	"useEffect(() => {", // [110]
+	"return () => {", // [111]
+	"onClick={() => ", // [112]
+	"onChange={(e) => ", // [113]
+	"className=\"", // [114]
+	"<React.Fragment>", // [115]
+	"</React.Fragment>", // [116]
+	"console.log(", // [117]
+	"JSON.stringify(", // [118]
+	"JSON.parse(", // [119]
+	"display: flex;", // [120]
+	"display: grid;", // [121]
+	"display: none;", // [122]
+	"display: block;", // [123]
+	"flex-direction: column;", // [124]
+	"align-items: center;", // [125]
+	"justify-content: center;", // [126]
+	"justify-content: space-between;", // [127]
+	"position: relative;", // [128]
+	"position: absolute;", // [129]
+	"position: fixed;", // [130]
+	"margin: 0;", // [131]
+	"padding: 0;", // [132]
+	"box-sizing: border-box;", // [133]
+	"font-family: ", // [134]
+	"background-color: ", // [135]
+	"color: ", // [136]
+	"border: 1px solid ", // [137]
+	"border-radius: ", // [138]
+	"font-size: ", // [139]
+	"font-weight: ", // [140]
+	"cursor: pointer;", // [141]
+	"width: 100%;", // [142]
+	"height: 100%;", // [143]
+	"@media (min-width: 640px)", // [144]
+	"@media (min-width: 768px)", // [145]
+	"@media (min-width: 1024px)", // [146]
+	"@media (min-width: 1280px)", // [147]
+	"## 1. Architectural Overview", // [148]
+	"## Architecture Overview", // [149]
+	"## Table of Contents", // [150]
+	"### Specification", // [151]
+	"| Parameter | Type | Description |", // [152]
+	"| :--- | :--- | :--- |", // [153]
+	"{\"status\":\"ok\",", // [154]
+	"\"server\":\"edge-router-04\",", // [155]
+	"\"timestamp\":\"", // [156]
+	"\"roles\":[\"admin\",\"billing_manager\"]", // [157]
+	"\"organization\":\"Acme Systems International LLC\"", // [158]
+	"{\"id\":", // [159]
+	",\"name\":\"", // [160]
+	",\"type\":\"", // [161]
+	",\"status\":200", // [162]
+	",\"status\":\"success\"", // [163]
+	",\"error\":null", // [164]
+	",\"data\":[", // [165]
+	",\"message\":\"", // [166]
+	"https://schema.org/", // [167]
+	"application/json", // [168]
+	"text/html; charset=utf-8", // [169]
+	".flex{display:flex}", // [170]
+	".inline-flex{display:inline-flex}", // [171]
+	".grid{display:grid}", // [172]
+	".hidden{display:none}", // [173]
+	".h-full{height:100%}", // [174]
+	".w-full{width:100%}", // [175]
+	".max-w-7xl{max-width:80rem}", // [176]
+	".items-center{align-items:center}", // [177]
+	".justify-between{justify-content:space-between}", // [178]
+	".rounded-lg{border-radius:0.5rem}", // [179]
+	".rounded-xl{border-radius:0.75rem}", // [180]
+	".border{border-width:1px}", // [181]
+	".border-slate-200{border-color:#e2e8f0}", // [182]
+	".bg-white{background-color:#ffffff}", // [183]
+	".bg-slate-50{background-color:#f8fafc}", // [184]
+	".bg-indigo-600{background-color:#4f46e5}", // [185]
+	".text-white{color:#ffffff}", // [186]
+	".text-slate-900{color:#0f172a}", // [187]
+	".text-slate-600{color:#475569}", // [188]
+	".shadow-sm{box-shadow:0 1px 2px 0 rgba(0,0,0,0.05)}", // [189]
+	".shadow{box-shadow:0 1px 3px 0 rgba(0,0,0,0.1),0 1px 2px -1px rgba(0,0,0,0.1)}", // [190]
+	".hover\\:bg-indigo-700:hover{background-color:#4338ca}", // [191]
+	".hover\\:text-indigo-600:hover{color:#4f46e5}", // [192]
+	"@media (min-width: 768px){.md\\:flex{display:flex}}", // [193]
+	"@media (min-width: 1024px){.lg\\:px-8{padding-left:2rem;padding-right:2rem}}", // [194]
+	".flex{", // [195]
+	".border-", // [196]
+	"hover\\:", // [197]
+	"max-w-", // [198]
+	"@media (min-width:", // [199]
+	"{display:flex}", // [200]
+	"{display:inline-flex}", // [201]
+	"{display:grid}", // [202]
+	"{display:none}", // [203]
+	"{height:100%}", // [204]
+	"{width:100%}", // [205]
+	"display:flex", // [206]
+	"display:inline-flex", // [207]
+	"display:grid", // [208]
+	"display:none", // [209]
+	"height:100%", // [210]
+	"width:100%", // [211]
+	"align-items:center", // [212]
+	"justify-content:space-between", // [213]
+	"border-radius:0.5rem", // [214]
+	"border-radius:0.75rem", // [215]
+	"border-width:1px", // [216]
+	"border-color:#", // [217]
+	"background-color:#", // [218]
+	"padding-left:2rem;padding-right:2rem", // [219]
+	"# RFC Specification: Hyper-Scale Distributed Event Streaming Engine", // [220]
+	"## Abstract\nThis document specifies the protocol semantics, framing layers, and consensus mechanisms", // [221]
+	" for ultra-low latency distributed stream replication across geo-replicated heterogeneous storage clusters.", // [222]
+	" The architecture guarantees strict linearizability under Raft quorum while achieving sub-millisecond p99 latency across cross-datacenter fiber interlinks.", // [223]
+	"The protocol utilizes zero-copy vectored ring buffers with hardware timestamping at the network interface card (NIC)", // [224]
+	" layer. Each partition is partitioned across a deterministic topological sheaf over simplicial complexes:", // [225]
+	"1. **Section 1 (Control Plane):** Epoch synchronization and leader leases.", // [226]
+	"2. **Section 2 (Log Replication):** Multi-Paxos pipeline with pipelined commit indices.", // [227]
+	"3. **Section 3 (Storage Tiering):** Autonomous tiered compaction to append-only log segments.", // [228]
+	"### Performance Bounds", // [229]
+	"Under maximum saturation, each broker node sustains 12.8 million input/output operations per second (IOPS)", // [230]
+	" with memory footprint bounded by O(log N) where N represents active TCP/QUIC stream sessions.", // [231]
+	".99,\"in_stock\":true,\"tags\":[\"cloud\",\"saas\",\"premium\"]},{\"item_id\":\"it_", // [232]
+	".99,\"in_stock\":true,\"tags\":[\"cloud\",\"saas\",\"premium\"]},", // [233]
+	"{\"item_id\":\"it_", // [234]
+	"\",\"sku\":\"SKU-", // [235]
+	"-PRO\",\"price\":", // [236]
+	",\"price\":", // [237]
+	"{\"scope\":\"read:all\",\"expires_at\":", // [238]
+	"{\"scope\":\"write:deployments\",\"expires_at\":", // [239]
+	"{\"scope\":\"admin:billing\",\"expires_at\":", // [240]
+	",\"profile\":{\"avatar\":\"https://cdn.corp/avatars/", // [241]
+	",\"organization\":\"Acme Systems International LLC\",\"tier\":\"enterprise_plus\",\"mfa_enabled\":true,\"last_login_ip\":\"192.168.1.105\"}},", // [242]
+	",\"organization\":\"Acme Systems International LLC\",\"tier\":\"enterprise_plus\",\"mfa_enabled\":true,\"last_login_ip\":\"", // [243]
+	"\"username\":\"alex_developer\",\"email\":\"alex@engineering.corp\",\"roles\":[\"admin\",\"billing_manager\"]", // [244]
+	"{\"status\":\"ok\",\"code\":200,\"server\":\"edge-router-04\",\"region\":\"us-east-1\",\"timestamp\":\"2026-10-11T01:15:30.124Z\",\"data\":{\"session_id\":\"sess_98f4a1c0d2\",\"user\":{\"id\":84192,", // [245]
+	"{\"status\":\"ok\",\"code\":200,\"server\":\"edge-router-04\",\"region\":\"us-east-1\",\"timestamp\":\"", // [246]
+	"\",\"data\":{\"session_id\":\"sess_", // [247]
+	"\",\"user\":{\"id\":", // [248]
+	"\"expires_at\":1798761600}", // [249]
+	"\"expires_at\":1798761600", // [250]
+	"return PRZM_ERR_CORRUPTED_FRAME;", // [251]
+	"uint8_t* ", // [252]
+	"read_u32_le(", // [253]
+	"uint32_t ", // [254]
+	"size_t ", // [255]
 }
 
 func init() {

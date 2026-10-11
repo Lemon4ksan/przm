@@ -85,6 +85,7 @@ typedef int przm_status_t;
 #define PRZM_DICT_ID_NONE         0
 #define PRZM_DICT_ID_JSON         1
 #define PRZM_DICT_ID_CODE         2 /* Deprecated */
+#define PRZM_DICT_ID_BROTLI_WEB   0x4252544C /* "BRTL" */
 #define PRZM_DICT_ID_RESERVED_MAX 0x0FFF
 #define PRZM_DICT_ID_EXTERNAL_MIN 0x1000
 #define PRZM_DICT_MAX_TOKENS      256
@@ -118,6 +119,9 @@ typedef struct {
 #define PRZM_MAGIC_VANS_0         'V'
 #define PRZM_MAGIC_VANS_1         'A'
 #define PRZM_VERSION_1            0x01
+#define PRZM_VANS_FLAG_4X         0x01
+#define PRZM_VANS_FLAG_SHEAF      0x02
+#define PRZM_VANS_FLAG_CTX_SHEAF  0x04
 
 /* Standard Frame Flags */
 #define PRZM_FLAG_STRIDE          0x01

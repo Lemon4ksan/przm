@@ -300,6 +300,8 @@ int przm_heisenberg_unfoliate_inplace(uint8_t* dst, size_t len, uint8_t stride) 
  * 4. Schema Dictionaries (Explicit External Dictionaries)
  * ============================================================================ */
 
+#include "przm_brotli_dict.h"
+
 PRZM_INLINE const char* get_schema_token(uint32_t dict_id, uint8_t token_idx,
                                          const przm_dictionary_t* ext_dict,
                                          size_t* out_len) {
@@ -308,6 +310,10 @@ PRZM_INLINE const char* get_schema_token(uint32_t dict_id, uint8_t token_idx,
             *out_len = ext_dict->tokens[token_idx].len;
             return ext_dict->tokens[token_idx].str;
         }
+    }
+    if ((dict_id == PRZM_DICT_ID_BROTLI_WEB || dict_id == 0) && token_idx < 256) {
+        *out_len = przm_brotli_web_tokens[token_idx].len;
+        return przm_brotli_web_tokens[token_idx].str;
     }
     *out_len = 0;
     return NULL;
@@ -663,10 +669,145 @@ static int deserialize_vans_matrix(const uint8_t* src, size_t src_len, VANSModel
     return PRZM_OK;
 }
 
+static const uint8_t przm_sheaf_context_lut[256] = {
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 3, 3, 0, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 
+    3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 3, 
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+};
+
+PRZM_INLINE void sheaf_context_interleave4(
+    uint8_t* dst, size_t n,
+    const uint8_t* f0,
+    const uint8_t* f1,
+    const uint8_t* f2,
+    const uint8_t* f3)
+{
+    const uint8_t* p0 = f0;
+    const uint8_t* p1 = f1;
+    const uint8_t* p2 = f2;
+    const uint8_t* p3 = f3;
+    uint8_t* d = dst;
+    uint8_t* d_end = dst + n;
+    uint8_t prev = 0;
+
+    while (d + 8 <= d_end) {
+        #define STEP(k) \
+            uint8_t c##k = przm_sheaf_context_lut[prev]; \
+            uint8_t b##k; \
+            switch (c##k) { \
+            case 0: b##k = *p0++; break; \
+            case 1: b##k = *p1++; break; \
+            case 2: b##k = *p2++; break; \
+            default: b##k = *p3++; break; \
+            } \
+            *d++ = b##k; \
+            prev = b##k;
+
+        STEP(0)
+        STEP(1)
+        STEP(2)
+        STEP(3)
+        STEP(4)
+        STEP(5)
+        STEP(6)
+        STEP(7)
+        #undef STEP
+    }
+    while (d < d_end) {
+        uint8_t c = przm_sheaf_context_lut[prev];
+        uint8_t b;
+        switch (c) {
+        case 0: b = *p0++; break;
+        case 1: b = *p1++; break;
+        case 2: b = *p2++; break;
+        default: b = *p3++; break;
+        }
+        *d++ = b;
+        prev = b;
+    }
+}
+
 static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_t orig_len) {
     if (src_len < 8) return PRZM_ERR_CORRUPTED_FRAME;
     if (src[0] != PRZM_MAGIC_VANS_0 || src[1] != PRZM_MAGIC_VANS_1 || src[2] != PRZM_VERSION_1) {
         return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    uint8_t flags = src[3];
+    if ((flags & PRZM_VANS_FLAG_CTX_SHEAF) != 0) {
+        if (src_len < 40) return PRZM_ERR_CORRUPTED_FRAME;
+        uint32_t header_orig = read_u32_le(src + 4);
+        if (header_orig != (uint32_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+        uint32_t flen0 = read_u32_le(src + 8);
+        uint32_t flen1 = read_u32_le(src + 12);
+        uint32_t flen2 = read_u32_le(src + 16);
+        uint32_t flen3 = read_u32_le(src + 20);
+
+        uint32_t enclen0 = read_u32_le(src + 24);
+        uint32_t enclen1 = read_u32_le(src + 28);
+        uint32_t enclen2 = read_u32_le(src + 32);
+        uint32_t enclen3 = read_u32_le(src + 36);
+
+        if ((size_t)flen0 + flen1 + flen2 + flen3 != orig_len) {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+        size_t total_payload = 40 + (size_t)enclen0 + enclen1 + enclen2 + enclen3;
+        if (total_payload > src_len) {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+
+        uint8_t* fiber_scratch = (dst == tls_archival_scratch) ? tls_split_scratch : tls_archival_scratch;
+        if (orig_len > sizeof(tls_archival_scratch)) {
+            return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        }
+
+        uint8_t* f0 = fiber_scratch;
+        uint8_t* f1 = f0 + flen0;
+        uint8_t* f2 = f1 + flen1;
+        uint8_t* f3 = f2 + flen2;
+
+        size_t off = 40;
+        if (flen0 > 0) {
+            if (enclen0 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            int err = vans_decode4x(src + off, enclen0, f0, flen0);
+            if (err != PRZM_OK) return err;
+            off += enclen0;
+        }
+        if (flen1 > 0) {
+            if (enclen1 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            int err = vans_decode4x(src + off, enclen1, f1, flen1);
+            if (err != PRZM_OK) return err;
+            off += enclen1;
+        }
+        if (flen2 > 0) {
+            if (enclen2 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            int err = vans_decode4x(src + off, enclen2, f2, flen2);
+            if (err != PRZM_OK) return err;
+            off += enclen2;
+        }
+        if (flen3 > 0) {
+            if (enclen3 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            int err = vans_decode4x(src + off, enclen3, f3, flen3);
+            if (err != PRZM_OK) return err;
+            off += enclen3;
+        }
+
+        sheaf_context_interleave4(dst, orig_len, f0, f1, f2, f3);
+        return PRZM_OK;
     }
 
     VANSModel model;
@@ -2763,6 +2904,139 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             if (!przm_check_cap(alloc_size, dst_pos, t_len)) return PRZM_ERR_CORRUPTED_FRAME;
             memcpy(decode_dst + dst_pos, str, t_len);
             dst_pos += t_len;
+            continue;
+        }
+
+        if (op == 0xEA) {
+            /* Transformed Token: " " + tok */
+            if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t tok_id = cmds[cmd_ptr++];
+            size_t t_len = 0;
+            const char* str = get_schema_token(dict_id, tok_id, ext_dict, &t_len);
+            if (!str || t_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            if (!przm_check_cap(alloc_size, dst_pos, t_len + 1)) return PRZM_ERR_CORRUPTED_FRAME;
+            decode_dst[dst_pos++] = ' ';
+            memcpy(decode_dst + dst_pos, str, t_len);
+            dst_pos += t_len;
+            continue;
+        }
+
+        if (op == 0xEB) {
+            /* Transformed Token: tok + "\"" */
+            if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t tok_id = cmds[cmd_ptr++];
+            size_t t_len = 0;
+            const char* str = get_schema_token(dict_id, tok_id, ext_dict, &t_len);
+            if (!str || t_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            if (!przm_check_cap(alloc_size, dst_pos, t_len + 1)) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(decode_dst + dst_pos, str, t_len);
+            dst_pos += t_len;
+            decode_dst[dst_pos++] = '"';
+            continue;
+        }
+
+        if (op == 0xEC) {
+            /* Transformed Token: tok + "{" */
+            if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t tok_id = cmds[cmd_ptr++];
+            size_t t_len = 0;
+            const char* str = get_schema_token(dict_id, tok_id, ext_dict, &t_len);
+            if (!str || t_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            if (!przm_check_cap(alloc_size, dst_pos, t_len + 1)) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(decode_dst + dst_pos, str, t_len);
+            dst_pos += t_len;
+            decode_dst[dst_pos++] = '{';
+            continue;
+        }
+
+        if (op == 0xED) {
+            /* Transformed Token: UppercaseFirst(tok) */
+            if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t tok_id = cmds[cmd_ptr++];
+            size_t t_len = 0;
+            const char* str = get_schema_token(dict_id, tok_id, ext_dict, &t_len);
+            if (!str || t_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            if (!przm_check_cap(alloc_size, dst_pos, t_len)) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(decode_dst + dst_pos, str, t_len);
+            if (decode_dst[dst_pos] >= 'a' && decode_dst[dst_pos] <= 'z') {
+                decode_dst[dst_pos] -= ('a' - 'A');
+            }
+            dst_pos += t_len;
+            continue;
+        }
+
+        if (op == 0xEE) {
+            /* Transformed Token: tok + ";" */
+            if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t tok_id = cmds[cmd_ptr++];
+            size_t t_len = 0;
+            const char* str = get_schema_token(dict_id, tok_id, ext_dict, &t_len);
+            if (!str || t_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            if (!przm_check_cap(alloc_size, dst_pos, t_len + 1)) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(decode_dst + dst_pos, str, t_len);
+            dst_pos += t_len;
+            decode_dst[dst_pos++] = ';';
+            continue;
+        }
+
+        if (op == 0xEF) {
+            /* Transformed Token: " " + tok + " " */
+            if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t tok_id = cmds[cmd_ptr++];
+            size_t t_len = 0;
+            const char* str = get_schema_token(dict_id, tok_id, ext_dict, &t_len);
+            if (!str || t_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            if (!przm_check_cap(alloc_size, dst_pos, t_len + 2)) return PRZM_ERR_CORRUPTED_FRAME;
+            decode_dst[dst_pos++] = ' ';
+            memcpy(decode_dst + dst_pos, str, t_len);
+            dst_pos += t_len;
+            decode_dst[dst_pos++] = ' ';
+            continue;
+        }
+
+        if (op == 0xFB) {
+            /* Transformed Token: tok + "=\"" */
+            if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t tok_id = cmds[cmd_ptr++];
+            size_t t_len = 0;
+            const char* str = get_schema_token(dict_id, tok_id, ext_dict, &t_len);
+            if (!str || t_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            if (!przm_check_cap(alloc_size, dst_pos, t_len + 2)) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(decode_dst + dst_pos, str, t_len);
+            dst_pos += t_len;
+            decode_dst[dst_pos++] = '=';
+            decode_dst[dst_pos++] = '"';
+            continue;
+        }
+
+        if (op == 0xFC) {
+            /* Transformed Token: tok + ">" */
+            if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t tok_id = cmds[cmd_ptr++];
+            size_t t_len = 0;
+            const char* str = get_schema_token(dict_id, tok_id, ext_dict, &t_len);
+            if (!str || t_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            if (!przm_check_cap(alloc_size, dst_pos, t_len + 1)) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(decode_dst + dst_pos, str, t_len);
+            dst_pos += t_len;
+            decode_dst[dst_pos++] = '>';
+            continue;
+        }
+
+        if (op == 0xFF) {
+            /* Transformed Token Pair: tok1 + tok2 */
+            if (cmd_ptr + 2 > cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t tok1_id = cmds[cmd_ptr++];
+            uint8_t tok2_id = cmds[cmd_ptr++];
+            size_t t1_len = 0, t2_len = 0;
+            const char* str1 = get_schema_token(dict_id, tok1_id, ext_dict, &t1_len);
+            const char* str2 = get_schema_token(dict_id, tok2_id, ext_dict, &t2_len);
+            if (!str1 || t1_len == 0 || !str2 || t2_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            if (!przm_check_cap(alloc_size, dst_pos, t1_len + t2_len)) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(decode_dst + dst_pos, str1, t1_len);
+            dst_pos += t1_len;
+            memcpy(decode_dst + dst_pos, str2, t2_len);
+            dst_pos += t2_len;
             continue;
         }
 

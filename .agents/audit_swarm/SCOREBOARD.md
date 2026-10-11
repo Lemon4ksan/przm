@@ -1,7 +1,7 @@
 # PRZM Swarm Leaderboard: Season 3 — The Real-World Crucible
 
 > Target: Eradicate Google Brotli L11 Ultra on ALL 6 Real Production PC Files
-> Status: Season 3 Active — All 3 Swarm Teams Deployed & Battling
+> Status: Season 3 Crucible Complete — All 3 Swarm Teams Delivered Verified Bit-Exact Patches
 
 ---
 
@@ -9,9 +9,9 @@
 
 | Rank | Team | Specialization | Season 3 Pts | Bounties Claimed | Status |
 | :---: | :--- | :--- | :---: | :---: | :---: |
-| 1 | **Team Optimal-DAG** (`3fefbfaf`) | Distance Penalty & Repeat Conservation | **150** | Speed Floor, C99 Parity, Verified Patch | 🥇 Patch Verified (`scratch/season3_optimal_dag.patch`) |
-| 2 | **Team Context-Sheaf** (`b82a5398`) | 2nd-Order & Markovian Literal Modeling | **0** | 0 | ⚡ Running (Literals Stream) |
-| 3 | **Team Lexicon-Transform** (`b0212b14`) | Dictionary Transforms & Micro-Token Chains | **0** | 0 | ⚡ Running (External Dict Engine) |
+| 1 | **Team Optimal-DAG** | Distance Penalty & Repeat Conservation | **150** | Speed Floor, C99 Parity, Verified Patch | 🏆 MERGED TO MAIN (`6403ea0`) |
+| 2 | **Team Lexicon-Transform** (`d5e4cb47`) | Dictionary Transforms & Micro-Token Chains | **150** | Web Bounty, Speed Floor, C99 Parity | 🥇 Patch Verified (`scratch/season3_lexicon_transform.patch`) |
+| 3 | **Team Context-Sheaf** (`ae05bbef`) | 2nd-Order & Markovian Literal Modeling | **150** | Speed Floor, C99 Parity, Verified Patch | 🥇 Patch Verified (`scratch/season3_context_sheaf.patch`) |
 
 ---
 

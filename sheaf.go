@@ -25,12 +25,145 @@ const (
 // 1 = syntax delimiter (structural), 0 = content (semantic).
 var SheafSyntaxTable [256]uint8
 
+// SheafContextTable classifies preceding byte into 4 context classes for 2D Context Sheaf:
+// 0: Syntax / structural delimiters (from SheafSyntaxTable)
+// 1: Lowercase ASCII letters ('a'..'z')
+// 2: Uppercase ASCII letters ('A'..'Z') and ASCII digits ('0'..'9')
+// 3: Other bytes (control characters, whitespace, high UTF-8 bytes)
+var SheafContextTable [256]uint8
+
 func init() {
 	for i := range SheafSyntaxTable {
 		SheafSyntaxTable[i] = 0
 	}
 	for _, b := range []byte("{}[]()<>() :;,.\"'`=+-*/%&|^!~? \t\r\n\\") {
 		SheafSyntaxTable[b] = 1
+	}
+	for i := range SheafContextTable {
+		SheafContextTable[i] = 3
+	}
+	for b := range 256 {
+		if SheafSyntaxTable[b] == 1 {
+			SheafContextTable[b] = 0
+		} else if b >= 'a' && b <= 'z' {
+			SheafContextTable[b] = 1
+		} else if (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') {
+			SheafContextTable[b] = 2
+		} else {
+			SheafContextTable[b] = 3
+		}
+	}
+}
+
+// InterleaveContextSheaf4 reconstructs origLen bytes into dst from 4 context fibers.
+func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
+	if origLen <= 0 || len(dst) < origLen {
+		return
+	}
+	p0, p1, p2, p3 := 0, 0, 0, 0
+	pDst := unsafe.Pointer(&dst[0])
+	var pF0, pF1, pF2, pF3 unsafe.Pointer
+	if len(f0) > 0 { pF0 = unsafe.Pointer(&f0[0]) }
+	if len(f1) > 0 { pF1 = unsafe.Pointer(&f1[0]) }
+	if len(f2) > 0 { pF2 = unsafe.Pointer(&f2[0]) }
+	if len(f3) > 0 { pF3 = unsafe.Pointer(&f3[0]) }
+
+	prev := byte(0)
+	j := 0
+	for ; j+8 <= origLen; j += 8 {
+		c0 := SheafContextTable[prev]
+		var b0 byte
+		switch c0 {
+		case 0: b0 = *(*byte)(unsafe.Add(pF0, p0)); p0++
+		case 1: b0 = *(*byte)(unsafe.Add(pF1, p1)); p1++
+		case 2: b0 = *(*byte)(unsafe.Add(pF2, p2)); p2++
+		default: b0 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		}
+		*(*byte)(unsafe.Add(pDst, j)) = b0
+
+		c1 := SheafContextTable[b0]
+		var b1 byte
+		switch c1 {
+		case 0: b1 = *(*byte)(unsafe.Add(pF0, p0)); p0++
+		case 1: b1 = *(*byte)(unsafe.Add(pF1, p1)); p1++
+		case 2: b1 = *(*byte)(unsafe.Add(pF2, p2)); p2++
+		default: b1 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		}
+		*(*byte)(unsafe.Add(pDst, j+1)) = b1
+
+		c2 := SheafContextTable[b1]
+		var b2 byte
+		switch c2 {
+		case 0: b2 = *(*byte)(unsafe.Add(pF0, p0)); p0++
+		case 1: b2 = *(*byte)(unsafe.Add(pF1, p1)); p1++
+		case 2: b2 = *(*byte)(unsafe.Add(pF2, p2)); p2++
+		default: b2 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		}
+		*(*byte)(unsafe.Add(pDst, j+2)) = b2
+
+		c3 := SheafContextTable[b2]
+		var b3 byte
+		switch c3 {
+		case 0: b3 = *(*byte)(unsafe.Add(pF0, p0)); p0++
+		case 1: b3 = *(*byte)(unsafe.Add(pF1, p1)); p1++
+		case 2: b3 = *(*byte)(unsafe.Add(pF2, p2)); p2++
+		default: b3 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		}
+		*(*byte)(unsafe.Add(pDst, j+3)) = b3
+
+		c4 := SheafContextTable[b3]
+		var b4 byte
+		switch c4 {
+		case 0: b4 = *(*byte)(unsafe.Add(pF0, p0)); p0++
+		case 1: b4 = *(*byte)(unsafe.Add(pF1, p1)); p1++
+		case 2: b4 = *(*byte)(unsafe.Add(pF2, p2)); p2++
+		default: b4 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		}
+		*(*byte)(unsafe.Add(pDst, j+4)) = b4
+
+		c5 := SheafContextTable[b4]
+		var b5 byte
+		switch c5 {
+		case 0: b5 = *(*byte)(unsafe.Add(pF0, p0)); p0++
+		case 1: b5 = *(*byte)(unsafe.Add(pF1, p1)); p1++
+		case 2: b5 = *(*byte)(unsafe.Add(pF2, p2)); p2++
+		default: b5 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		}
+		*(*byte)(unsafe.Add(pDst, j+5)) = b5
+
+		c6 := SheafContextTable[b5]
+		var b6 byte
+		switch c6 {
+		case 0: b6 = *(*byte)(unsafe.Add(pF0, p0)); p0++
+		case 1: b6 = *(*byte)(unsafe.Add(pF1, p1)); p1++
+		case 2: b6 = *(*byte)(unsafe.Add(pF2, p2)); p2++
+		default: b6 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		}
+		*(*byte)(unsafe.Add(pDst, j+6)) = b6
+
+		c7 := SheafContextTable[b6]
+		var b7 byte
+		switch c7 {
+		case 0: b7 = *(*byte)(unsafe.Add(pF0, p0)); p0++
+		case 1: b7 = *(*byte)(unsafe.Add(pF1, p1)); p1++
+		case 2: b7 = *(*byte)(unsafe.Add(pF2, p2)); p2++
+		default: b7 = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		}
+		*(*byte)(unsafe.Add(pDst, j+7)) = b7
+
+		prev = b7
+	}
+	for ; j < origLen; j++ {
+		c := SheafContextTable[prev]
+		var bt byte
+		switch c {
+		case 0: bt = *(*byte)(unsafe.Add(pF0, p0)); p0++
+		case 1: bt = *(*byte)(unsafe.Add(pF1, p1)); p1++
+		case 2: bt = *(*byte)(unsafe.Add(pF2, p2)); p2++
+		default: bt = *(*byte)(unsafe.Add(pF3, p3)); p3++
+		}
+		*(*byte)(unsafe.Add(pDst, j)) = bt
+		prev = bt
 	}
 }
 

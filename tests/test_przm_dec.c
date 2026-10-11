@@ -831,22 +831,100 @@ static void test_dictionary_decompression(void) {
     };
 
     /* Standard frame referencing DictID 0x1001 with 1-byte opcode 0xD8 (tok_id 0) */
-    uint8_t frame[8 + 4 + 4 + 5 + 1];
+    uint8_t frame[8 + 4 + 4 + 8 + 5 + 1];
     write_u32_le(frame, PRZM_MAGIC_STANDARD);
     frame[4] = PRZM_FLAG_DICT_REF;
     frame[5] = 10; frame[6] = 0; frame[7] = 0; /* Uncompressed size = 10 */
     write_u32_le(frame + 8, 0x1001);           /* DictID */
     write_u16_le(frame + 12, 6);               /* cmd_size = 5 + 1 = 6 */
     write_u16_le(frame + 14, 0);               /* off_size = 0 */
-    frame[16] = PRZM_ENTROPY_MODE_FLAT;        /* ModeFlat */
-    write_u32_le(frame + 17, 1);               /* orig_len = 1 */
-    frame[21] = 0xD8;                          /* Opcode 0xD8 -> token 0 */
+    memset(frame + 16, 0, 8);                  /* Section 1: 8 zeroes */
+    frame[24] = PRZM_ENTROPY_MODE_FLAT;        /* ModeFlat */
+    write_u32_le(frame + 25, 1);               /* orig_len = 1 */
+    frame[29] = 0xD8;                          /* Opcode 0xD8 -> token 0 */
 
     uint8_t dst[128];
     memset(dst, 0, sizeof(dst));
     int64_t dec = przm_decompress_dict(frame, sizeof(frame), dst, sizeof(dst), &custom_dict);
     TEST_ASSERT(dec == 10, "Custom dict decompress returned wrong length");
     TEST_ASSERT(memcmp(dst, "{\"custom\":\"", 10) == 0, "Custom dict token expansion mismatch");
+
+    /* Extended 2-byte opcode 0xF2 <tok_id 1> */
+    uint8_t frame_f2[8 + 4 + 4 + 8 + 5 + 2];
+    write_u32_le(frame_f2, PRZM_MAGIC_STANDARD);
+    frame_f2[4] = PRZM_FLAG_DICT_REF;
+    frame_f2[5] = 11; frame_f2[6] = 0; frame_f2[7] = 0; /* Uncompressed size = 11 */
+    write_u32_le(frame_f2 + 8, 0x1001);
+    write_u16_le(frame_f2 + 12, 7);              /* cmd_size = 5 + 2 = 7 */
+    write_u16_le(frame_f2 + 14, 0);
+    memset(frame_f2 + 16, 0, 8);                 /* Section 1 */
+    frame_f2[24] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame_f2 + 25, 2);              /* orig_len = 2 */
+    frame_f2[29] = 0xF2;                         /* Opcode 0xF2 */
+    frame_f2[30] = 1;                            /* Token ID 1 */
+
+    memset(dst, 0, sizeof(dst));
+    dec = przm_decompress_dict(frame_f2, sizeof(frame_f2), dst, sizeof(dst), &custom_dict);
+    TEST_ASSERT(dec == 11, "0xF2 decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, "\"value\":100}", 11) == 0, "0xF2 token expansion mismatch");
+
+    /* Transformed opcode 0xEA <tok_id 0>: " " + tok */
+    uint8_t frame_ea[8 + 4 + 4 + 8 + 5 + 2];
+    write_u32_le(frame_ea, PRZM_MAGIC_STANDARD);
+    frame_ea[4] = PRZM_FLAG_DICT_REF;
+    frame_ea[5] = 11; frame_ea[6] = 0; frame_ea[7] = 0; /* Uncompressed size = 11 (1 + 10) */
+    write_u32_le(frame_ea + 8, 0x1001);
+    write_u16_le(frame_ea + 12, 7);
+    write_u16_le(frame_ea + 14, 0);
+    memset(frame_ea + 16, 0, 8);                 /* Section 1 */
+    frame_ea[24] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame_ea + 25, 2);
+    frame_ea[29] = 0xEA;                         /* Opcode 0xEA (space prefix) */
+    frame_ea[30] = 0;                            /* Token ID 0 */
+
+    memset(dst, 0, sizeof(dst));
+    dec = przm_decompress_dict(frame_ea, sizeof(frame_ea), dst, sizeof(dst), &custom_dict);
+    TEST_ASSERT(dec == 11, "0xEA decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, " {\"custom\":\"", 11) == 0, "0xEA transform mismatch");
+
+    /* Transformed pair opcode 0xFF <tok_id 0> <tok_id 1>: tok0 + tok1 */
+    uint8_t frame_ff[8 + 4 + 4 + 8 + 5 + 3];
+    write_u32_le(frame_ff, PRZM_MAGIC_STANDARD);
+    frame_ff[4] = PRZM_FLAG_DICT_REF;
+    frame_ff[5] = 21; frame_ff[6] = 0; frame_ff[7] = 0; /* Uncompressed size = 21 (10 + 11) */
+    write_u32_le(frame_ff + 8, 0x1001);
+    write_u16_le(frame_ff + 12, 8);
+    write_u16_le(frame_ff + 14, 0);
+    memset(frame_ff + 16, 0, 8);                 /* Section 1 */
+    frame_ff[24] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame_ff + 25, 3);
+    frame_ff[29] = 0xFF;                         /* Opcode 0xFF (token pair) */
+    frame_ff[30] = 0;                            /* Token 0 */
+    frame_ff[31] = 1;                            /* Token 1 */
+
+    memset(dst, 0, sizeof(dst));
+    dec = przm_decompress_dict(frame_ff, sizeof(frame_ff), dst, sizeof(dst), &custom_dict);
+    const char* expected_pair = "{\"custom\":\"value\":100";
+    TEST_ASSERT(dec == 21, "0xFF decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, expected_pair, 21) == 0, "0xFF pair expansion mismatch");
+
+    /* Built-in BrotliWeb Dictionary (DictID 0x4252544C) with 0xD8 (token 0: "</div>", len 6) */
+    uint8_t frame_web[8 + 4 + 4 + 8 + 5 + 1];
+    write_u32_le(frame_web, PRZM_MAGIC_STANDARD);
+    frame_web[4] = PRZM_FLAG_DICT_REF;
+    frame_web[5] = 6; frame_web[6] = 0; frame_web[7] = 0;
+    write_u32_le(frame_web + 8, PRZM_DICT_ID_BROTLI_WEB);
+    write_u16_le(frame_web + 12, 6);
+    write_u16_le(frame_web + 14, 0);
+    memset(frame_web + 16, 0, 8);                /* Section 1 */
+    frame_web[24] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame_web + 25, 1);
+    frame_web[29] = 0xD8;                        /* Opcode 0xD8 -> token 0 ("</div>") */
+
+    memset(dst, 0, sizeof(dst));
+    dec = przm_decompress_dict(frame_web, sizeof(frame_web), dst, sizeof(dst), NULL);
+    TEST_ASSERT(dec == 6, "BrotliWeb decompress returned wrong length");
+    TEST_ASSERT(memcmp(dst, "</div>", 6) == 0, "BrotliWeb token 0 expansion mismatch");
 
     TEST_PASS("dictionary_decompression");
 }

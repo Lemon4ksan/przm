@@ -19,8 +19,9 @@ const (
 	vansMagic1 uint8 = 0x41 // 'A'
 	vansVer1   uint8 = 0x01
 
-	vansFlag4X    uint8 = 0x01 // 4-way interleaved SIMD-friendly streams
-	vansFlagSheaf uint8 = 0x02 // Étale Sheaf Vector C stream splitting applied to literals
+	vansFlag4X       uint8 = 0x01 // 4-way interleaved SIMD-friendly streams
+	vansFlagSheaf    uint8 = 0x02 // Legacy Étale Sheaf Vector C stream splitting applied to literals
+	vansFlagCtxSheaf uint8 = 0x04 // 2D Context Sheaf Markovian splitting (4 fibers, 0 bitmask)
 
 	vansM uint32 = 4096  // ANS table precision M = 2^12
 	vansL uint32 = 65536 // State lower bound L = 2^16
