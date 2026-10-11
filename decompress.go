@@ -98,6 +98,21 @@ func copyMatch(baseDst unsafe.Pointer, dstPos, srcIdx, mLen, d int) {
 	pSrc := unsafe.Add(baseDst, srcIdx)
 	pDst := unsafe.Add(baseDst, dstPos)
 
+	if d >= 64 && mLen >= 64 {
+		for mLen >= 64 {
+			*(*uint64)(pDst) = *(*uint64)(pSrc)
+			*(*uint64)(unsafe.Add(pDst, 8)) = *(*uint64)(unsafe.Add(pSrc, 8))
+			*(*uint64)(unsafe.Add(pDst, 16)) = *(*uint64)(unsafe.Add(pSrc, 16))
+			*(*uint64)(unsafe.Add(pDst, 24)) = *(*uint64)(unsafe.Add(pSrc, 24))
+			*(*uint64)(unsafe.Add(pDst, 32)) = *(*uint64)(unsafe.Add(pSrc, 32))
+			*(*uint64)(unsafe.Add(pDst, 40)) = *(*uint64)(unsafe.Add(pSrc, 40))
+			*(*uint64)(unsafe.Add(pDst, 48)) = *(*uint64)(unsafe.Add(pSrc, 48))
+			*(*uint64)(unsafe.Add(pDst, 56)) = *(*uint64)(unsafe.Add(pSrc, 56))
+			pSrc = unsafe.Add(pSrc, 64)
+			pDst = unsafe.Add(pDst, 64)
+			mLen -= 64
+		}
+	}
 	if d >= 32 {
 		for mLen > 32 {
 			*(*uint64)(pDst) = *(*uint64)(pSrc)
@@ -911,8 +926,15 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 			rep1 = rep0
 			rep0 = d
 
-			if err := execMatch(baseDst, outBuf, rawDict, dstPos, d, mLen); err != nil {
-				return nil, err
+			srcIdx := dstPos - d
+			if d >= mLen && mLen >= 32 && srcIdx >= 0 && dstPos+mLen <= len(outBuf) {
+				copy(outBuf[dstPos:dstPos+mLen], outBuf[srcIdx:srcIdx+mLen])
+			} else if d >= 8 && srcIdx >= 0 && dstPos+mLen <= len(outBuf) {
+				copyMatch(baseDst, dstPos, srcIdx, mLen, d)
+			} else {
+				if err := execMatch(baseDst, outBuf, rawDict, dstPos, d, mLen); err != nil {
+					return nil, err
+				}
 			}
 			dstPos += mLen
 			continue
@@ -974,8 +996,15 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 				return nil, fmt.Errorf("%w: invalid long repeat index %d", ErrCorruptedFrame, k)
 			}
 
-			if err := execMatch(baseDst, outBuf, rawDict, dstPos, d, mLen); err != nil {
-				return nil, err
+			srcIdx := dstPos - d
+			if d >= mLen && mLen >= 32 && srcIdx >= 0 && dstPos+mLen <= len(outBuf) {
+				copy(outBuf[dstPos:dstPos+mLen], outBuf[srcIdx:srcIdx+mLen])
+			} else if d >= 8 && srcIdx >= 0 && dstPos+mLen <= len(outBuf) {
+				copyMatch(baseDst, dstPos, srcIdx, mLen, d)
+			} else {
+				if err := execMatch(baseDst, outBuf, rawDict, dstPos, d, mLen); err != nil {
+					return nil, err
+				}
 			}
 			dstPos += mLen
 

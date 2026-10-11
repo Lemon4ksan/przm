@@ -2335,7 +2335,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			stdOut, stdErr := VANSEncode4x(pad.literalBuf)
 			stdOk := stdErr == nil && len(stdOut) < int(float64(len(pad.literalBuf))*0.95)
 
-			if isProbablyText(origSrc) && sheafOk {
+			if isProbablyText(origSrc) && level <= 3 && sheafOk {
 				vansOut = sheafOut
 				vansBeatsRaw = true
 			} else if sheafOk && stdOk {
