@@ -689,7 +689,7 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 				return nil, fmt.Errorf("%w: truncated flat command stream", ErrCorruptedFrame)
 			}
 			cmds = src[sec2Offset+5 : sec2Offset+5+sec2OrigLen]
-		} else if sec2Mode == ModeHuffman4X {
+		} else if sec2Mode == ModeHuffman4X || sec2Mode == ModeHuffmanCompact || sec2Mode == ModeHuffmanCompact4X {
 			if pad == nil {
 				pad = decScratchPool.Get()
 				defer decScratchPool.Put(pad)
@@ -721,7 +721,7 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 				return nil, fmt.Errorf("%w: truncated flat offset stream", ErrCorruptedFrame)
 			}
 			offs = src[sec3Offset+5 : sec3Offset+5+sec3OrigLen]
-		} else if sec3Mode == ModeHuffman4X {
+		} else if sec3Mode == ModeHuffman4X || sec3Mode == ModeHuffmanCompact || sec3Mode == ModeHuffmanCompact4X {
 			if pad == nil {
 				pad = decScratchPool.Get()
 				defer decScratchPool.Put(pad)

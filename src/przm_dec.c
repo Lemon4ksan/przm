@@ -1880,6 +1880,173 @@ static int64_t huffman4x_decode(const uint8_t* src, size_t src_len,
     return (int64_t)orig_len;
 }
 
+static int64_t huffman_compact_decode(const uint8_t* src, size_t src_len,
+                                      uint8_t* dst, size_t dst_cap,
+                                      przm_canonical_huff_table_t* dec_table) {
+    if (src == NULL || src_len < 5) return PRZM_ERR_CORRUPTED_FRAME;
+    uint32_t orig_len = read_u32_le(src + 1);
+    if (orig_len == 0) return 0;
+    if (dst_cap < (size_t)orig_len) return PRZM_ERR_BUFFER_TOO_SMALL;
+    if (src_len < 37) return PRZM_ERR_CORRUPTED_FRAME;
+
+    uint8_t lengths[256];
+    memset(lengths, 0, sizeof(lengths));
+    size_t pos = 37;
+    size_t nib = 0;
+    for (size_t s = 0; s < 256; s++) {
+        if ((src[5 + s / 8] & (1U << (s % 8))) != 0) {
+            if (pos + nib / 2 >= src_len) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t b = src[pos + nib / 2];
+            uint8_t l = ((nib & 1) == 0) ? (b & 0x0F) : ((b >> 4) & 0x0F);
+            lengths[s] = l;
+            nib++;
+        }
+    }
+    size_t hdr_size = 37 + (nib + 1) / 2;
+    if (hdr_size > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+    if (!huff_build_from_lengths(dec_table, lengths)) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    przm_huff_bit_reader_t r;
+    huff_reader_init(&r, src + hdr_size, src_len - hdr_size);
+    for (size_t i = 0; i < (size_t)orig_len; i++) {
+        przm_huff_entry_t e = dec_table->table[huff_reader_peek(&r, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl = huff_entry_codelen(e);
+        if (cl == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst[i] = huff_entry_symbol(e);
+        huff_reader_consume(&r, (int)cl);
+    }
+    if (r.underflow) return PRZM_ERR_CORRUPTED_FRAME;
+    return (int64_t)orig_len;
+}
+
+static int64_t huffman_compact4x_decode(const uint8_t* src, size_t src_len,
+                                        uint8_t* dst, size_t dst_cap,
+                                        przm_canonical_huff_table_t* dec_table) {
+    if (src == NULL || src_len < 5) return PRZM_ERR_CORRUPTED_FRAME;
+    uint32_t orig_len = read_u32_le(src + 1);
+    if (orig_len == 0) return 0;
+    if (dst_cap < (size_t)orig_len) return PRZM_ERR_BUFFER_TOO_SMALL;
+    if (src_len < 37) return PRZM_ERR_CORRUPTED_FRAME;
+
+    uint8_t lengths[256];
+    memset(lengths, 0, sizeof(lengths));
+    size_t pos = 37;
+    size_t nib = 0;
+    for (size_t s = 0; s < 256; s++) {
+        if ((src[5 + s / 8] & (1U << (s % 8))) != 0) {
+            if (pos + nib / 2 >= src_len) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t b = src[pos + nib / 2];
+            uint8_t l = ((nib & 1) == 0) ? (b & 0x0F) : ((b >> 4) & 0x0F);
+            lengths[s] = l;
+            nib++;
+        }
+    }
+    size_t hdr_size = 37 + (nib + 1) / 2;
+    if (hdr_size + 16 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+    if (!huff_build_from_lengths(dec_table, lengths)) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    size_t sz0 = (size_t)read_u32_le(src + hdr_size);
+    size_t sz1 = (size_t)read_u32_le(src + hdr_size + 4);
+    size_t sz2 = (size_t)read_u32_le(src + hdr_size + 8);
+    size_t sz3 = (size_t)read_u32_le(src + hdr_size + 12);
+
+    size_t total_payload = sz0 + sz1 + sz2 + sz3;
+    if (src_len < hdr_size + 16 + total_payload) return PRZM_ERR_CORRUPTED_FRAME;
+
+    size_t p0 = hdr_size + 16;
+    size_t p1 = p0 + sz0;
+    size_t p2 = p1 + sz1;
+    size_t p3 = p2 + sz2;
+    size_t p_end = p3 + sz3;
+    if (p_end > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+    size_t chunk_size = (orig_len + 3) / 4;
+    size_t c0_count = chunk_size < (size_t)orig_len ? chunk_size : (size_t)orig_len;
+    size_t rem1 = (size_t)orig_len > chunk_size ? (size_t)orig_len - chunk_size : 0;
+    size_t c1_count = chunk_size < rem1 ? chunk_size : rem1;
+    size_t rem2 = (size_t)orig_len > 2 * chunk_size ? (size_t)orig_len - 2 * chunk_size : 0;
+    size_t c2_count = chunk_size < rem2 ? chunk_size : rem2;
+    size_t c3_count = (size_t)orig_len > 3 * chunk_size ? (size_t)orig_len - 3 * chunk_size : 0;
+
+    uint8_t* dst0 = dst;
+    uint8_t* dst1 = dst + c0_count;
+    uint8_t* dst2 = dst + c0_count + c1_count;
+    uint8_t* dst3 = dst + c0_count + c1_count + c2_count;
+
+    przm_huff_bit_reader_t r0, r1, r2, r3;
+    huff_reader_init(&r0, src + p0, sz0);
+    huff_reader_init(&r1, src + p1, sz1);
+    huff_reader_init(&r2, src + p2, sz2);
+    huff_reader_init(&r3, src + p3, sz3);
+
+    size_t i0 = 0, i1 = 0, i2 = 0, i3 = 0;
+    while (i0 < c0_count && i1 < c1_count && i2 < c2_count && i3 < c3_count) {
+        przm_huff_entry_t e0 = dec_table->table[huff_reader_peek(&r0, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl0 = huff_entry_codelen(e0);
+        if (cl0 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst0[i0++] = huff_entry_symbol(e0);
+        huff_reader_consume(&r0, (int)cl0);
+
+        przm_huff_entry_t e1 = dec_table->table[huff_reader_peek(&r1, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl1 = huff_entry_codelen(e1);
+        if (cl1 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst1[i1++] = huff_entry_symbol(e1);
+        huff_reader_consume(&r1, (int)cl1);
+
+        przm_huff_entry_t e2 = dec_table->table[huff_reader_peek(&r2, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl2 = huff_entry_codelen(e2);
+        if (cl2 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst2[i2++] = huff_entry_symbol(e2);
+        huff_reader_consume(&r2, (int)cl2);
+
+        przm_huff_entry_t e3 = dec_table->table[huff_reader_peek(&r3, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl3 = huff_entry_codelen(e3);
+        if (cl3 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst3[i3++] = huff_entry_symbol(e3);
+        huff_reader_consume(&r3, (int)cl3);
+    }
+
+    while (i0 < c0_count) {
+        przm_huff_entry_t e0 = dec_table->table[huff_reader_peek(&r0, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl0 = huff_entry_codelen(e0);
+        if (cl0 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst0[i0++] = huff_entry_symbol(e0);
+        huff_reader_consume(&r0, (int)cl0);
+    }
+    while (i1 < c1_count) {
+        przm_huff_entry_t e1 = dec_table->table[huff_reader_peek(&r1, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl1 = huff_entry_codelen(e1);
+        if (cl1 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst1[i1++] = huff_entry_symbol(e1);
+        huff_reader_consume(&r1, (int)cl1);
+    }
+    while (i2 < c2_count) {
+        przm_huff_entry_t e2 = dec_table->table[huff_reader_peek(&r2, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl2 = huff_entry_codelen(e2);
+        if (cl2 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst2[i2++] = huff_entry_symbol(e2);
+        huff_reader_consume(&r2, (int)cl2);
+    }
+    while (i3 < c3_count) {
+        przm_huff_entry_t e3 = dec_table->table[huff_reader_peek(&r3, PRZM_MAX_HUFF_BITS)];
+        uint8_t cl3 = huff_entry_codelen(e3);
+        if (cl3 == 0) return PRZM_ERR_CORRUPTED_FRAME;
+        dst3[i3++] = huff_entry_symbol(e3);
+        huff_reader_consume(&r3, (int)cl3);
+    }
+
+    if (r0.underflow || r1.underflow || r2.underflow || r3.underflow) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+    return (int64_t)orig_len;
+}
+
 /* ============================================================================
  * 14. Standard Fused Frame Decoder Engine ('PRZM', 0x4D5A5250)
  * ============================================================================ */
@@ -2178,6 +2345,18 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             if (dec_n < 0) return (int)dec_n;
             cmds = tls_cmd_scratch;
             cmds_len = (size_t)dec_n;
+        } else if (sec2_mode == PRZM_ENTROPY_MODE_HUFFMAN_COMPACT) {
+            if (sec2_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            int64_t dec_n = huffman_compact_decode(src + sec2_offset, cmd_size, tls_cmd_scratch, sizeof(tls_cmd_scratch), &tls_huff_table);
+            if (dec_n < 0) return (int)dec_n;
+            cmds = tls_cmd_scratch;
+            cmds_len = (size_t)dec_n;
+        } else if (sec2_mode == PRZM_ENTROPY_MODE_HUFFMAN_COMPACT_4X) {
+            if (sec2_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            int64_t dec_n = huffman_compact4x_decode(src + sec2_offset, cmd_size, tls_cmd_scratch, sizeof(tls_cmd_scratch), &tls_huff_table);
+            if (dec_n < 0) return (int)dec_n;
+            cmds = tls_cmd_scratch;
+            cmds_len = (size_t)dec_n;
         } else {
             return PRZM_ERR_CORRUPTED_FRAME;
         }
@@ -2208,6 +2387,18 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
         } else if (sec3_mode == PRZM_ENTROPY_MODE_HUFFMAN_4X) {
             if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
             int64_t dec_n = huffman4x_decode(src + sec3_offset, off_size, tls_off_scratch, sizeof(tls_off_scratch), &tls_huff_table);
+            if (dec_n < 0) return (int)dec_n;
+            offs = tls_off_scratch;
+            offs_len = (size_t)dec_n;
+        } else if (sec3_mode == PRZM_ENTROPY_MODE_HUFFMAN_COMPACT) {
+            if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            int64_t dec_n = huffman_compact_decode(src + sec3_offset, off_size, tls_off_scratch, sizeof(tls_off_scratch), &tls_huff_table);
+            if (dec_n < 0) return (int)dec_n;
+            offs = tls_off_scratch;
+            offs_len = (size_t)dec_n;
+        } else if (sec3_mode == PRZM_ENTROPY_MODE_HUFFMAN_COMPACT_4X) {
+            if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            int64_t dec_n = huffman_compact4x_decode(src + sec3_offset, off_size, tls_off_scratch, sizeof(tls_off_scratch), &tls_huff_table);
             if (dec_n < 0) return (int)dec_n;
             offs = tls_off_scratch;
             offs_len = (size_t)dec_n;

@@ -13,8 +13,10 @@ import (
 
 // Mode identifiers for Entropy-Pack
 const (
-	ModeFlat      uint8 = 0 // Raw uncompressed payload (0% CPU, O(1) slice copy)
-	ModeHuffman4X uint8 = 1 // 4-stream interleaved Table-Driven Canonical Huffman (RAM-speed focus: >10 GB/s)
+	ModeFlat             uint8 = 0 // Raw uncompressed payload (0% CPU, O(1) slice copy)
+	ModeHuffman4X        uint8 = 1 // 4-stream interleaved Table-Driven Canonical Huffman (RAM-speed focus: >10 GB/s)
+	ModeHuffmanCompact   uint8 = 2 // Single-stream Table-Driven Canonical Huffman with 32B Active-Mask (<65B header)
+	ModeHuffmanCompact4X uint8 = 3 // 4-stream interleaved Table-Driven Canonical Huffman with 32B Active-Mask
 )
 
 var (
@@ -599,16 +601,411 @@ func DecodeHuffman4X(dst []byte, src []byte, decTable *CanonicalHuffmanTable) (i
 }
 
 // -----------------------------------------------------------------------------
+// Canonical Huffman Compact Codecs (Active-Mask Architecture)
+// -----------------------------------------------------------------------------
+
+// EncodeHuffmanCompact packs a byte stream into a single bit-stream with a 32-byte active mask.
+func EncodeHuffmanCompact(src []byte) ([]byte, error) {
+	n := len(src)
+	if n == 0 {
+		return []byte{ModeHuffmanCompact, 0, 0, 0, 0}, nil
+	}
+
+	lengths, active := ComputeHuffmanLengths(src)
+	if active <= 1 {
+		out := make([]byte, 5+n)
+		out[0] = ModeFlat
+		binary.LittleEndian.PutUint32(out[1:5], uint32(n))
+		copy(out[5:], src)
+		return out, nil
+	}
+
+	var blCount [MaxHuffBits + 1]int
+	for _, l := range lengths {
+		blCount[l]++
+	}
+	blCount[0] = 0
+	var nextCode [MaxHuffBits + 1]uint16
+	code := uint16(0)
+	for b := 1; b <= MaxHuffBits; b++ {
+		code = (code + uint16(blCount[b-1])) << 1
+		nextCode[b] = code
+	}
+
+	var fused [256]uint32
+	for s := range 256 {
+		l := lengths[s]
+		if l > 0 {
+			c := nextCode[l]
+			nextCode[l]++
+			fused[s] = (uint32(c) << 8) | uint32(l)
+		}
+	}
+
+	pad := huffScratchPool.Get().(*huffStreamScratchpad)
+	defer huffScratchPool.Put(pad)
+
+	maxBytes := ((n*MaxHuffBits + 31) / 8) + 8
+	var w HuffBitWriter
+	if maxBytes <= len(pad.streams[0]) {
+		w.Reset(pad.streams[0][:])
+	} else {
+		w.Reset(make([]byte, maxBytes))
+	}
+
+	for _, s := range src {
+		entry := fused[s]
+		w.Write(uint16(entry>>8), uint8(entry))
+	}
+	w.Flush()
+	stream := w.Written()
+
+	hdrSize := 37 + (active+1)/2
+	out := make([]byte, hdrSize+len(stream))
+	out[0] = ModeHuffmanCompact
+	binary.LittleEndian.PutUint32(out[1:5], uint32(n))
+
+	for s := range 256 {
+		if lengths[s] > 0 {
+			out[5+s/8] |= 1 << (s % 8)
+		}
+	}
+	pos := 37
+	nib := 0
+	for s := range 256 {
+		if lengths[s] > 0 {
+			if (nib & 1) == 0 {
+				out[pos+nib/2] = lengths[s] & 0x0F
+			} else {
+				out[pos+nib/2] |= (lengths[s] & 0x0F) << 4
+			}
+			nib++
+		}
+	}
+	copy(out[hdrSize:], stream)
+	return out, nil
+}
+
+// DecodeHuffmanCompact unpacks a single-stream compact Huffman payload with 0 heap allocations.
+func DecodeHuffmanCompact(dst []byte, src []byte, decTable *CanonicalHuffmanTable) (int, error) {
+	if len(src) < 5 {
+		return 0, ErrCorruptedStream
+	}
+	origLen := int(binary.LittleEndian.Uint32(src[1:5]))
+	if origLen == 0 {
+		return 0, nil
+	}
+	if len(dst) < origLen {
+		return 0, ErrBufferTooSmall
+	}
+	if len(src) < 37 {
+		return 0, ErrCorruptedStream
+	}
+
+	var lengths [256]uint8
+	pos := 37
+	nib := 0
+	for s := range 256 {
+		if (src[5+s/8] & (1 << (s % 8))) != 0 {
+			if pos+nib/2 >= len(src) {
+				return 0, ErrCorruptedStream
+			}
+			var l uint8
+			if (nib & 1) == 0 {
+				l = src[pos+nib/2] & 0x0F
+			} else {
+				l = (src[pos+nib/2] >> 4) & 0x0F
+			}
+			lengths[s] = l
+			nib++
+		}
+	}
+	hdrSize := 37 + (nib+1)/2
+	if hdrSize > len(src) {
+		return 0, ErrCorruptedStream
+	}
+
+	if decTable == nil {
+		var local CanonicalHuffmanTable
+		decTable = &local
+	}
+	if !decTable.BuildFromLengths(lengths) {
+		return 0, ErrCorruptedStream
+	}
+
+	var r HuffBitReader
+	r.Init(src[hdrSize:])
+	for i := 0; i < origLen; i++ {
+		e := decTable.Table[r.Peek(MaxHuffBits)]
+		dst[i] = e.Symbol()
+		r.Consume(int(e.CodeLen()))
+	}
+	if r.underflow {
+		return 0, ErrCorruptedStream
+	}
+	return origLen, nil
+}
+
+// EncodeHuffmanCompact4X packs a byte stream into 4 interleaved bit-streams with a 32-byte active mask.
+func EncodeHuffmanCompact4X(src []byte) ([]byte, error) {
+	n := len(src)
+	if n == 0 {
+		return []byte{ModeHuffmanCompact4X, 0, 0, 0, 0}, nil
+	}
+
+	lengths, active := ComputeHuffmanLengths(src)
+	if active <= 1 {
+		out := make([]byte, 5+n)
+		out[0] = ModeFlat
+		binary.LittleEndian.PutUint32(out[1:5], uint32(n))
+		copy(out[5:], src)
+		return out, nil
+	}
+
+	var blCount [MaxHuffBits + 1]int
+	for _, l := range lengths {
+		blCount[l]++
+	}
+	blCount[0] = 0
+	var nextCode [MaxHuffBits + 1]uint16
+	code := uint16(0)
+	for b := 1; b <= MaxHuffBits; b++ {
+		code = (code + uint16(blCount[b-1])) << 1
+		nextCode[b] = code
+	}
+
+	var fused [256]uint32
+	for s := range 256 {
+		l := lengths[s]
+		if l > 0 {
+			c := nextCode[l]
+			nextCode[l]++
+			fused[s] = (uint32(c) << 8) | uint32(l)
+		}
+	}
+
+	chunkSize := (n + 3) / 4
+	c0 := 0
+	c1 := min(chunkSize, n)
+	c2 := min(2*chunkSize, n)
+	c3 := min(3*chunkSize, n)
+	c4 := n
+
+	chunks := [4][]byte{
+		src[c0:c1],
+		src[c1:c2],
+		src[c2:c3],
+		src[c3:c4],
+	}
+	pad := huffScratchPool.Get().(*huffStreamScratchpad)
+	defer huffScratchPool.Put(pad)
+	maxChunkBytes := ((chunkSize*MaxHuffBits + 31) / 8) + 8
+
+	var writers [4]HuffBitWriter
+	for i := range 4 {
+		if maxChunkBytes <= len(pad.streams[i]) {
+			writers[i].Reset(pad.streams[i][:])
+		} else {
+			writers[i].Reset(make([]byte, maxChunkBytes))
+		}
+		for _, sym := range chunks[i] {
+			entry := fused[sym]
+			writers[i].Write(uint16(entry>>8), uint8(entry))
+		}
+		writers[i].Flush()
+	}
+
+	s0 := writers[0].Written()
+	s1 := writers[1].Written()
+	s2 := writers[2].Written()
+	s3 := writers[3].Written()
+
+	hdrSize := 37 + (active+1)/2 + 16
+	out := make([]byte, hdrSize+len(s0)+len(s1)+len(s2)+len(s3))
+	out[0] = ModeHuffmanCompact4X
+	binary.LittleEndian.PutUint32(out[1:5], uint32(n))
+
+	for s := range 256 {
+		if lengths[s] > 0 {
+			out[5+s/8] |= 1 << (s % 8)
+		}
+	}
+	pos := 37
+	nib := 0
+	for s := range 256 {
+		if lengths[s] > 0 {
+			if (nib & 1) == 0 {
+				out[pos+nib/2] = lengths[s] & 0x0F
+			} else {
+				out[pos+nib/2] |= (lengths[s] & 0x0F) << 4
+			}
+			nib++
+		}
+	}
+	pos = 37 + (active+1)/2
+	binary.LittleEndian.PutUint32(out[pos:pos+4], uint32(len(s0)))
+	binary.LittleEndian.PutUint32(out[pos+4:pos+8], uint32(len(s1)))
+	binary.LittleEndian.PutUint32(out[pos+8:pos+12], uint32(len(s2)))
+	binary.LittleEndian.PutUint32(out[pos+12:pos+16], uint32(len(s3)))
+	pos += 16
+
+	copy(out[pos:], s0)
+	pos += len(s0)
+	copy(out[pos:], s1)
+	pos += len(s1)
+	copy(out[pos:], s2)
+	pos += len(s2)
+	copy(out[pos:], s3)
+
+	return out, nil
+}
+
+// DecodeHuffmanCompact4X unpacks a 4-stream interleaved compact Huffman payload with 0 heap allocations.
+func DecodeHuffmanCompact4X(dst []byte, src []byte, decTable *CanonicalHuffmanTable) (int, error) {
+	if len(src) < 5 {
+		return 0, ErrCorruptedStream
+	}
+	origLen := int(binary.LittleEndian.Uint32(src[1:5]))
+	if origLen == 0 {
+		return 0, nil
+	}
+	if len(dst) < origLen {
+		return 0, ErrBufferTooSmall
+	}
+	if len(src) < 37 {
+		return 0, ErrCorruptedStream
+	}
+
+	var lengths [256]uint8
+	pos := 37
+	nib := 0
+	for s := range 256 {
+		if (src[5+s/8] & (1 << (s % 8))) != 0 {
+			if pos+nib/2 >= len(src) {
+				return 0, ErrCorruptedStream
+			}
+			var l uint8
+			if (nib & 1) == 0 {
+				l = src[pos+nib/2] & 0x0F
+			} else {
+				l = (src[pos+nib/2] >> 4) & 0x0F
+			}
+			lengths[s] = l
+			nib++
+		}
+	}
+	hdrSize := 37 + (nib+1)/2
+	if hdrSize+16 > len(src) {
+		return 0, ErrCorruptedStream
+	}
+
+	if decTable == nil {
+		var local CanonicalHuffmanTable
+		decTable = &local
+	}
+	if !decTable.BuildFromLengths(lengths) {
+		return 0, ErrCorruptedStream
+	}
+
+	sz0 := int(binary.LittleEndian.Uint32(src[hdrSize : hdrSize+4]))
+	sz1 := int(binary.LittleEndian.Uint32(src[hdrSize+4 : hdrSize+8]))
+	sz2 := int(binary.LittleEndian.Uint32(src[hdrSize+8 : hdrSize+12]))
+	sz3 := int(binary.LittleEndian.Uint32(src[hdrSize+12 : hdrSize+16]))
+
+	p0 := hdrSize + 16
+	p1 := p0 + sz0
+	p2 := p1 + sz1
+	p3 := p2 + sz2
+	pEnd := p3 + sz3
+
+	if pEnd > len(src) {
+		return 0, ErrCorruptedStream
+	}
+
+	chunkSize := (origLen + 3) / 4
+	c0Count := min(chunkSize, origLen)
+	c1Count := min(chunkSize, max(0, origLen-chunkSize))
+	c2Count := min(chunkSize, max(0, origLen-2*chunkSize))
+	c3Count := max(0, origLen-3*chunkSize)
+
+	dst0 := dst[0:c0Count]
+	dst1 := dst[c0Count : c0Count+c1Count]
+	dst2 := dst[c0Count+c1Count : c0Count+c1Count+c2Count]
+	dst3 := dst[c0Count+c1Count+c2Count : origLen]
+
+	var r0, r1, r2, r3 HuffBitReader
+	r0.Init(src[p0:p1])
+	r1.Init(src[p1:p2])
+	r2.Init(src[p2:p3])
+	r3.Init(src[p3:pEnd])
+
+	// Superscalar 4-way unrolled decode loop
+	i0, i1, i2, i3 := 0, 0, 0, 0
+	for i0 < c0Count && i1 < c1Count && i2 < c2Count && i3 < c3Count {
+		e0 := decTable.Table[r0.Peek(MaxHuffBits)]
+		dst0[i0] = e0.Symbol()
+		r0.Consume(int(e0.CodeLen()))
+		i0++
+
+		e1 := decTable.Table[r1.Peek(MaxHuffBits)]
+		dst1[i1] = e1.Symbol()
+		r1.Consume(int(e1.CodeLen()))
+		i1++
+
+		e2 := decTable.Table[r2.Peek(MaxHuffBits)]
+		dst2[i2] = e2.Symbol()
+		r2.Consume(int(e2.CodeLen()))
+		i2++
+
+		e3 := decTable.Table[r3.Peek(MaxHuffBits)]
+		dst3[i3] = e3.Symbol()
+		r3.Consume(int(e3.CodeLen()))
+		i3++
+	}
+
+	for i0 < c0Count {
+		e0 := decTable.Table[r0.Peek(MaxHuffBits)]
+		dst0[i0] = e0.Symbol()
+		r0.Consume(int(e0.CodeLen()))
+		i0++
+	}
+	for i1 < c1Count {
+		e1 := decTable.Table[r1.Peek(MaxHuffBits)]
+		dst1[i1] = e1.Symbol()
+		r1.Consume(int(e1.CodeLen()))
+		i1++
+	}
+	for i2 < c2Count {
+		e2 := decTable.Table[r2.Peek(MaxHuffBits)]
+		dst2[i2] = e2.Symbol()
+		r2.Consume(int(e2.CodeLen()))
+		i2++
+	}
+	for i3 < c3Count {
+		e3 := decTable.Table[r3.Peek(MaxHuffBits)]
+		dst3[i3] = e3.Symbol()
+		r3.Consume(int(e3.CodeLen()))
+		i3++
+	}
+
+	if r0.underflow || r1.underflow || r2.underflow || r3.underflow {
+		return 0, ErrCorruptedStream
+	}
+
+	return origLen, nil
+}
+
+// -----------------------------------------------------------------------------
 // Unified Stream Packing & Flat Fallback Policy
 // -----------------------------------------------------------------------------
 
 // PackStream compresses a byte stream (Section 2 or Section 3).
-// If compression yields < 16 bytes reduction (or expands), it automatically
-// falls back to ModeFlat to ensure zero CPU waste and zero overhead.
+// It evaluates Compact, Compact4X, and standard 4X Huffman formats and
+// selects whichever yields the minimum packed size, falling back to ModeFlat
+// if compression does not beat raw size.
 func PackStream(src []byte, prefMode uint8) ([]byte, error) {
 	n := len(src)
 	if n < 32 {
-		// Flat fallback for tiny inputs
 		out := make([]byte, 5+n)
 		out[0] = ModeFlat
 		binary.LittleEndian.PutUint32(out[1:5], uint32(n))
@@ -616,20 +1013,7 @@ func PackStream(src []byte, prefMode uint8) ([]byte, error) {
 		return out, nil
 	}
 
-	var packed []byte
-	var err error
-
-	switch prefMode {
-	case ModeFlat:
-		err = fmt.Errorf("forced flat")
-	case ModeHuffman4X:
-		packed, err = EncodeHuffman4X(src)
-	default:
-		packed, err = EncodeHuffman4X(src)
-	}
-
-	if err != nil || len(packed) >= n-16 {
-		// Flat fallback: compression failed to beat raw by at least 16 bytes
+	if prefMode == ModeFlat {
 		out := make([]byte, 5+n)
 		out[0] = ModeFlat
 		binary.LittleEndian.PutUint32(out[1:5], uint32(n))
@@ -637,7 +1021,22 @@ func PackStream(src []byte, prefMode uint8) ([]byte, error) {
 		return out, nil
 	}
 
-	return packed, nil
+	best := make([]byte, 5+n)
+	best[0] = ModeFlat
+	binary.LittleEndian.PutUint32(best[1:5], uint32(n))
+	copy(best[5:], src)
+
+	if c, err := EncodeHuffmanCompact(src); err == nil && len(c) < len(best) {
+		best = c
+	}
+	if c4, err := EncodeHuffmanCompact4X(src); err == nil && len(c4) < len(best) {
+		best = c4
+	}
+	if m1, err := EncodeHuffman4X(src); err == nil && len(m1) < len(best) {
+		best = m1
+	}
+
+	return best, nil
 }
 
 // UnpackStream decompresses a packed stream into dst with ZERO heap allocations.
@@ -661,6 +1060,12 @@ func UnpackStream(dst []byte, src []byte, scratchTable *CanonicalHuffmanTable) (
 
 	case ModeHuffman4X:
 		return DecodeHuffman4X(dst, src, scratchTable)
+
+	case ModeHuffmanCompact:
+		return DecodeHuffmanCompact(dst, src, scratchTable)
+
+	case ModeHuffmanCompact4X:
+		return DecodeHuffmanCompact4X(dst, src, scratchTable)
 
 	default:
 		return 0, fmt.Errorf("%w: unknown mode %d", ErrCorruptedStream, mode)

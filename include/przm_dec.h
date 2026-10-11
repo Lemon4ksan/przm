@@ -153,8 +153,10 @@ typedef struct {
 #define PRZM_SPAN_BASE64_URL_P2   8
 
 /* Entropy Stream Modes (Section 2 & 3) */
-#define PRZM_ENTROPY_MODE_FLAT        0
-#define PRZM_ENTROPY_MODE_HUFFMAN_4X  1
+#define PRZM_ENTROPY_MODE_FLAT               0
+#define PRZM_ENTROPY_MODE_HUFFMAN_4X         1
+#define PRZM_ENTROPY_MODE_HUFFMAN_COMPACT    2
+#define PRZM_ENTROPY_MODE_HUFFMAN_COMPACT_4X 3
 
 /* WindowLog levels (PRZM-SPEC-0.5 Milestone 2 Window Scaling) */
 #define PRZM_WINDOW_LOG_64K           16

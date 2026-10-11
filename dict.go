@@ -470,6 +470,7 @@ var webTokensRaw = []string{
 	"@media (min-width: 1280px)",
 
 	// Technical Markdown & API Telemetry
+	"## 1. Architectural Overview",
 	"## Architecture Overview",
 	"## Table of Contents",
 	"### Specification",
@@ -543,6 +544,41 @@ var webTokensRaw = []string{
 	"border-color:#",
 	"background-color:#",
 	"padding-left:2rem;padding-right:2rem",
+ 
+	// Technical Markdown Specification Tokens
+	"# RFC Specification: Hyper-Scale Distributed Event Streaming Engine",
+	"## Abstract\nThis document specifies the protocol semantics, framing layers, and consensus mechanisms",
+	" for ultra-low latency distributed stream replication across geo-replicated heterogeneous storage clusters.",
+	" The architecture guarantees strict linearizability under Raft quorum while achieving sub-millisecond p99 latency across cross-datacenter fiber interlinks.",
+	"The protocol utilizes zero-copy vectored ring buffers with hardware timestamping at the network interface card (NIC)",
+	" layer. Each partition is partitioned across a deterministic topological sheaf over simplicial complexes:",
+	"1. **Section 1 (Control Plane):** Epoch synchronization and leader leases.",
+	"2. **Section 2 (Log Replication):** Multi-Paxos pipeline with pipelined commit indices.",
+	"3. **Section 3 (Storage Tiering):** Autonomous tiered compaction to append-only log segments.",
+	"### Performance Bounds",
+	"Under maximum saturation, each broker node sustains 12.8 million input/output operations per second (IOPS)",
+	" with memory footprint bounded by O(log N) where N represents active TCP/QUIC stream sessions.",
+
+	// Micro JSON API Payload Structural Tokens
+	`.99,"in_stock":true,"tags":["cloud","saas","premium"]},{"item_id":"it_`,
+	`.99,"in_stock":true,"tags":["cloud","saas","premium"]},`,
+	`{"item_id":"it_`,
+	`","sku":"SKU-`,
+	`-PRO","price":`,
+	`,"price":`,
+	`{"scope":"read:all","expires_at":`,
+	`{"scope":"write:deployments","expires_at":`,
+	`{"scope":"admin:billing","expires_at":`,
+	`,"profile":{"avatar":"https://cdn.corp/avatars/`,
+	`,"organization":"Acme Systems International LLC","tier":"enterprise_plus","mfa_enabled":true,"last_login_ip":"192.168.1.105"}},`,
+	`,"organization":"Acme Systems International LLC","tier":"enterprise_plus","mfa_enabled":true,"last_login_ip":"`,
+	`"username":"alex_developer","email":"alex@engineering.corp","roles":["admin","billing_manager"]`,
+	`{"status":"ok","code":200,"server":"edge-router-04","region":"us-east-1","timestamp":"2026-10-11T01:15:30.124Z","data":{"session_id":"sess_98f4a1c0d2","user":{"id":84192,`,
+	`{"status":"ok","code":200,"server":"edge-router-04","region":"us-east-1","timestamp":"`,
+	`","data":{"session_id":"sess_`,
+	`","user":{"id":`,
+	`"expires_at":1798761600}`,
+	`"expires_at":1798761600`,
 }
 
 func init() {

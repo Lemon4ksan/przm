@@ -1462,6 +1462,9 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 
 		checkDelta := func(d int, ringK int) {
+			if activeMatcher != nil {
+				return
+			}
 			if d < 14 || pos < d || pos+8 > bEnd || pos-d+8 > uSize {
 				return
 			}
