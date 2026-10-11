@@ -442,12 +442,15 @@ func resolveConcurrencyOptions(opts CompressOptions) (threads int, chunkSize int
 }
 
 func shouldUseMultiChunk(srcLen int, opts CompressOptions) bool {
-	if opts.StandardStreamOnly || len(opts.RawDict) > 0 || opts.DictID != 0 {
+	if opts.StandardStreamOnly {
 		return false
 	}
 	threads, chunkSize := resolveConcurrencyOptions(opts)
 	if srcLen > MaxBlockSize {
 		return true
+	}
+	if len(opts.RawDict) > 0 || opts.DictID != 0 {
+		return false
 	}
 	if srcLen > chunkSize && threads > 1 {
 		return true
