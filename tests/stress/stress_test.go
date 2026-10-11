@@ -6230,7 +6230,7 @@ func TestChallengerZD_M3_1_DPEpochRollover(t *testing.T) {
 	defer dpScratchPool.Put(dpFresh)
 	clear(dpFresh.table3[:])
 	r0_1, r1_1, r2_1 := 0, 0, 0
-	compressBlockOptimal(data, 0, len(data), len(data), 65536, WindowLog64K, 3, padFresh, dpFresh, &r0_1, &r1_1, &r2_1, nil, nil, 4)
+	compressBlockOptimal(data, 0, len(data), len(data), 65536, WindowLog64K, 3, padFresh, dpFresh, &r0_1, &r1_1, &r2_1, nil, nil, 4, nil, 0, false)
 	cmdFresh := make([]byte, len(padFresh.cmdBuf))
 	copy(cmdFresh, padFresh.cmdBuf)
 	litFresh := make([]byte, len(padFresh.literalBuf))
@@ -6252,7 +6252,7 @@ func TestChallengerZD_M3_1_DPEpochRollover(t *testing.T) {
 	dpRollover.curGen = math.MaxUint32
 
 	r0_2, r1_2, r2_2 := 0, 0, 0
-	compressBlockOptimal(data, 0, len(data), len(data), 65536, WindowLog64K, 3, padRollover, dpRollover, &r0_2, &r1_2, &r2_2, nil, nil, 4)
+	compressBlockOptimal(data, 0, len(data), len(data), 65536, WindowLog64K, 3, padRollover, dpRollover, &r0_2, &r1_2, &r2_2, nil, nil, 4, nil, 0, false)
 
 	if dpRollover.curGen != 1 {
 		t.Fatalf("curGen did not reset to 1 after wrap-around: got %d", dpRollover.curGen)
@@ -6405,7 +6405,7 @@ func TestChallengerZD_M3_1_OptimalDP_ZeroAllocInLoop(t *testing.T) {
 
 	// Warm up
 	r0, r1, r2 := 0, 0, 0
-	compressBlockOptimal(data, 0, len(data), len(data), 65536, WindowLog64K, 3, pad, dpPad, &r0, &r1, &r2, nil, nil, 4)
+	compressBlockOptimal(data, 0, len(data), len(data), 65536, WindowLog64K, 3, pad, dpPad, &r0, &r1, &r2, nil, nil, 4, nil, 0, false)
 
 	// Measure allocs in DP forward relaxation
 	allocs := testing.AllocsPerRun(10, func() {
@@ -6413,7 +6413,7 @@ func TestChallengerZD_M3_1_OptimalDP_ZeroAllocInLoop(t *testing.T) {
 		pad.literalBuf = pad.literalBuf[:0]
 		pad.offsetBuf = pad.offsetBuf[:0]
 		r0, r1, r2 = 0, 0, 0
-		compressBlockOptimal(data, 0, len(data), len(data), 65536, WindowLog64K, 3, pad, dpPad, &r0, &r1, &r2, nil, nil, 4)
+		compressBlockOptimal(data, 0, len(data), len(data), 65536, WindowLog64K, 3, pad, dpPad, &r0, &r1, &r2, nil, nil, 4, nil, 0, false)
 	})
 
 	if allocs != 0.00 {
