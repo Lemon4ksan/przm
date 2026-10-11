@@ -1386,7 +1386,15 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 
 		if ringK >= 0 {
 			repBonus := 0
-			if level >= 4 {
+			if level >= 6 {
+				if ringK == 0 {
+					repBonus = 6
+				} else if ringK == 1 {
+					repBonus = 3
+				} else {
+					repBonus = 1
+				}
+			} else if level >= 4 {
 				if ringK == 0 {
 					repBonus = 4
 				} else if ringK == 1 {
@@ -1423,7 +1431,22 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		offCost := calcOffCost(d)
 		minExpLen := minMatchBase
 		distPenalty := 0
-		if level >= 4 {
+		if level >= 6 {
+			if d >= 16384 {
+				minExpLen = minMatchBase + 3
+				if d >= 65536 {
+					distPenalty = 5
+				} else {
+					distPenalty = 3
+				}
+			} else if d >= 1024 {
+				minExpLen = minMatchBase + 2
+				distPenalty = 2
+			} else if d >= 128 {
+				minExpLen = minMatchBase + 1
+				distPenalty = 1
+			}
+		} else if level >= 4 {
 			if d >= 16384 {
 				minExpLen = minMatchBase + 3
 				if d >= 65536 {
@@ -2047,10 +2070,12 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						if nextBest.mType <= 2 && best.mType > 2 {
 							preferNext = true
 						}
-					} else if best.mType >= 4 && (nextBest.mType == 1 || nextBest.mType == 3 || nextBest.mType == 7 || nextBest.mType == 8) && nextBest.length >= best.length-2 {
-						// 4. Aggressively protect repeat registers and dictionary tokens!
-						// 1 literal + repeat/dict match costs fewer total stream bytes and protects registers
-						preferNext = true
+					} else if best.mType >= 4 && (nextBest.mType == 1 || nextBest.mType == 3 || nextBest.mType == 7 || nextBest.mType == 8) {
+						if nextBest.length >= best.length-2 || (level >= 6 && nextBest.ringK == 0 && nextBest.length >= best.length-3 && best.distance >= 16384) {
+							// 4. Aggressively protect repeat registers and dictionary tokens!
+							// 1 literal + repeat/dict match costs fewer total stream bytes and protects registers
+							preferNext = true
+						}
 					}
 					if preferNext {
 						pos++

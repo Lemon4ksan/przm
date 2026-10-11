@@ -359,14 +359,7 @@ func compressBlockOptimal(
 
 		// Repeat 0 check
 		if r0 > 0 && pos-r0 >= 0 && r0 <= windowSize {
-			minR0 := 4
-			if !isCanonicalDistPRZM(r0) {
-				if r0 >= 1024 {
-					minR0 = 8
-				} else {
-					minR0 = 6
-				}
-			}
+			minR0 := minMatchBase
 			if pos+2 <= uSize && binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r0:pos-r0+2]) {
 				l0 := HenselLCPPos(src, pos, pos-r0, dpMaxL)
 				if l0 >= minR0 {
@@ -378,14 +371,7 @@ func compressBlockOptimal(
 
 		// Repeat 1 check
 		if r1 > 0 && pos-r1 >= 0 && r1 <= windowSize && r1 != r0 {
-			minR1 := 4
-			if !isCanonicalDistPRZM(r1) {
-				if r1 >= 1024 {
-					minR1 = 8
-				} else {
-					minR1 = 6
-				}
-			}
+			minR1 := minMatchBase
 			if pos+2 <= uSize && binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r1:pos-r1+2]) {
 				l1 := HenselLCPPos(src, pos, pos-r1, dpMaxL)
 				if l1 >= minR1 {
@@ -397,14 +383,7 @@ func compressBlockOptimal(
 
 		// Repeat 2 check
 		if r2 > 0 && pos-r2 >= 0 && r2 <= windowSize && r2 != r0 && r2 != r1 {
-			minR2 := 4
-			if !isCanonicalDistPRZM(r2) {
-				if r2 >= 1024 {
-					minR2 = 8
-				} else {
-					minR2 = 6
-				}
-			}
+			minR2 := minMatchBase
 			if pos+2 <= uSize && binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r2:pos-r2+2]) {
 				l2 := HenselLCPPos(src, pos, pos-r2, dpMaxL)
 				if l2 >= minR2 {
@@ -417,16 +396,16 @@ func compressBlockOptimal(
 		// Explicit match candidates sorted into 4 varint brackets
 		var bracketBest [4]dpCandidate
 		updateBracket := func(d, l int) {
-			if d <= 0 || d > windowSize || d == r0 || d == r1 || d == r2 || l < 4 {
+			if d <= 0 || d > windowSize || d == r0 || d == r1 || d == r2 || l < minMatchBase {
 				return
 			}
-			minExp := 8
-			if isCanonicalDistPRZM(d) {
-				minExp = 4
-			} else if d >= 16384 {
-				minExp = 16
+			minExp := minMatchBase
+			if d >= 16384 {
+				minExp = minMatchBase + 3
 			} else if d >= 1024 {
-				minExp = 12
+				minExp = minMatchBase + 2
+			} else if d >= 128 {
+				minExp = minMatchBase + 1
 			}
 			if l < minExp {
 				return
@@ -511,7 +490,7 @@ func compressBlockOptimal(
 					curMaxLen = int(candidates[c].length)
 				}
 			}
-			searchMinLen := max(4, curMaxLen+1)
+			searchMinLen := max(minMatchBase, curMaxLen+1)
 			if searchMinLen <= dpMaxL && searchMinLen <= 258 {
 				maxDepth := 16
 				if level >= 4 {
@@ -530,14 +509,14 @@ func compressBlockOptimal(
 				default:
 					hDist, hLen = HenselFindMatch(src, pos, uSize, maxDepth, searchMinLen, &pad.hensel)
 				}
-				if hDist > 0 && hLen >= 4 {
+				if hDist > 0 && hLen >= minMatchBase {
 					updateBracket(hDist, min(hLen, dpMaxL))
 				}
 			}
 		}
 
 		for b := range 4 {
-			if bracketBest[b].length >= 4 {
+			if bracketBest[b].length >= int32(minMatchBase) {
 				candidates[candCount] = bracketBest[b]
 				candCount++
 			}
@@ -548,14 +527,14 @@ func compressBlockOptimal(
 		for c := range cands {
 			cand := &cands[c]
 			candL := min(int(cand.length), dpMaxL)
-			if candL < 4 {
+			if candL < minMatchBase {
 				continue
 			}
-			nSubLens := generateSubLengths(candL, &subLenBuf)
+			nSubLens := generateSubLengths(candL, minMatchBase, &subLenBuf)
 			for sIdx := range nSubLens {
 				subLen := subLenBuf[sIdx]
 				next := i + subLen
-				edgeCost := calcEdgeCostPRZM(subLen, int(cand.dist), int(cand.repCode))
+				edgeCost := calcEdgeCostPRZM(subLen, int(cand.dist), int(cand.repCode), minMatchBase)
 				newCost := curCost + edgeCost
 				
 				targetIdx := next & 1023
