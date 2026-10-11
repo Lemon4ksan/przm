@@ -157,14 +157,22 @@ const DefaultChunkSize = 2 * 1024 * 1024 // 2 MiB
 func resolveConcurrencyOptions(opts CompressOptions) (threads, chunkSize int) {
 	threads = opts.Threads
 	if threads <= 0 {
-		threads = runtime.GOMAXPROCS(0)
+		if opts.GPUAcceleration {
+			threads = 1
+		} else {
+			threads = runtime.GOMAXPROCS(0)
+		}
 	}
 	if threads < 1 {
 		threads = 1
 	}
 	chunkSize = opts.ChunkSize
 	if chunkSize <= 0 {
-		chunkSize = DefaultChunkSize
+		if opts.GPUAcceleration {
+			chunkSize = 8 * 1024 * 1024
+		} else {
+			chunkSize = DefaultChunkSize
+		}
 	}
 	return threads, chunkSize
 }
@@ -177,7 +185,7 @@ func shouldUseMultiChunk(srcLen int, opts CompressOptions) bool {
 		return false
 	}
 	threads, chunkSize := resolveConcurrencyOptions(opts)
-	if srcLen > MaxBlockSize {
+	if srcLen >= MaxBlockSize {
 		return true
 	}
 	if len(opts.RawDict) > 0 || opts.DictID != 0 {
