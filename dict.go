@@ -61,15 +61,18 @@ func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
 			length:  uint8(len(pattern)),
 			cost:    cost,
 		})
+		m.chain = append(m.chain, -1)
+		m.chain3 = append(m.chain3, -1)
+
 		pLen := len(pattern)
 		if pLen >= 4 {
 			h := (binary.LittleEndian.Uint32(pattern[:4]) * 0x1E35A7BD) >> 16
-			m.chain = append(m.chain, m.head[h])
+			m.chain[eIdx] = m.head[h]
 			m.head[h] = eIdx
 		} else if pLen == 3 {
 			u24 := uint32(pattern[0]) | (uint32(pattern[1]) << 8) | (uint32(pattern[2]) << 16)
 			h3 := (u24 * 0x1E35A7BD) >> 16
-			m.chain3 = append(m.chain3, m.head3[h3])
+			m.chain3[eIdx] = m.head3[h3]
 			m.head3[h3] = eIdx
 		} else if pLen == 2 {
 			u16 := uint16(pattern[0]) | (uint16(pattern[1]) << 8)

@@ -9,4 +9,4 @@ import "unsafe"
 var _ = unsafe.Pointer(nil)
 
 //go:noescape
-func decode_vans4x(arg0 uint64, arg1 uint64, arg2 uint64, arg3 uint64, arg4 uint64, arg5 uint64, arg6 uint64) uint64
+func decode_vans4x(arg0, arg1, arg2, arg3, arg4, arg5, arg6 uint64) uint64

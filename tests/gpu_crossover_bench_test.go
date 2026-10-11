@@ -32,7 +32,7 @@ func TestGPUCrossoverProof(t *testing.T) {
 
 	// 1. Measure pure internal VRAM streaming bandwidth (target > 6.0 GB/s, proving R1)
 	var maxVramBW float64
-	for trial := 0; trial < 12; trial++ {
+	for trial := range 12 {
 		bw, err := comp.BenchmarkVRAMBandwidth(64)
 		if err != nil {
 			t.Fatalf("BenchmarkVRAMBandwidth failed on trial %d: %v", trial, err)
@@ -142,10 +142,9 @@ func BenchmarkGPUVRAMBandwidth(b *testing.B) {
 	sizeMB := 64
 	bytesTotal := int64(sizeMB) * 1024 * 1024
 	b.SetBytes(bytesTotal)
-	b.ResetTimer()
 
 	var maxBW float64
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		bw, err := comp.BenchmarkVRAMBandwidth(sizeMB)
 		if err != nil {
 			b.Fatalf("BenchmarkVRAMBandwidth failed: %v", err)

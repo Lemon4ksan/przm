@@ -389,7 +389,7 @@ func TestChallenger_M1_CDecompressor_HenselStandardStreams_50Payloads(t *testing
 			data = buf.Bytes()[:size]
 		case 2:
 			// Repeated motif blocks with scattered mutations
-			phrase := []byte(fmt.Sprintf("HENSEL_PRUNING_PAYLOAD_%04d_ULTRAMETRIC_", pIdx))
+			phrase := fmt.Appendf(nil, "HENSEL_PRUNING_PAYLOAD_%04d_ULTRAMETRIC_", pIdx)
 			for i := range size {
 				data[i] = phrase[i%len(phrase)]
 			}

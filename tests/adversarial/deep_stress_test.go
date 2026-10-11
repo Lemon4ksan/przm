@@ -741,19 +741,19 @@ func TestChallenger_EmpiricalCycleCeiling(t *testing.T) {
 	mbPerSec := (totalBytes / (1024 * 1024)) / elapsed.Seconds()
 
 	// Assuming 4.4 GHz peak clock (0.227 ns/cycle):
-	cyclesPer64B_at_4_4GHz := nsPer64B * 4.4
+	cyclesPer64BAt4_4GHz := nsPer64B * 4.4
 	// Assuming 4.0 GHz all-core clock (0.25 ns/cycle):
-	cyclesPer64B_at_4_0GHz := nsPer64B * 4.0
+	cyclesPer64BAt4_0GHz := nsPer64B * 4.0
 
 	t.Logf("Empirical Decompressor Metrics:")
 	t.Logf("  Throughput: %.2f MB/s", mbPerSec)
 	t.Logf("  Time per 64B block: %.2f ns", nsPer64B)
-	t.Logf("  Estimated cycles/64B (@4.0GHz): %.1f cycles", cyclesPer64B_at_4_0GHz)
-	t.Logf("  Estimated cycles/64B (@4.4GHz): %.1f cycles", cyclesPer64B_at_4_4GHz)
+	t.Logf("  Estimated cycles/64B (@4.0GHz): %.1f cycles", cyclesPer64BAt4_0GHz)
+	t.Logf("  Estimated cycles/64B (@4.4GHz): %.1f cycles", cyclesPer64BAt4_4GHz)
 	t.Logf("  Mandated Ceiling: <= 384 cycles/64B")
 
-	if cyclesPer64B_at_4_4GHz > 384.0 {
-		t.Fatalf("Decompressor exceeded cycle ceiling: got %.1f cycles/64B, ceiling is 384", cyclesPer64B_at_4_4GHz)
+	if cyclesPer64BAt4_4GHz > 384.0 {
+		t.Fatalf("Decompressor exceeded cycle ceiling: got %.1f cycles/64B, ceiling is 384", cyclesPer64BAt4_4GHz)
 	}
 }
 

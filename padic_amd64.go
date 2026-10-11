@@ -143,13 +143,13 @@ func padicInverseSWAR64(dst []byte) {
 	n := len(dst)
 	p0 := unsafe.Pointer(&dst[0])
 	var w [8]uint64
-	for k := 0; k < 8; k++ {
+	for k := range 8 {
 		w[k] = *(*uint64)(unsafe.Add(p0, k*8))
 	}
 
 	for j := 64; j <= n-64; j += 64 {
 		pCur := unsafe.Pointer(&dst[j])
-		for k := 0; k < 8; k++ {
+		for k := range 8 {
 			w[k] = swarAddInline(*(*uint64)(unsafe.Add(pCur, k*8)), w[k])
 			*(*uint64)(unsafe.Add(pCur, k*8)) = w[k]
 		}

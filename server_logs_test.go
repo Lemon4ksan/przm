@@ -523,7 +523,7 @@ func TestServerLogsCurrentBaseline(t *testing.T) {
 	// Measure decomp speed
 	iters := 10
 	start := time.Now()
-	for i := 0; i < iters; i++ {
+	for range iters {
 		dec, err := Decompress(compNoDict)
 		if err != nil || len(dec) != len(data) {
 			t.Fatalf("decomp error")

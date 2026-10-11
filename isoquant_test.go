@@ -295,8 +295,8 @@ func BenchmarkIsoQuant_ForwardCollimation(b *testing.B) {
 	qR := przm.Quaternion4{1, 0, 0x77, 0x77}
 
 	b.SetBytes(int64(len(src)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		przm.IsoQuantCollimation4D(dst, src, qL, qR)
 	}
 }
@@ -307,8 +307,8 @@ func BenchmarkIsoQuant_InverseUncollimationInplace(b *testing.B) {
 	qRInv := przm.Quaternion4{1, 0, 0x77, 0x77}
 
 	b.SetBytes(int64(len(buf)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		przm.IsoQuantUncollimation4DInplace(buf, qLInv, qRInv)
 	}
 }
@@ -329,8 +329,8 @@ func BenchmarkIsoQuant_DecompressZeroAlloc(b *testing.B) {
 
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		_, err := przm.DecompressIsoQuant(compressed, dst)
 		if err != nil {
 			b.Fatal(err)

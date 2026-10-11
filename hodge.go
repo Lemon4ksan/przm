@@ -151,7 +151,7 @@ func renderNestedASTTree(dst []byte, funcIdx, maxDepth int) int {
 	p += fastFormatUint(dst[p:], uint64(funcIdx))
 	p += copy(dst[p:], "(ctx context.Context, initVal int) int {\n")
 
-	for d := 0; d < maxDepth; d++ {
+	for d := range maxDepth {
 		p += copy(dst[p:], tabBuf[:d+1])
 		p += copy(dst[p:], "closure_")
 		p += fastFormatUint(dst[p:], uint64(d))
@@ -186,7 +186,7 @@ func renderNestedASTTree(dst []byte, funcIdx, maxDepth int) int {
 
 func renderNestedJSONRecord(dst []byte, recordIdx, maxDepth int) int {
 	p := 0
-	for d := 0; d < maxDepth; d++ {
+	for d := range maxDepth {
 		p += copy(dst[p:], `{"depth":`)
 		p += fastFormatUint(dst[p:], uint64(d))
 		p += copy(dst[p:], `,"node_id":`)
@@ -198,7 +198,7 @@ func renderNestedJSONRecord(dst []byte, recordIdx, maxDepth int) int {
 	p += copy(dst[p:], `,"terminal":true,"result":`)
 	p += fastFormatUint(dst[p:], uint64(recordIdx*7919))
 	p += copy(dst[p:], `}`)
-	for d := 0; d < maxDepth; d++ {
+	for range maxDepth {
 		dst[p] = '}'
 		p++
 	}
@@ -587,8 +587,8 @@ func CompressHodge(src []byte) ([]byte, error) {
 	}
 
 	// 4. Try Cellular Sheaf Spectral Sequence on Deeply Nested Recursive JSON
-	if nestedJsonComp, ok := TryCompressNestedJSON(src); ok && len(nestedJsonComp) < n {
-		return nestedJsonComp, nil
+	if nestedJSONComp, ok := TryCompressNestedJSON(src); ok && len(nestedJSONComp) < n {
+		return nestedJSONComp, nil
 	}
 
 	return nil, ErrHodgeCorrupt

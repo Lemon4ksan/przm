@@ -1105,5 +1105,3 @@ int aes_crypto_core_decompress_block64(
 
     return 48;
 }
-
-

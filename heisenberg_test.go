@@ -358,8 +358,8 @@ func BenchmarkHeisenberg_ForwardFoliation(b *testing.B) {
 	copy(dst, src)
 
 	b.SetBytes(int64(len(src)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		przm.HeisenbergFoliate(dst, src, 3)
 	}
 }
@@ -368,8 +368,8 @@ func BenchmarkHeisenberg_InverseUnfoliationInplace(b *testing.B) {
 	buf := make([]byte, 65536)
 
 	b.SetBytes(int64(len(buf)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		przm.HeisenbergUnfoliateInplace(buf, 3)
 	}
 }
@@ -390,8 +390,8 @@ func BenchmarkHeisenberg_DecompressZeroAlloc(b *testing.B) {
 
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		_, err := przm.DecompressHeisenberg(compressed, dst)
 		if err != nil {
 			b.Fatal(err)

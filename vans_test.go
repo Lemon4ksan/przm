@@ -223,4 +223,30 @@ func BenchmarkVANS_Throughput(b *testing.B) {
 			}
 		}
 	})
+
+	b.Run("DeserializeMatrix_JSON_64K", func(b *testing.B) {
+		var model przm.VANSModel
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := przm.DeserializeMatrixTo(enc[8:], &model)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("DecodeTo_JSON_64K", func(b *testing.B) {
+		dst := make([]byte, len(data))
+		var model przm.VANSModel
+		b.SetBytes(int64(len(data)))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := przm.VANSDecode4xTo(dst, enc, &model)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }

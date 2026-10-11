@@ -112,8 +112,8 @@ func BenchmarkMargolusTransform(b *testing.B) {
 	data := make([]byte, 64*1024)
 	b.SetBytes(int64(len(data)))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		MargolusEvolveInplace(data, 64, 2, MargolusRuleBBM)
 	}
 }
@@ -128,8 +128,8 @@ func BenchmarkMargolusDecompress(b *testing.B) {
 	dst := make([]byte, len(src)+64)
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		_, _ = DecompressMargolusTo(compressed, dst)
 	}
 }

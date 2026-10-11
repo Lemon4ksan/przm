@@ -202,7 +202,7 @@ func EstimateOptimalSymplecticShear8(data []byte) float64 {
 		return 0
 	}
 	baseZeros := 0
-	for i := 0; i < sampleLen; i++ {
+	for i := range sampleLen {
 		if data[i] == 0 {
 			baseZeros++
 		}
@@ -211,7 +211,7 @@ func EstimateOptimalSymplecticShear8(data []byte) float64 {
 	copy(tmp[:sampleLen], data[:sampleLen])
 	TransformBlock8Inplace(tmp[:sampleLen])
 	newZeros := 0
-	for i := 0; i < sampleLen; i++ {
+	for i := range sampleLen {
 		if tmp[i] == 0 {
 			newZeros++
 		}

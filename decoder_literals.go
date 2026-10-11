@@ -218,6 +218,16 @@ func unpackNibblePlanes(src []byte, bPtr *[]byte) ([]byte, error) {
 	numLits := int(binary.LittleEndian.Uint32(src[0:4]))
 	lowBytes := int(binary.LittleEndian.Uint32(src[4:8]))
 
+	if numLits < 0 || numLits > MaxBlockSize {
+		return nil, fmt.Errorf("%w: invalid nibble plane numLits %d", ErrCorruptedFrame, numLits)
+	}
+	if numLits == 0 {
+		if lowBytes != 0 {
+			return nil, fmt.Errorf("%w: corrupted nibble plane sizes", ErrCorruptedFrame)
+		}
+		return []byte{}, nil
+	}
+
 	expectedLow := (numLits + 1) / 2
 	if lowBytes != expectedLow || 8+lowBytes > len(src) {
 		return nil, fmt.Errorf("%w: corrupted nibble plane sizes", ErrCorruptedFrame)

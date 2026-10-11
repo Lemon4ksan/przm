@@ -214,41 +214,30 @@ type VANSModel struct {
 
 // NewVANSModel creates a precomputed V-ANS model from a 16x16 joint frequency matrix.
 func NewVANSModel(m *Matrix16x16) *VANSModel {
-	model := &VANSModel{
-		Freq: m.Normalize(vansM),
-	}
-	cdf := uint32(0)
-	for s := range 256 {
-		model.CDF[s] = uint16(cdf)
-		f := uint32(model.Freq[s])
-		for j := range f {
-			slot := cdf + j
-			slot_minus_c := j
-			entry := uint32(s) | (slot_minus_c << 8) | ((f - 1) << 20)
-			model.DecodeTable[slot] = entry
-		}
-		cdf += f
-	}
-	model.CDF[256] = uint16(cdf)
+	model := &VANSModel{}
+	model.InitFromFreq(m.Normalize(vansM))
 	return model
 }
 
 // InitFromFreq fills an existing VANSModel in-place with normalized frequencies.
-func (model *VANSModel) InitFromFreq(freq [256]uint16) {
-	model.Freq = freq
+func (m *VANSModel) InitFromFreq(freq [256]uint16) {
+	m.Freq = freq
 	cdf := uint32(0)
 	for s := range 256 {
-		model.CDF[s] = uint16(cdf)
-		f := uint32(model.Freq[s])
+		m.CDF[s] = uint16(cdf)
+		f := uint32(m.Freq[s])
+		if f == 0 {
+			continue
+		}
+		fMinus1Shift := (f - 1) << 20
+		baseEntry := uint32(s) | fMinus1Shift
+		tableSlice := m.DecodeTable[cdf : cdf+f]
 		for j := range f {
-			slot := cdf + j
-			slot_minus_c := j
-			entry := uint32(s) | (slot_minus_c << 8) | ((f - 1) << 20)
-			model.DecodeTable[slot] = entry
+			tableSlice[j] = baseEntry | (j << 8)
 		}
 		cdf += f
 	}
-	model.CDF[256] = uint16(cdf)
+	m.CDF[256] = uint16(cdf)
 }
 
 // NewVANSModelFromFreq constructs a model directly from normalized frequencies.
@@ -260,14 +249,14 @@ func NewVANSModelFromFreq(freq [256]uint16) *VANSModel {
 }
 
 // SerializeMatrix encodes the 16x16 matrix into a compact byte header.
-func (model *VANSModel) SerializeMatrix() []byte {
+func (m *VANSModel) SerializeMatrix() []byte {
 	var buf []byte
 	// 1. Active rows mask (16 bits: 2 bytes)
 	var rowMask uint16
 	for h := range 16 {
 		rowActive := false
 		for l := range 16 {
-			if model.Freq[(h<<4)|l] > 0 {
+			if m.Freq[(h<<4)|l] > 0 {
 				rowActive = true
 				break
 			}
@@ -285,7 +274,7 @@ func (model *VANSModel) SerializeMatrix() []byte {
 		}
 		var colMask uint16
 		for l := range 16 {
-			if model.Freq[(h<<4)|l] > 0 {
+			if m.Freq[(h<<4)|l] > 0 {
 				colMask |= 1 << l
 			}
 		}
@@ -296,7 +285,7 @@ func (model *VANSModel) SerializeMatrix() []byte {
 			if (colMask & (1 << l)) == 0 {
 				continue
 			}
-			w := model.Freq[(h<<4)|l]
+			w := m.Freq[(h<<4)|l]
 			if w < 128 {
 				buf = append(buf, byte(w))
 			} else {
@@ -435,9 +424,6 @@ func VANSEncode4x(src []byte) ([]byte, error) {
 	for _, b := range slices.Backward(bitstream) {
 		out = append(out, b)
 	}
-
-	// Pad for bounds-free ASM decoder (up to 32 bytes to be safe)
-	out = append(out, make([]byte, 32)...)
 
 	return out, nil
 }

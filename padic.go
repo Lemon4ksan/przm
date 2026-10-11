@@ -134,7 +134,7 @@ func PadicSingularityTransform(src []byte, stride, order int, mode uint8) []byte
 	switch mode {
 	case PadicModeStridedInplace:
 		copy(out, src)
-		for o := 0; o < order; o++ {
+		for range order {
 			for i := n - 1; i >= stride; i-- {
 				out[i] -= out[i-stride]
 			}
@@ -142,14 +142,14 @@ func PadicSingularityTransform(src []byte, stride, order int, mode uint8) []byte
 
 	case PadicModeColumnar:
 		records := n / stride
-		for r := 0; r < records; r++ {
-			for c := 0; c < stride; c++ {
+		for r := range records {
+			for c := range stride {
 				out[c*records+r] = src[r*stride+c]
 			}
 		}
-		for c := 0; c < stride; c++ {
+		for c := range stride {
 			col := out[c*records : (c+1)*records]
-			for o := 0; o < order; o++ {
+			for range order {
 				for r := records - 1; r >= 1; r-- {
 					col[r] -= col[r-1]
 				}
@@ -161,7 +161,7 @@ func PadicSingularityTransform(src []byte, stride, order int, mode uint8) []byte
 		for v := 0; v < n; v += 16 {
 			mahler16ForwardBlock((*[16]byte)(unsafe.Pointer(&out[v])))
 		}
-		for o := 0; o < order; o++ {
+		for range order {
 			for i := n - 1; i >= stride; i-- {
 				out[i] -= out[i-stride]
 			}
@@ -171,7 +171,7 @@ func PadicSingularityTransform(src []byte, stride, order int, mode uint8) []byte
 		copy(out, src)
 		words := n / 8
 		oPtr := (*[1 << 30]uint64)(unsafe.Pointer(&out[0]))[:words:words]
-		for o := 0; o < order; o++ {
+		for range order {
 			for i := words - 1; i >= 1; i-- {
 				oPtr[i] -= oPtr[i-1]
 			}
@@ -191,8 +191,8 @@ func PadicSingularityTransform(src []byte, stride, order int, mode uint8) []byte
 			}
 		}
 		dBytes := (*[1 << 30]byte)(unsafe.Pointer(&deltas[0]))[:n:n]
-		for i := 0; i < words; i++ {
-			for lane := 0; lane < 8; lane++ {
+		for i := range words {
+			for lane := range 8 {
 				out[lane*words+i] = dBytes[i*8+lane]
 			}
 		}
@@ -213,7 +213,7 @@ func PadicSingularityInverse(src, dst []byte, stride, order int, mode uint8) err
 	switch mode {
 	case PadicModeStridedInplace:
 		copy(dst, src)
-		for o := 0; o < order; o++ {
+		for range order {
 			if stride == 32 {
 				PadicInverseSIMD_32(dst)
 			} else if stride == 16 {
@@ -230,22 +230,22 @@ func PadicSingularityInverse(src, dst []byte, stride, order int, mode uint8) err
 	case PadicModeColumnar:
 		records := n / stride
 		var colBuf [8192]byte
-		for c := 0; c < stride; c++ {
+		for c := range stride {
 			srcCol := src[c*records : (c+1)*records]
 			copy(colBuf[:records], srcCol)
-			for o := 0; o < order; o++ {
+			for range order {
 				for r := 1; r < records; r++ {
 					colBuf[r] += colBuf[r-1]
 				}
 			}
-			for r := 0; r < records; r++ {
+			for r := range records {
 				dst[r*stride+c] = colBuf[r]
 			}
 		}
 
 	case PadicMode2DMahler:
 		copy(dst, src)
-		for o := 0; o < order; o++ {
+		for range order {
 			PadicInverseSIMD_16(dst)
 		}
 		v := 0
@@ -261,19 +261,19 @@ func PadicSingularityInverse(src, dst []byte, stride, order int, mode uint8) err
 
 	case PadicModeWord64Inplace:
 		copy(dst, src)
-		for o := 0; o < order; o++ {
+		for range order {
 			PadicInverseWord64(dst)
 		}
 
 	case PadicModeWord64Columnar:
 		words := n / 8
-		for lane := 0; lane < 8; lane++ {
+		for lane := range 8 {
 			laneSrc := src[lane*words : (lane+1)*words]
-			for i := 0; i < words; i++ {
+			for i := range words {
 				dst[i*8+lane] = laneSrc[i]
 			}
 		}
-		for o := 0; o < order; o++ {
+		for range order {
 			PadicInverseWord64(dst)
 		}
 	}

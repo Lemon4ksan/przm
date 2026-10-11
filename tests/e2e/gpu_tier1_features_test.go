@@ -139,12 +139,10 @@ func TestTier1_GPU_F03_CUDAAPIBridge(t *testing.T) {
 			name: "ConcurrentAvailabilityQueries",
 			fn: func(t *testing.T) {
 				var wg sync.WaitGroup
-				for i := 0; i < 8; i++ {
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
+				for range 8 {
+					wg.Go(func() {
 						_ = gpu.IsAvailable()
-					}()
+					})
 				}
 				wg.Wait()
 			},
@@ -154,7 +152,7 @@ func TestTier1_GPU_F03_CUDAAPIBridge(t *testing.T) {
 			fn: func(t *testing.T) {
 				comp := getTestGPUCompressor(t)
 				data := generateRepeatingRunData(16384, 'K')
-				for i := 0; i < 5; i++ {
+				for i := range 5 {
 					m, _, err := comp.MatchLZ77(data)
 					if err != nil {
 						t.Fatalf("Sequential call %d failed: %v", i, err)

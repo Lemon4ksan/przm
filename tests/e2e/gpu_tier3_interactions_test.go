@@ -299,7 +299,7 @@ func TestTier3_GPU_FallbackToggling_MidPipeline(t *testing.T) {
 	}
 
 	// Step 5: Rapid back-and-forth toggling loop to verify state cleanliness across calls
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		simulateFailure := (i % 2) == 1
 		if simulateFailure {
 			gpu.SetMockUnavailableForTest(true)
@@ -339,12 +339,12 @@ func TestTier3_GPU_PinnedMemoryPool_ConcurrentReuse(t *testing.T) {
 		var wg sync.WaitGroup
 		errCh := make(chan error, workers*iterations)
 
-		for w := 0; w < workers; w++ {
+		for w := range workers {
 			wg.Add(1)
 			go func(workerID int) {
 				defer wg.Done()
 				fillByte := byte(workerID + 1)
-				for i := 0; i < iterations; i++ {
+				for range iterations {
 					buf, err := pool.Get()
 					if err != nil {
 						errCh <- fmt.Errorf("worker %d Get() error: %w", workerID, err)
@@ -360,7 +360,7 @@ func TestTier3_GPU_PinnedMemoryPool_ConcurrentReuse(t *testing.T) {
 					for idx := range buf.Bytes {
 						buf.Bytes[idx] = fillByte
 					}
-					for idx := 0; idx < 100; idx++ {
+					for idx := range 100 {
 						if buf.Bytes[idx] != fillByte {
 							errCh <- fmt.Errorf("worker %d buffer corruption detected", workerID)
 							pool.Put(buf)
@@ -386,13 +386,13 @@ func TestTier3_GPU_PinnedMemoryPool_ConcurrentReuse(t *testing.T) {
 		var wg sync.WaitGroup
 		errCh := make(chan error, workers*iterations)
 
-		for w := 0; w < workers; w++ {
+		for w := range workers {
 			wg.Add(1)
 			go func(workerID int) {
 				defer wg.Done()
 				// Distinct dataset per worker
 				data := generateTiledData(4, fmt.Sprintf("WORKER_%02d_PINNED_POOL_TEST_PAYLOAD_", workerID))
-				for i := 0; i < iterations; i++ {
+				for i := range iterations {
 					comp, err := przm.CompressWithOptions(data, przm.CompressOptions{
 						GPUAcceleration: true,
 						Level:           3,

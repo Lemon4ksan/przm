@@ -358,7 +358,7 @@ func TestDict_Level6_HenselUltrametric(t *testing.T) {
 
 	// Realistic web payload with tokens and repetitions
 	var payload bytes.Buffer
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		payload.WriteString("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">")
 		payload.WriteString(
 			"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>PRZM L6 Test</title>",

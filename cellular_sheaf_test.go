@@ -347,9 +347,8 @@ func BenchmarkCellularSheaf_DecompressThroughput(b *testing.B) {
 
 	dst := bufkit.AlignedBytes(len(orig)+64, bufkit.CacheLineSize)
 	b.SetBytes(int64(len(orig)))
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = przm.DecompressCellularSheaf(compressed, dst)
 	}
 }

@@ -544,7 +544,7 @@ func TestHensel_L6_MultiTierMatch(t *testing.T) {
 	data[2203] = '2'
 
 	// Index 0..2150
-	for p := 0; p < 2150; p++ {
+	for p := range 2150 {
 		przm.HenselInsertL6(sp, p, data, len(data))
 	}
 

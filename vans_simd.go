@@ -11,7 +11,7 @@ var splats [256]archsimd.Uint8x64
 
 func init() {
 	if archsimd.X86.AVX512() {
-		for j := 0; j < 256; j++ {
+		for j := range 256 {
 			splats[j] = archsimd.BroadcastUint8x64(uint8(j))
 		}
 	}
@@ -54,7 +54,7 @@ func BuildFrequencyMatrixSIMD(src []byte) Matrix16x16 {
 		v2 := archsimd.LoadUint8x64(src[i+128 : i+192])
 		v3 := archsimd.LoadUint8x64(src[i+192 : i+256])
 
-		for j := 0; j < 256; j++ {
+		for j := range 256 {
 			splat := splats[j]
 			m0 := v0.Equal(splat).ToBits()
 			m1 := v1.Equal(splat).ToBits()

@@ -13,7 +13,9 @@ cmake-build-*/
 
 # Editor files
 .vscode/
+.zed/
 .idea/
+.cache/
 *.swp
 
 # Agent workspace artifacts

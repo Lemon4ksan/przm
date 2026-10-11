@@ -20,7 +20,7 @@ func TestTournamentPipeline_AllEnginesEndToEnd(t *testing.T) {
 		raw := make([]byte, n*8)
 		words := (*[1 << 30]uint64)(unsafe.Pointer(&raw[0]))[:n:n]
 		curr := uint64(1718000000000)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			curr += uint64((i % 7) + 1 + ((i * 13) % 11))
 			words[i] = curr
 		}

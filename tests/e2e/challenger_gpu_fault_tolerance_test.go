@@ -69,7 +69,7 @@ func TestChallenger_GPU_AdversarialChaosMonkey(t *testing.T) {
 	errCh := make(chan error, workers*operationsPerWorker)
 	var completedCount atomic.Int64
 
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
@@ -92,7 +92,7 @@ func TestChallenger_GPU_AdversarialChaosMonkey(t *testing.T) {
 				}(),
 				func() []byte { // Structured JSON-like
 					var b bytes.Buffer
-					for i := 0; i < 500; i++ {
+					for i := range 500 {
 						fmt.Fprintf(
 							&b,
 							`{"worker":%d,"idx":%d,"timestamp":1700000000,"status":"ACTIVE"}`+"\n",
@@ -104,7 +104,7 @@ func TestChallenger_GPU_AdversarialChaosMonkey(t *testing.T) {
 				}(),
 			}
 
-			for op := 0; op < operationsPerWorker; op++ {
+			for op := range operationsPerWorker {
 				data := payloads[op%len(payloads)]
 
 				opts := przm.CompressOptions{

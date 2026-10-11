@@ -6,12 +6,15 @@
  * Standalone Unit and Integration Test Suite for przm_dec.c.
  */
 
-#include "przm_dec.h"
-
 #include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "przm_dec.h"
 
 #define TEST_ASSERT(cond, msg) \
     do { \
@@ -1683,8 +1686,16 @@ int main(int argc, char** argv) {
         long in_len = ftell(fin);
         fseek(fin, 0, SEEK_SET);
 
-        uint8_t* in_buf = (uint8_t*)malloc(in_len);
-        if (fread(in_buf, 1, in_len, fin) != (size_t)in_len) {
+        if (in_len < 0) {
+            fclose(fin);
+            return 1;
+        }
+        uint8_t* in_buf = (uint8_t*)malloc(in_len > 0 ? (size_t)in_len : 1);
+        if (!in_buf) {
+            fclose(fin);
+            return 1;
+        }
+        if (in_len > 0 && fread(in_buf, 1, in_len, fin) != (size_t)in_len) {
             fclose(fin);
             free(in_buf);
             return 1;
@@ -1692,14 +1703,19 @@ int main(int argc, char** argv) {
         fclose(fin);
 
         int64_t u_size = przm_get_uncompressed_size(in_buf, in_len);
-        if (u_size < 0) {
-            fprintf(stderr, "Invalid PRZM frame header: error %lld\n", (long long)u_size);
+        if (u_size < 0 || u_size > PRZM_MAX_BLOCK_SIZE) {
+            fprintf(stderr, "Invalid PRZM frame header or exceeds max block: error %lld\n", (long long)u_size);
             free(in_buf);
             return 2;
         }
 
-        uint8_t* out_buf = (uint8_t*)malloc(u_size + PRZM_SAFETY_PADDING);
-        int64_t dec_len = przm_decompress(in_buf, in_len, out_buf, u_size + PRZM_SAFETY_PADDING);
+        uint8_t* out_buf = (uint8_t*)malloc((size_t)u_size + PRZM_SAFETY_PADDING);
+        if (!out_buf) {
+            fprintf(stderr, "Out of memory allocating output buffer (%lld bytes)\n", (long long)u_size);
+            free(in_buf);
+            return 5;
+        }
+        int64_t dec_len = przm_decompress(in_buf, in_len, out_buf, (size_t)u_size + PRZM_SAFETY_PADDING);
         free(in_buf);
 
         if (dec_len < 0 || dec_len != u_size) {

@@ -316,10 +316,7 @@ func TestTier2_GPU_B10_DescriptorPackingLimits(t *testing.T) {
 					t.Fatalf("Expected IsMatch32 == true")
 				}
 				l, o := gpu.UnpackMatch32(packed)
-				expectedLen := tc.len
-				if expectedLen > gpu.MaxMatchLen32 {
-					expectedLen = gpu.MaxMatchLen32
-				}
+				expectedLen := min(tc.len, gpu.MaxMatchLen32)
 				if l != expectedLen || o != tc.off {
 					t.Fatalf("Unpack mismatch: want %d/%d, got %d/%d", expectedLen, tc.off, l, o)
 				}

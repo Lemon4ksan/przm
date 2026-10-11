@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package gpu
 
 // Window size limits and matching bounds
@@ -24,10 +28,7 @@ func PackMatch32(length uint16, offset uint32) uint32 {
 	if length < MinMatchLen || offset == 0 {
 		return 0
 	}
-	l := uint32(length)
-	if l > MaxMatchLen32 {
-		l = MaxMatchLen32
-	}
+	l := min(uint32(length), MaxMatchLen32)
 	return (l << 20) | (offset & MaxOffset32)
 }
 

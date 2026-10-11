@@ -88,7 +88,6 @@ func init() {
 	}
 }
 
-
 func simdSplit(src, sBuf, cBuf, maskBuf []byte) (int, int) {
 	n := len(src)
 	if n == 0 {

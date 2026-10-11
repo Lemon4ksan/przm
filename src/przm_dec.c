@@ -6,10 +6,12 @@
  * PRZM-SPEC-0.5 Pure C Zero-Allocation Decompressor Implementation.
  */
 
-#include "przm_dec.h"
-
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
+
+#include "przm_dec.h"
 
 #if defined(__GNUC__) || defined(__clang__)
 #define PRZM_INLINE static inline __attribute__((always_inline))
@@ -807,6 +809,80 @@ static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_
         }
 
         sheaf_context_interleave4(dst, orig_len, f0, f1, f2, f3);
+        return PRZM_OK;
+    }
+
+    if ((flags & PRZM_VANS_FLAG_SHEAF) != 0) {
+        if (src_len < 24) return PRZM_ERR_CORRUPTED_FRAME;
+        uint32_t header_orig = read_u32_le(src + 4);
+        if (header_orig != (uint32_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        if (orig_len == 0) return PRZM_OK;
+
+        uint32_t slen = read_u32_le(src + 8);
+        uint32_t mask_len = read_u32_le(src + 12);
+        uint32_t enc_slen = read_u32_le(src + 16);
+        uint32_t enc_clen = read_u32_le(src + 20);
+
+        uint32_t expected_mask_len = (uint32_t)((orig_len + 7) / 8);
+        if (mask_len != expected_mask_len || slen > orig_len) {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+        uint32_t clen = (uint32_t)orig_len - slen;
+        if (24 + (size_t)mask_len + enc_slen + enc_clen > src_len) {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
+
+        const uint8_t* mask = src + 24;
+        size_t full_bytes = orig_len / 8;
+        size_t rem_bits = orig_len % 8;
+        size_t ones = 0;
+        for (size_t i = 0; i < full_bytes; i++) {
+            ones += (size_t)__builtin_popcount((unsigned int)mask[i]);
+        }
+        if (rem_bits > 0) {
+            uint8_t last_byte = mask[full_bytes];
+            if ((last_byte >> rem_bits) != 0) return PRZM_ERR_CORRUPTED_FRAME;
+            ones += (size_t)__builtin_popcount((unsigned int)last_byte);
+        }
+        if (ones != slen) return PRZM_ERR_CORRUPTED_FRAME;
+
+        uint8_t* sheaf_scratch = (dst == tls_archival_scratch) ? tls_split_scratch : tls_archival_scratch;
+        if (orig_len > sizeof(tls_archival_scratch)) {
+            return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        }
+
+        uint8_t* s_buf = sheaf_scratch;
+        uint8_t* c_buf = sheaf_scratch + slen;
+
+        const uint8_t* enc_s = src + 24 + mask_len;
+        const uint8_t* enc_c = enc_s + enc_slen;
+
+        if (slen > 0) {
+            if (enc_slen == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            int err = vans_decode4x(enc_s, enc_slen, s_buf, slen);
+            if (err != PRZM_OK) return err;
+        }
+        if (clen > 0) {
+            if (enc_clen == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            int err = vans_decode4x(enc_c, enc_clen, c_buf, clen);
+            if (err != PRZM_OK) return err;
+        }
+
+        size_t s_pos = 0, c_pos = 0, m_pos = 0;
+        int bit = 0;
+        for (size_t i = 0; i < orig_len; i++) {
+            if ((mask[m_pos] >> bit) & 1) {
+                dst[i] = s_buf[s_pos++];
+            } else {
+                dst[i] = c_buf[c_pos++];
+            }
+            bit++;
+            if (bit == 8) {
+                bit = 0;
+                m_pos++;
+            }
+        }
         return PRZM_OK;
     }
 

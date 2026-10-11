@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package gpu
 
 import (
@@ -127,7 +131,7 @@ func TestVRAMBandwidth(t *testing.T) {
 	defer func() { _ = comp.Close() }()
 
 	var maxBW float64
-	for trial := 0; trial < 10; trial++ {
+	for trial := range 10 {
 		bw, err := comp.BenchmarkVRAMBandwidth(64)
 		if err != nil {
 			t.Fatalf("BenchmarkVRAMBandwidth failed on trial %d: %v", trial, err)

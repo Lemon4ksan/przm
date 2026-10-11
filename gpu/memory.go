@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package gpu
 
 import (
@@ -107,12 +111,9 @@ const defaultMaxPinnedPoolCap = 8
 
 // NewPinnedBufferPool initializes pool with preallocated pinned buffers.
 func NewPinnedBufferPool(bufSize, initialCap int) (*PinnedBufferPool, error) {
-	maxCap := defaultMaxPinnedPoolCap
-	if initialCap > maxCap {
-		maxCap = initialCap
-	}
+	maxCap := max(initialCap, defaultMaxPinnedPoolCap)
 	p := &PinnedBufferPool{bufSize: bufSize, maxCap: maxCap, pool: make([]PinnedBuffer, 0, maxCap)}
-	for i := 0; i < initialCap; i++ {
+	for range initialCap {
 		b, ptr, err := AllocPinnedHost(bufSize)
 		if err != nil {
 			_ = p.Close()

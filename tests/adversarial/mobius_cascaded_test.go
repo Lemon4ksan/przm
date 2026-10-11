@@ -916,9 +916,10 @@ func TestChallenger_IsoQuant_UnalignedLengths(t *testing.T) {
 	for sz := 0; sz <= 256; sz++ {
 		testSizes = append(testSizes, sz)
 	}
-	for _, sz := range []int{257, 258, 259, 260, 511, 513, 514, 515, 1021, 1022, 1023, 1024, 1025, 1026, 1027} {
-		testSizes = append(testSizes, sz)
-	}
+
+	testSizes = append(
+		testSizes,
+		[]int{257, 258, 259, 260, 511, 513, 514, 515, 1021, 1022, 1023, 1024, 1025, 1026, 1027}...)
 
 	patterns := []struct {
 		name string

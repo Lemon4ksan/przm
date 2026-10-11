@@ -92,12 +92,37 @@ func getFrameUncompressedSize(src []byte) (int, error) {
 			return 0, ErrCorruptedFrame
 		}
 		return int(binary.LittleEndian.Uint32(src[4:8])), nil
-	case MobiusMagic, MargolusMagic, HeisenbergMagic, CellularSheafMagic, HodgeMagic:
-		if len(src) < 8 {
+	case MobiusMagic:
+		if len(src) < MobiusHeaderSize {
 			return 0, ErrCorruptedFrame
 		}
 		return int(binary.LittleEndian.Uint32(src[4:8])), nil
-	case SymplecticMagic, SheafMagic, MahlerMagic, IsoQuantMagic, PadicMagic:
+	case MargolusMagic:
+		if len(src) < MargolusHeaderSize {
+			return 0, ErrCorruptedFrame
+		}
+		return int(binary.LittleEndian.Uint32(src[4:8])), nil
+	case HeisenbergMagic:
+		if len(src) < HeisenbergHeaderSize {
+			return 0, ErrCorruptedFrame
+		}
+		return int(binary.LittleEndian.Uint32(src[4:8])), nil
+	case CellularSheafMagic:
+		if len(src) < CellularSheafHeaderSize {
+			return 0, ErrCorruptedFrame
+		}
+		return int(binary.LittleEndian.Uint32(src[4:8])), nil
+	case HodgeMagic:
+		if len(src) < HodgeHeaderSize {
+			return 0, ErrCorruptedFrame
+		}
+		return int(binary.LittleEndian.Uint32(src[4:8])), nil
+	case IsoQuantMagic:
+		if len(src) < IsoQuantHeaderSize {
+			return 0, ErrCorruptedFrame
+		}
+		return int(binary.LittleEndian.Uint32(src[8:12])), nil
+	case SymplecticMagic, SheafMagic, MahlerMagic, PadicMagic:
 		if len(src) < 12 {
 			return 0, ErrCorruptedFrame
 		}
@@ -107,6 +132,11 @@ func getFrameUncompressedSize(src []byte) (int, error) {
 			return 0, ErrCorruptedFrame
 		}
 		return int(binary.LittleEndian.Uint32(src[6:10])), nil
+	case HMDSMagic, SpectralMagic:
+		if len(src) < 9 {
+			return 0, ErrCorruptedFrame
+		}
+		return int(binary.LittleEndian.Uint32(src[5:9])), nil
 	default:
 		// Versioned 3-byte ISA headers
 		if len(src) >= 8 && (src[0] == pwsMagic0 && src[1] == pwsMagic1 && src[2] == pwsVer1) {
@@ -261,6 +291,13 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 				(int(src[hdr.DataOffset+6]) << 16) | (int(src[hdr.DataOffset+7]) << 24)
 		}
 		if contractedLen > 0 {
+			if contractedLen > MaxBlockSize {
+				return nil, fmt.Errorf(
+					"%w: contracted length %d exceeds MaxBlockSize",
+					ErrExceedsMaxBlock,
+					contractedLen,
+				)
+			}
 			allocSize = contractedLen
 		}
 	}

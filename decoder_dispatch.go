@@ -45,13 +45,17 @@ func fastReadVarint(src []byte, ptr int) (int, int, error) {
 	b3 := src[ptr]
 	ptr++
 	if b3 < 0x80 {
-		return int(b0&0x7F) | (int(b1&0x7F) << 7) | (int(b2&0x7F) << 14) | (int(b3) << 21), ptr, nil
+		v := int(b0&0x7F) | (int(b1&0x7F) << 7) | (int(b2&0x7F) << 14) | (int(b3) << 21)
+		if v > MaxBlockSize {
+			return 0, ptr, fmt.Errorf("%w: varint %d exceeds MaxBlockSize", ErrCorruptedFrame, v)
+		}
+		return v, ptr, nil
 	}
 	if ptr-4 < 0 || ptr-4 > len(src) {
 		return 0, ptr, fmt.Errorf("%w: invalid varint offset", ErrCorruptedFrame)
 	}
 	extra, n := binary.Uvarint(src[ptr-4:])
-	if n <= 0 {
+	if n <= 0 || extra > uint64(MaxBlockSize) {
 		return 0, ptr, fmt.Errorf("%w: corrupted varint encoding", ErrCorruptedFrame)
 	}
 	return int(extra), ptr - 4 + n, nil
@@ -63,85 +67,133 @@ func copyMatch(baseDst unsafe.Pointer, dstPos, srcIdx, mLen, d int) {
 	pSrc := unsafe.Add(baseDst, srcIdx)
 	pDst := unsafe.Add(baseDst, dstPos)
 
-	if d >= 64 && mLen >= 64 {
-		for mLen >= 64 {
-			*(*uint64)(pDst) = *(*uint64)(pSrc)
-			*(*uint64)(unsafe.Add(pDst, 8)) = *(*uint64)(unsafe.Add(pSrc, 8))
-			*(*uint64)(unsafe.Add(pDst, 16)) = *(*uint64)(unsafe.Add(pSrc, 16))
-			*(*uint64)(unsafe.Add(pDst, 24)) = *(*uint64)(unsafe.Add(pSrc, 24))
-			*(*uint64)(unsafe.Add(pDst, 32)) = *(*uint64)(unsafe.Add(pSrc, 32))
-			*(*uint64)(unsafe.Add(pDst, 40)) = *(*uint64)(unsafe.Add(pSrc, 40))
-			*(*uint64)(unsafe.Add(pDst, 48)) = *(*uint64)(unsafe.Add(pSrc, 48))
-			*(*uint64)(unsafe.Add(pDst, 56)) = *(*uint64)(unsafe.Add(pSrc, 56))
-			pSrc = unsafe.Add(pSrc, 64)
-			pDst = unsafe.Add(pDst, 64)
-			mLen -= 64
+	if d >= mLen {
+		if d >= 16 {
+			for mLen >= 32 {
+				*(*[4]uint64)(pDst) = *(*[4]uint64)(pSrc)
+				pSrc = unsafe.Add(pSrc, 32)
+				pDst = unsafe.Add(pDst, 32)
+				mLen -= 32
+			}
+			if mLen > 16 {
+				*(*[2]uint64)(pDst) = *(*[2]uint64)(pSrc)
+				pSrc = unsafe.Add(pSrc, 16)
+				pDst = unsafe.Add(pDst, 16)
+				mLen -= 16
+			}
+			if mLen > 8 {
+				*(*[2]uint64)(pDst) = *(*[2]uint64)(pSrc)
+				return
+			}
+			if mLen > 0 {
+				*(*uint64)(pDst) = *(*uint64)(pSrc)
+				return
+			}
+			return
 		}
+		if d >= 8 {
+			for mLen > 8 {
+				*(*uint64)(pDst) = *(*uint64)(pSrc)
+				pSrc = unsafe.Add(pSrc, 8)
+				pDst = unsafe.Add(pDst, 8)
+				mLen -= 8
+			}
+			if mLen > 0 {
+				*(*uint64)(pDst) = *(*uint64)(pSrc)
+			}
+			return
+		}
+		if mLen <= 4 {
+			switch mLen {
+			case 1:
+				*(*byte)(pDst) = *(*byte)(pSrc)
+			case 2:
+				*(*uint16)(pDst) = *(*uint16)(pSrc)
+			case 3:
+				*(*uint16)(pDst) = *(*uint16)(pSrc)
+				*(*byte)(unsafe.Add(pDst, 2)) = *(*byte)(unsafe.Add(pSrc, 2))
+			case 4:
+				*(*uint32)(pDst) = *(*uint32)(pSrc)
+			}
+			return
+		}
+		*(*uint32)(pDst) = *(*uint32)(pSrc)
+		*(*uint32)(unsafe.Add(pDst, mLen-4)) = *(*uint32)(unsafe.Add(pSrc, mLen-4))
+		return
 	}
-	if d >= 32 {
-		for mLen > 32 {
-			*(*uint64)(pDst) = *(*uint64)(pSrc)
-			*(*uint64)(unsafe.Add(pDst, 8)) = *(*uint64)(unsafe.Add(pSrc, 8))
-			*(*uint64)(unsafe.Add(pDst, 16)) = *(*uint64)(unsafe.Add(pSrc, 16))
-			*(*uint64)(unsafe.Add(pDst, 24)) = *(*uint64)(unsafe.Add(pSrc, 24))
-			pSrc = unsafe.Add(pSrc, 32)
-			pDst = unsafe.Add(pDst, 32)
-			mLen -= 32
-		}
+
+	if d >= 16 {
 		for mLen > 0 {
-			*(*uint64)(pDst) = *(*uint64)(pSrc)
-			pSrc = unsafe.Add(pSrc, 8)
-			pDst = unsafe.Add(pDst, 8)
-			mLen -= 8
+			*(*[2]uint64)(pDst) = *(*[2]uint64)(pSrc)
+			pSrc = unsafe.Add(pSrc, 16)
+			pDst = unsafe.Add(pDst, 16)
+			if mLen <= 16 {
+				return
+			}
+			mLen -= 16
 		}
 		return
 	}
+
 	if d >= 8 {
 		for mLen > 0 {
 			*(*uint64)(pDst) = *(*uint64)(pSrc)
 			pSrc = unsafe.Add(pSrc, 8)
 			pDst = unsafe.Add(pDst, 8)
+			if mLen <= 8 {
+				return
+			}
 			mLen -= 8
 		}
 		return
 	}
+
 	if d == 1 {
 		pattern := simd.RepeatByte0x01 * uint64(*(*byte)(pSrc))
 		for mLen > 32 {
-			*(*uint64)(pDst) = pattern
-			*(*uint64)(unsafe.Add(pDst, 8)) = pattern
-			*(*uint64)(unsafe.Add(pDst, 16)) = pattern
-			*(*uint64)(unsafe.Add(pDst, 24)) = pattern
+			*(*[4]uint64)(pDst) = [4]uint64{pattern, pattern, pattern, pattern}
 			pDst = unsafe.Add(pDst, 32)
 			mLen -= 32
 		}
 		for mLen > 0 {
 			*(*uint64)(pDst) = pattern
 			pDst = unsafe.Add(pDst, 8)
+			if mLen <= 8 {
+				return
+			}
 			mLen -= 8
 		}
 		return
 	}
+
 	if d == 2 {
 		w := uint64(*(*uint16)(pSrc))
 		pattern := w | (w << 16) | (w << 32) | (w << 48)
 		for mLen > 0 {
 			*(*uint64)(pDst) = pattern
 			pDst = unsafe.Add(pDst, 8)
+			if mLen <= 8 {
+				return
+			}
 			mLen -= 8
 		}
 		return
 	}
+
 	if d == 4 {
 		w := uint64(*(*uint32)(pSrc))
 		pattern := w | (w << 32)
 		for mLen > 0 {
 			*(*uint64)(pDst) = pattern
 			pDst = unsafe.Add(pDst, 8)
+			if mLen <= 8 {
+				return
+			}
 			mLen -= 8
 		}
 		return
 	}
+
 	for i := 0; i < mLen; i++ {
 		*(*byte)(unsafe.Add(pDst, i)) = *(*byte)(unsafe.Add(pSrc, i))
 	}
@@ -150,7 +202,7 @@ func copyMatch(baseDst unsafe.Pointer, dstPos, srcIdx, mLen, d int) {
 // execMatch safely executes a match copy, transparently handling positive offsets in outBuf
 // and negative offsets into the raw prefix dictionary buffer.
 func execMatch(baseDst unsafe.Pointer, outBuf, rawDict []byte, dstPos, d, mLen int) error {
-	if d <= 0 || dstPos+mLen > len(outBuf) {
+	if d <= 0 || mLen <= 0 || dstPos < 0 || dstPos+mLen > len(outBuf) {
 		return fmt.Errorf("%w: invalid match bounds (d=%d, dstPos=%d, mLen=%d)", ErrCorruptedFrame, d, dstPos, mLen)
 	}
 	srcIdx := dstPos - d
@@ -183,7 +235,7 @@ func execMatch(baseDst unsafe.Pointer, outBuf, rawDict []byte, dstPos, d, mLen i
 	if mLen > copyFromDict {
 		remLen := mLen - copyFromDict
 		copyStart := dstPos + copyFromDict
-		for i := 0; i < remLen; i++ {
+		for i := range remLen {
 			outBuf[copyStart+i] = outBuf[i]
 		}
 	}
@@ -218,16 +270,150 @@ type frameDecoder struct {
 }
 
 func (d *frameDecoder) decode() error {
-	for d.dstPos < d.allocSize && d.cmdPtr < d.cmdEnd {
-		op := d.cmds[d.cmdPtr]
-		d.cmdPtr++
+	dstPos := d.dstPos
+	allocSize := d.allocSize
+	baseDst := d.baseDst
+	outBuf := d.outBuf
+	rawDict := d.rawDict
+
+	cmds := d.cmds
+	cmdPtr := d.cmdPtr
+	cmdEnd := d.cmdEnd
+
+	lits := d.lits
+	litPtr := d.litPtr
+	litsLen := len(lits)
+
+	offs := d.offs
+	offPtr := d.offPtr
+
+	rep0 := d.rep0
+	rep1 := d.rep1
+	rep2 := d.rep2
+	minMatchBase := d.minMatchBase
+	outBufLen := len(outBuf)
+
+	for dstPos < allocSize && cmdPtr < cmdEnd {
+		op := cmds[cmdPtr]
+		cmdPtr++
+
+		if op < 0x80 {
+			// Fast-Path 1: Fused Repeat Token (00 LLL MM KK)
+			litLen := int((op >> 4) & 0x07)
+			mLen := int((op>>2)&0x03) + minMatchBase
+			k := int(op & 0x03)
+
+			if litLen > 0 {
+				if litPtr+litLen > litsLen || dstPos+litLen > outBufLen {
+					return fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
+				}
+				if litPtr+8 <= litsLen && dstPos+8 <= outBufLen {
+					*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Pointer(&lits[litPtr]))
+				} else {
+					copy(outBuf[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
+				}
+				litPtr += litLen
+				dstPos += litLen
+			}
+
+			var dist int
+			switch k {
+			case 0:
+				dist = rep0
+			case 1:
+				dist = rep1
+				rep1 = rep0
+				rep0 = dist
+			case 2:
+				dist = rep2
+				rep2 = rep1
+				rep1 = rep0
+				rep0 = dist
+			default:
+				return fmt.Errorf("%w: invalid repeat index %d", ErrCorruptedFrame, k)
+			}
+
+			srcIdx := dstPos - dist
+			if dist > 0 && srcIdx >= 0 && dstPos+mLen <= outBufLen {
+				if dist >= 8 {
+					*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Add(baseDst, srcIdx))
+				} else {
+					copyMatch(baseDst, dstPos, srcIdx, mLen, dist)
+				}
+			} else {
+				if err := execMatch(baseDst, outBuf, rawDict, dstPos, dist, mLen); err != nil {
+					return err
+				}
+			}
+			dstPos += mLen
+			continue
+		}
+
+		if op < 0xC0 {
+			// Fast-Path 2: Fused Extended Match (10 LL MMMM)
+			litLen := int((op >> 4) & 0x03)
+			baseLen := int(op & 0x0F)
+			mLen := baseLen + minMatchBase
+			if baseLen == 15 {
+				var extra int
+				var err error
+				extra, cmdPtr, err = fastReadVarint(cmds, cmdPtr)
+				if err != nil {
+					return err
+				}
+				mLen = 15 + minMatchBase + extra
+			}
+
+			if litLen > 0 {
+				if litPtr+litLen > litsLen || dstPos+litLen > outBufLen {
+					return fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
+				}
+				if litPtr+8 <= litsLen && dstPos+8 <= outBufLen {
+					*(*uint64)(unsafe.Add(baseDst, dstPos)) = *(*uint64)(unsafe.Pointer(&lits[litPtr]))
+				} else {
+					copy(outBuf[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
+				}
+				litPtr += litLen
+				dstPos += litLen
+			}
+
+			dist, newOffPtr, err := fastReadVarint(offs, offPtr)
+			if err != nil {
+				return err
+			}
+			offPtr = newOffPtr
+
+			rep2 = rep1
+			rep1 = rep0
+			rep0 = dist
+
+			srcIdx := dstPos - dist
+			if dist >= 16 && mLen <= 16 && srcIdx >= 0 && dstPos+16 <= outBufLen {
+				*(*[2]uint64)(unsafe.Add(baseDst, dstPos)) = *(*[2]uint64)(unsafe.Add(baseDst, srcIdx))
+			} else if dist >= 32 && mLen <= 32 && srcIdx >= 0 && dstPos+32 <= outBufLen {
+				*(*[4]uint64)(unsafe.Add(baseDst, dstPos)) = *(*[4]uint64)(unsafe.Add(baseDst, srcIdx))
+			} else if dist > 0 && srcIdx >= 0 && dstPos+mLen <= outBufLen {
+				copyMatch(baseDst, dstPos, srcIdx, mLen, dist)
+			} else {
+				if err := execMatch(baseDst, outBuf, rawDict, dstPos, dist, mLen); err != nil {
+					return err
+				}
+			}
+			dstPos += mLen
+			continue
+		}
+
+		// Specialized Opcodes (0xC0 .. 0xFF): sync back state before calling specialized opcode handlers
+		d.dstPos = dstPos
+		d.cmdPtr = cmdPtr
+		d.litPtr = litPtr
+		d.offPtr = offPtr
+		d.rep0 = rep0
+		d.rep1 = rep1
+		d.rep2 = rep2
 
 		var err error
 		switch {
-		case op < 0x80:
-			err = d.decodeFusedRepeat(op)
-		case op < 0xC0:
-			err = d.decodeFusedMatch(op)
 		case op >= 0xC0 && op <= 0xCF:
 			err = d.decodeLongRepeat(op)
 		case op >= 0xD0 && op <= 0xD7:
@@ -260,134 +446,27 @@ func (d *frameDecoder) decode() error {
 		if err != nil {
 			return err
 		}
+
+		dstPos = d.dstPos
+		cmdPtr = d.cmdPtr
+		litPtr = d.litPtr
+		offPtr = d.offPtr
+		rep0 = d.rep0
+		rep1 = d.rep1
+		rep2 = d.rep2
 	}
+
+	d.dstPos = dstPos
+	d.cmdPtr = cmdPtr
+	d.litPtr = litPtr
+	d.offPtr = offPtr
+	d.rep0 = rep0
+	d.rep1 = rep1
+	d.rep2 = rep2
 
 	if d.dstPos < d.allocSize {
 		return fmt.Errorf("%w: incomplete decoding: got %d of %d bytes", ErrCorruptedFrame, d.dstPos, d.allocSize)
 	}
-	return nil
-}
-
-// decodeFusedRepeat handles Fast path 1: Fused Repeat Token (00 LLL MM KK).
-func (d *frameDecoder) decodeFusedRepeat(op byte) error {
-	litLen := int((op >> 4) & 0x07)
-	mLen := int((op>>2)&0x03) + d.minMatchBase
-	k := int(op & 0x03)
-
-	if litLen > 0 {
-		if d.litPtr+8 <= len(d.lits) {
-			*(*uint64)(unsafe.Add(d.baseDst, d.dstPos)) = *(*uint64)(unsafe.Pointer(&d.lits[d.litPtr]))
-		} else if d.litPtr+litLen <= len(d.lits) {
-			copy(d.outBuf[d.dstPos:d.dstPos+litLen], d.lits[d.litPtr:d.litPtr+litLen])
-		} else {
-			return fmt.Errorf("%w: literal stream truncated", ErrCorruptedFrame)
-		}
-		d.litPtr += litLen
-		d.dstPos += litLen
-	}
-
-	var dist int
-	switch k {
-	case 0:
-		dist = d.rep0
-	case 1:
-		dist = d.rep1
-		d.rep1 = d.rep0
-		d.rep0 = dist
-	case 2:
-		dist = d.rep2
-		d.rep2 = d.rep1
-		d.rep1 = d.rep0
-		d.rep0 = dist
-	default:
-		return fmt.Errorf("%w: invalid repeat index %d", ErrCorruptedFrame, k)
-	}
-
-	srcIdx := d.dstPos - dist
-	if dist > 0 && srcIdx >= 0 && d.dstPos+mLen <= len(d.outBuf) {
-		if dist >= 8 || dist >= mLen {
-			*(*uint64)(unsafe.Add(d.baseDst, d.dstPos)) = *(*uint64)(unsafe.Add(d.baseDst, srcIdx))
-		} else if dist == 1 {
-			pattern := simd.RepeatByte0x01 * uint64(*(*byte)(unsafe.Add(d.baseDst, srcIdx)))
-			*(*uint64)(unsafe.Add(d.baseDst, d.dstPos)) = pattern
-		} else if dist == 2 {
-			w := uint64(*(*uint16)(unsafe.Add(d.baseDst, srcIdx)))
-			pattern := w | (w << 16) | (w << 32) | (w << 48)
-			*(*uint64)(unsafe.Add(d.baseDst, d.dstPos)) = pattern
-		} else if dist == 4 {
-			w := uint64(*(*uint32)(unsafe.Add(d.baseDst, srcIdx)))
-			pattern := w | (w << 32)
-			*(*uint64)(unsafe.Add(d.baseDst, d.dstPos)) = pattern
-		} else if dist == 3 {
-			pS := unsafe.Add(d.baseDst, srcIdx)
-			b0 := uint64(*(*byte)(pS))
-			b1 := uint64(*(*byte)(unsafe.Add(pS, 1)))
-			b2 := uint64(*(*byte)(unsafe.Add(pS, 2)))
-			pattern := b0 | (b1 << 8) | (b2 << 16) | (b0 << 24) | (b1 << 32) | (b2 << 40) | (b0 << 48) | (b1 << 56)
-			*(*uint64)(unsafe.Add(d.baseDst, d.dstPos)) = pattern
-		} else {
-			for i := range mLen {
-				*(*byte)(unsafe.Add(d.baseDst, d.dstPos+i)) = *(*byte)(unsafe.Add(d.baseDst, srcIdx+i))
-			}
-		}
-	} else {
-		if err := execMatch(d.baseDst, d.outBuf, d.rawDict, d.dstPos, dist, mLen); err != nil {
-			return err
-		}
-	}
-	d.dstPos += mLen
-	return nil
-}
-
-// decodeFusedMatch handles Fast path 2: Fused Extended Match (10 LL MMMM).
-func (d *frameDecoder) decodeFusedMatch(op byte) error {
-	litLen := int((op >> 4) & 0x03)
-	baseLen := int(op & 0x0F)
-	mLen := baseLen + d.minMatchBase
-	if baseLen == 15 {
-		var extra int
-		var err error
-		extra, d.cmdPtr, err = fastReadVarint(d.cmds, d.cmdPtr)
-		if err != nil {
-			return err
-		}
-		mLen = 15 + d.minMatchBase + extra
-	}
-
-	if litLen > 0 {
-		if d.litPtr+litLen > len(d.lits) || d.dstPos+litLen > len(d.outBuf) {
-			return fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
-		}
-		if d.litPtr+8 <= len(d.lits) && d.dstPos+8 <= len(d.outBuf) {
-			*(*uint64)(unsafe.Add(d.baseDst, d.dstPos)) = *(*uint64)(unsafe.Pointer(&d.lits[d.litPtr]))
-		} else {
-			copy(d.outBuf[d.dstPos:d.dstPos+litLen], d.lits[d.litPtr:d.litPtr+litLen])
-		}
-		d.litPtr += litLen
-		d.dstPos += litLen
-	}
-
-	dist, newOffPtr, err := fastReadVarint(d.offs, d.offPtr)
-	if err != nil {
-		return err
-	}
-	d.offPtr = newOffPtr
-
-	d.rep2 = d.rep1
-	d.rep1 = d.rep0
-	d.rep0 = dist
-
-	srcIdx := d.dstPos - dist
-	if dist >= mLen && mLen >= 32 && srcIdx >= 0 && d.dstPos+mLen <= len(d.outBuf) {
-		copy(d.outBuf[d.dstPos:d.dstPos+mLen], d.outBuf[srcIdx:srcIdx+mLen])
-	} else if dist >= 8 && srcIdx >= 0 && d.dstPos+mLen <= len(d.outBuf) {
-		copyMatch(d.baseDst, d.dstPos, srcIdx, mLen, dist)
-	} else {
-		if err := execMatch(d.baseDst, d.outBuf, d.rawDict, d.dstPos, dist, mLen); err != nil {
-			return err
-		}
-	}
-	d.dstPos += mLen
 	return nil
 }
 
@@ -678,7 +757,7 @@ func (d *frameDecoder) decodeRawDictMatch() error {
 	}
 	d.offPtr = newOffPtr
 
-	if dictOff < 0 || dictOff+mLen > len(d.rawDict) || d.dstPos+mLen > len(d.outBuf) {
+	if mLen <= 0 || dictOff < 0 || dictOff+mLen > len(d.rawDict) || d.dstPos+mLen > len(d.outBuf) {
 		return fmt.Errorf(
 			"%w: raw dict offset out of bounds (off=%d, mLen=%d, dictLen=%d)",
 			ErrCorruptedFrame,
@@ -700,7 +779,7 @@ func (d *frameDecoder) decodeLiteralRun() error {
 	}
 	d.cmdPtr = newCmdPtr
 
-	if d.litPtr+runLen > len(d.lits) || d.dstPos+runLen > len(d.outBuf) {
+	if runLen < 0 || d.litPtr+runLen > len(d.lits) || d.dstPos+runLen > len(d.outBuf) {
 		return fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
 	}
 	copy(d.outBuf[d.dstPos:d.dstPos+runLen], d.lits[d.litPtr:d.litPtr+runLen])
@@ -717,7 +796,7 @@ func (d *frameDecoder) decodeRLE() error {
 	}
 	d.cmdPtr = newCmdPtr
 
-	if d.litPtr >= len(d.lits) || d.dstPos+rleLen > len(d.outBuf) {
+	if rleLen <= 0 || d.litPtr >= len(d.lits) || d.dstPos+rleLen > len(d.outBuf) {
 		return fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
 	}
 	rleByte := d.lits[d.litPtr]
@@ -906,7 +985,7 @@ func (d *frameDecoder) decodeTokenPair() error {
 
 // decodeDirectLiteralRun handles Direct 1-byte Literal Run (1..8 literals) (0xF3..0xFA).
 func (d *frameDecoder) decodeDirectLiteralRun(runLen int) error {
-	if d.litPtr+runLen > len(d.lits) || d.dstPos+runLen > len(d.outBuf) {
+	if runLen <= 0 || d.litPtr+runLen > len(d.lits) || d.dstPos+runLen > len(d.outBuf) {
 		return fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
 	}
 	if d.litPtr+8 <= len(d.lits) && d.dstPos+8 <= len(d.outBuf) {

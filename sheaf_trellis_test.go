@@ -145,8 +145,8 @@ func BenchmarkSheafTrellis_Decompress(b *testing.B) {
 
 			b.SetBytes(int64(len(ds.data)))
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+
+			for b.Loop() {
 				_, err := przm.DecompressSheafTrellis(comp, dst)
 				if err != nil {
 					b.Fatal(err)
@@ -160,8 +160,8 @@ func BenchmarkSheafTrellis_Compress(b *testing.B) {
 	data := bench.GenerateMachineCode(64 * 1024)
 	b.SetBytes(int64(len(data)))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		_ = przm.CompressSheafTrellis(data)
 	}
 }

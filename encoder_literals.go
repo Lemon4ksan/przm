@@ -86,8 +86,8 @@ func packNibblePlanes(lits, out, lowBuf []byte) ([]byte, bool) {
 		i += runLen
 	}
 
-	// Only accept if at least 8% smaller than raw
-	if len(out) < int(float64(n)*0.92) {
+	// Accept if smaller than raw literals
+	if len(out) < n {
 		return out, true
 	}
 	return nil, false
@@ -129,7 +129,7 @@ func packSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 	}
 
 	totalPayload := 24 + maskLen + len(encS) + len(encC)
-	if totalPayload >= int(float64(n)*0.95) {
+	if totalPayload >= n {
 		return nil, false
 	}
 
@@ -165,7 +165,7 @@ func packContextSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 	}
 
 	reqCap := n + 64
-	for c := 0; c < 4; c++ {
+	for c := range 4 {
 		if cap(pad.sheafFBuf[c]) < reqCap {
 			pad.sheafFBuf[c] = bufkit.AlignedBytes(reqCap, bufkit.CacheLineSize)[:0]
 		}
@@ -237,7 +237,7 @@ func packContextSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 	}
 
 	totalPayload := 40 + len(enc0) + len(enc1) + len(enc2) + len(enc3)
-	if totalPayload >= int(float64(n)*0.95) {
+	if totalPayload >= n {
 		return nil, false
 	}
 
@@ -302,13 +302,17 @@ func packLiteralSection(
 		sheafOut, sheafOk := packSheafVANS(lits, pad)
 		ctxSheafOut, ctxSheafOk := packContextSheafVANS(lits, pad)
 		stdOut, stdErr := VANSEncode4x(lits)
-		stdOk := stdErr == nil && len(stdOut) < int(float64(len(lits))*0.95)
+		threshold := len(lits)
+		if level < 4 && !opts.ArchivalMode {
+			threshold = int(float64(len(lits)) * 0.95)
+		}
+		stdOk := stdErr == nil && len(stdOut) < threshold
 
 		if isProbablyText(origSrc) && level <= 3 && sheafOk {
 			vansOut = sheafOut
 			vansBeatsRaw = true
 		} else {
-			bestLen := int(float64(len(lits)) * 0.95)
+			bestLen := threshold
 			if stdOk && len(stdOut) < bestLen {
 				vansOut = stdOut
 				bestLen = len(stdOut)

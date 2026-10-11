@@ -49,7 +49,7 @@ type dpCandidate struct {
 // Optimized to stay strictly in L1 cache during forward DAG relaxation.
 type dpScratchpad struct {
 	window [1024]dpState             // 16 KB Hot Window
-	table3 [4096]int32               // 16 KB Hash Table
+	table3 [32768]int32              // 128 KB Hash Table
 	trace  [BlockSize64K + 1]dpTrace // 768 KB Sequential Trace
 	path   []int32
 	curGen uint32
@@ -122,11 +122,11 @@ func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int) int32 {
 		}
 		// Register conservation bonus for rep0 / rep1:
 		if repCode == 0 {
-			cost -= 8 // 0.5 byte bonus: rep0 is free and conserved
+			cost -= 14 // Strong bonus: rep0 is free and conserved
 		} else if repCode == 1 {
-			cost -= 4 // 0.25 byte bonus
+			cost -= 8 // Strong bonus
 		} else {
-			cost += 4
+			cost += 2
 		}
 	} else {
 		// Explicit match: opcode bytes in Section 2 + offset bytes in Section 3
@@ -138,15 +138,15 @@ func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int) int32 {
 		} else {
 			cost = (3 + offBytes) * 16
 		}
-		// Shannon Distance Entropy Cost Penalty:
+		// Small distance preference penalty:
 		if dist >= 65536 {
-			cost += 40
+			cost += 8
 		} else if dist >= 16384 {
-			cost += 32
+			cost += 6
 		} else if dist >= 1024 {
-			cost += 20
+			cost += 4
 		} else if dist >= 128 {
-			cost += 12
+			cost += 2
 		}
 	}
 	if mLen >= 16 {
@@ -511,6 +511,10 @@ func compressBlockOptimal(
 	var subLenBuf [maxSubLenCandidates]int
 	segStart := 0
 
+	sampleEnd := min(bStart+1024, bStart+bSize)
+	ent := CalculateShannonEntropy(src[bStart:sampleEnd])
+	litUnitCost := int32(max(6, min(14, int(ent*2.0+0.5))))
+
 	for i := 0; i < bSize; i++ {
 		pos := bStart + i
 		wIdx := i & 1023
@@ -523,8 +527,8 @@ func compressBlockOptimal(
 		// Clear the node that is about to enter the far end of the lookahead window
 		dpPad.window[(i+1023)&1023].cost = 1 << 30
 
-		// 1. Literal transition i -> i+1 (cost += 11, matching entropy of compressed literals)
-		litCost := curCost + 11
+		// 1. Literal transition i -> i+1 (cost += litUnitCost, dynamically scaled by block entropy)
+		litCost := curCost + litUnitCost
 		targetLitIdx := (i + 1) & 1023
 		targetLit := &dpPad.window[targetLitIdx]
 		if litCost < targetLit.cost {
@@ -652,6 +656,7 @@ func compressBlockOptimal(
 
 		// Explicit match candidates sorted into 4 varint brackets
 		var bracketBest [4]dpCandidate
+		var bracketClose [4]dpCandidate
 		updateBracket := func(d, l int) {
 			l = min(l, maxL)
 			if d <= 0 || d > windowSize || d == r0 || d == r1 || d == r2 || l < minMatchBase {
@@ -675,8 +680,6 @@ func compressBlockOptimal(
 			minExp := minMatchBase
 			if d >= 16384 {
 				minExp = minMatchBase + 3
-			} else if d >= 1024 {
-				minExp = minMatchBase + 2
 			} else if d >= 128 {
 				minExp = minMatchBase + 1
 			}
@@ -687,6 +690,11 @@ func compressBlockOptimal(
 			lClamped := min(l, dpMaxL)
 			if lClamped > int(bracketBest[b].length) {
 				bracketBest[b] = dpCandidate{dist: int32(d), length: int32(lClamped), repCode: -1}
+			}
+			if lClamped >= 4 && (bracketClose[b].length == 0 || d < int(bracketClose[b].dist)) {
+				if int(bracketBest[b].length) <= 6 || lClamped >= int(bracketBest[b].length)-2 {
+					bracketClose[b] = dpCandidate{dist: int32(d), length: int32(lClamped), repCode: -1}
+				}
 			}
 		}
 
@@ -707,7 +715,7 @@ func compressBlockOptimal(
 		// Secondary 3-byte direct-mapped table
 		if pos+3 <= uSize {
 			h3 := uint32(src[pos]) | (uint32(src[pos+1]) << 8) | (uint32(src[pos+2]) << 16)
-			idx3 := (h3 * 0x1E35A7BD) >> 20
+			idx3 := (h3 * 0x1E35A7BD) >> 17
 			prev3 := int(dpPad.table3[idx3]) - 1
 			dpPad.table3[idx3] = int32(pos + 1)
 			if prev3 >= 0 {
@@ -896,6 +904,11 @@ func compressBlockOptimal(
 				candidates[candCount] = bracketBest[b]
 				candCount++
 			}
+			// if bracketClose[b].length >= int32(minMatchBase) && bracketClose[b].dist != bracketBest[b].dist &&
+			// 	candCount < 30 {
+			// 	candidates[candCount] = bracketClose[b]
+			// 	candCount++
+			// }
 		}
 
 		// 3. Forward Relaxation over sub-lengths S(L)

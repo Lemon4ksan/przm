@@ -353,7 +353,7 @@ func TestPostLZ77Sheaf_ConcurrencyStress(t *testing.T) {
 
 	errCh := make(chan error, workers*itersPerWorker*2)
 
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
@@ -366,7 +366,7 @@ func TestPostLZ77Sheaf_ConcurrencyStress(t *testing.T) {
 
 			dst := make([]byte, len(data)+64)
 
-			for i := 0; i < itersPerWorker; i++ {
+			for i := range itersPerWorker {
 				comp, err := przm.Compress(data, 3)
 				if err != nil {
 					errCh <- fmt.Errorf("worker %d iter %d compress error: %w", workerID, i, err)

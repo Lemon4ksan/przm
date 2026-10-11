@@ -87,11 +87,8 @@ func (e *fastBlockEncoder) compressBlock(blockStart, blockSize int) {
 	consecutiveMisses := 0
 
 	for pos+4 <= blockEnd {
-		maxBlockLen := blockEnd - pos
-		if maxBlockLen > 65535 {
-			maxBlockLen = 65535
-		}
-		currentWord := *(*uint32)(unsafe.Pointer(uintptr(srcPtr) + uintptr(pos)))
+		maxBlockLen := min(blockEnd-pos, 65535)
+		currentWord := *(*uint32)(unsafe.Add(srcPtr, pos))
 		hashPrimary := ((currentWord * 0x1E35A7BD) >> 16) & hashTableMask
 		hashSecondary := ((currentWord * 0x7FEB352D) >> 15) & hashTableMask
 
@@ -108,18 +105,18 @@ func (e *fastBlockEncoder) compressBlock(blockStart, blockSize int) {
 			prevPos := int(candPosPrimary - 1)
 			dist := pos - prevPos
 			if dist > 0 && dist < e.windowSize && prevPos+4 <= len(e.src) {
-				if *(*uint32)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos))) == currentWord {
+				if *(*uint32)(unsafe.Add(srcPtr, prevPos)) == currentWord {
 					bestDistance = dist
 					matchLength = 4
 					for pos+matchLength+8 <= len(e.src) && matchLength+8 <= maxBlockLen {
-						diff := *(*uint64)(unsafe.Pointer(uintptr(srcPtr) + uintptr(pos+matchLength))) ^ *(*uint64)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos+matchLength)))
+						diff := *(*uint64)(unsafe.Add(srcPtr, (pos + matchLength))) ^ *(*uint64)(unsafe.Add(srcPtr, (prevPos + matchLength)))
 						if diff != 0 {
 							matchLength += (bits.TrailingZeros64(diff) >> 3)
 							break
 						}
 						matchLength += 8
 					}
-					for pos+matchLength < len(e.src) && matchLength < maxBlockLen && *(*byte)(unsafe.Pointer(uintptr(srcPtr) + uintptr(pos+matchLength))) == *(*byte)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos+matchLength))) {
+					for pos+matchLength < len(e.src) && matchLength < maxBlockLen && *(*byte)(unsafe.Add(srcPtr, (pos + matchLength))) == *(*byte)(unsafe.Add(srcPtr, (prevPos + matchLength))) {
 						matchLength++
 					}
 				}
@@ -130,17 +127,17 @@ func (e *fastBlockEncoder) compressBlock(blockStart, blockSize int) {
 			prevPos := int(candPosSecondary - 1)
 			dist := pos - prevPos
 			if dist > 0 && dist < e.windowSize && prevPos+4 <= len(e.src) {
-				if *(*uint32)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos))) == currentWord {
+				if *(*uint32)(unsafe.Add(srcPtr, prevPos)) == currentWord {
 					secondaryMatchLength := 4
 					for pos+secondaryMatchLength+8 <= len(e.src) && secondaryMatchLength+8 <= maxBlockLen {
-						diff := *(*uint64)(unsafe.Pointer(uintptr(srcPtr) + uintptr(pos+secondaryMatchLength))) ^ *(*uint64)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos+secondaryMatchLength)))
+						diff := *(*uint64)(unsafe.Add(srcPtr, (pos + secondaryMatchLength))) ^ *(*uint64)(unsafe.Add(srcPtr, (prevPos + secondaryMatchLength)))
 						if diff != 0 {
 							secondaryMatchLength += (bits.TrailingZeros64(diff) >> 3)
 							break
 						}
 						secondaryMatchLength += 8
 					}
-					for pos+secondaryMatchLength < len(e.src) && secondaryMatchLength < maxBlockLen && *(*byte)(unsafe.Pointer(uintptr(srcPtr) + uintptr(pos+secondaryMatchLength))) == *(*byte)(unsafe.Pointer(uintptr(srcPtr) + uintptr(prevPos+secondaryMatchLength))) {
+					for pos+secondaryMatchLength < len(e.src) && secondaryMatchLength < maxBlockLen && *(*byte)(unsafe.Add(srcPtr, (pos + secondaryMatchLength))) == *(*byte)(unsafe.Add(srcPtr, (prevPos + secondaryMatchLength))) {
 						secondaryMatchLength++
 					}
 					if secondaryMatchLength > matchLength {

@@ -734,7 +734,7 @@ func DecodeHuffmanCompact(dst, src []byte, decTable *CanonicalHuffmanTable) (int
 
 	var r HuffBitReader
 	r.Init(src[hdrSize:])
-	for i := 0; i < origLen; i++ {
+	for i := range origLen {
 		e := decTable.Table[r.Peek(MaxHuffBits)]
 		dst[i] = e.Symbol()
 		r.Consume(int(e.CodeLen()))

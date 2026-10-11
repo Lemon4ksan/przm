@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package gpu
 
 import (
@@ -428,7 +432,7 @@ func (g *GPUCompressor) MatchLZ77(src []byte) ([]LZ77Match, GPUProfile, error) {
 
 	numStreams := 4
 	streams := make([]uintptr, numStreams)
-	for i := 0; i < numStreams; i++ {
+	for i := range numStreams {
 		cuStreamCreate.Call(uintptr(unsafe.Pointer(&streams[i])), 0)
 		defer cuStreamDestroy.Call(streams[i])
 	}
@@ -446,7 +450,7 @@ func (g *GPUCompressor) MatchLZ77(src []byte) ([]LZ77Match, GPUProfile, error) {
 	}
 	params := make([]searchParams, numStreams)
 
-	for i := 0; i < numStreams; i++ {
+	for i := range numStreams {
 		offset := i * chunkSize
 		if offset >= n {
 			break
@@ -495,7 +499,7 @@ func (g *GPUCompressor) MatchLZ77(src []byte) ([]LZ77Match, GPUProfile, error) {
 		cuMemcpyDtoHAsync.Call(cOutPtr, cDMatch, uintptr(cLen*4), streams[i])
 	}
 
-	for i := 0; i < numStreams; i++ {
+	for i := range numStreams {
 		cuStreamSynchronize.Call(streams[i])
 	}
 

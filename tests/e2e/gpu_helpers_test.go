@@ -165,7 +165,7 @@ func generateTiledData(tiles int, pattern string) []byte {
 		tile[i] = patBytes[i%len(patBytes)]
 	}
 	buf := make([]byte, tiles*tileSize)
-	for t := 0; t < tiles; t++ {
+	for t := range tiles {
 		copy(buf[t*tileSize:(t+1)*tileSize], tile)
 	}
 	return buf
@@ -184,7 +184,7 @@ func generateRepeatingRunData(length int, b byte) []byte {
 func generateSyntheticJSON(records int) []byte {
 	var sb strings.Builder
 	sb.WriteString("{\"status\":\"ok\",\"timestamp\":1760000000,\"records\":[")
-	for i := 0; i < records; i++ {
+	for i := range records {
 		if i > 0 {
 			sb.WriteString(",")
 		}
@@ -206,7 +206,7 @@ func generateSyntheticSourceCode(lines int) []byte {
 	sb.WriteString(
 		"// Package auto-generated synthetic source corpus for GPU testing\npackage main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n)\n\n",
 	)
-	for i := 0; i < lines; i++ {
+	for i := range lines {
 		fmt.Fprintf(&sb, "func WorkerFunction_%04d(id int, ch chan int, wg *sync.WaitGroup) {\n", i)
 		fmt.Fprintf(&sb, "\tdefer wg.Done()\n\tresult := id * 42 + %d\n", i%100)
 		fmt.Fprintf(&sb, "\tif result > 1000 {\n\t\tch <- result\n\t} else {\n\t\tch <- 0\n\t}\n}\n\n")

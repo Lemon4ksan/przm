@@ -177,8 +177,8 @@ func TestGPUMultiChunkIntegration(t *testing.T) {
 		data[i] = byte((i * 13) % 251)
 	}
 	// Add repeated sections to allow compression
-	for i := 0; i < 4; i++ {
-		copy(data[i*100000:], bytes.Repeat([]byte(fmt.Sprintf("CHUNK_PATTERN_%d_", i)), 2000))
+	for i := range 4 {
+		copy(data[i*100000:], bytes.Repeat(fmt.Appendf(nil, "CHUNK_PATTERN_%d_", i), 2000))
 	}
 
 	opts := przm.CompressOptions{

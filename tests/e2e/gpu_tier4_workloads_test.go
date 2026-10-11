@@ -213,7 +213,7 @@ func TestTier4_GPU_Workload_HardwareFailureUnderLoad(t *testing.T) {
 
 	startGate := make(chan struct{})
 
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
@@ -222,7 +222,7 @@ func TestTier4_GPU_Workload_HardwareFailureUnderLoad(t *testing.T) {
 			// Worker dataset
 			data := generateSyntheticJSON(1000 + workerID*500)
 
-			for i := 0; i < itersPerWorker; i++ {
+			for i := range itersPerWorker {
 				opts := przm.CompressOptions{
 					GPUAcceleration: true,
 					Level:           3,
@@ -369,7 +369,7 @@ func TestTier4_GPU_Workload_MultiChunkArchivalStream(t *testing.T) {
 
 	// 4. Independent chunk verification: extract and decompress each chunk individually
 	offset := przm.StreamHeaderSize
-	for c := 0; c < numChunks; c++ {
+	for c := range numChunks {
 		if offset+4 > len(comp) {
 			t.Fatalf("chunk %d header out of bounds", c)
 		}

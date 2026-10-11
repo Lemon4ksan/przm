@@ -408,7 +408,7 @@ func branchlessInterleave(dst, s, c, mask []byte, origLen int) {
 		m := mask[mPos]
 		mPos++
 
-		for bit := 0; bit < 8; bit++ {
+		for bit := range 8 {
 			if (m>>bit)&1 != 0 {
 				var b byte
 				if sPos < sLen {
@@ -463,7 +463,7 @@ func isProbablyText(src []byte) bool {
 	delims := 0
 	ctrls := 0
 	printables := 0
-	for i := 0; i < sampleLen; i++ {
+	for i := range sampleLen {
 		b := src[i]
 		if b == 0 {
 			return false // Null bytes indicate binary data
