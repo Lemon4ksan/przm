@@ -371,32 +371,42 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 	if hdr.CmdStreamSize == 0 {
 		cmds = nil
 	} else {
-		if sec2Offset+5 > len(src) {
+		if sec2Offset >= len(src) {
 			return nil, fmt.Errorf("%w: truncated section 2 header", ErrCorruptedFrame)
 		}
 		sec2Mode := src[sec2Offset]
-		sec2OrigLen := int(binary.LittleEndian.Uint32(src[sec2Offset+1 : sec2Offset+5]))
-		switch sec2Mode {
-		case ModeFlat:
-			if sec2Offset+5+sec2OrigLen > sec2Offset+hdr.CmdStreamSize || sec2Offset+5+sec2OrigLen > len(src) {
+		if sec2Mode == ModeFlatCompact {
+			if sec2Offset+hdr.CmdStreamSize > len(src) {
 				return nil, fmt.Errorf("%w: truncated flat command stream", ErrCorruptedFrame)
 			}
-			cmds = src[sec2Offset+5 : sec2Offset+5+sec2OrigLen]
-		case ModeHuffman4X, ModeHuffmanCompact, ModeHuffmanCompact4X, ModeRecursiveLZ, ModeVANS4X, ModeSplitVarint, ModeCommandEntropy:
-			if pad == nil {
-				pad = decScratchPool.Get()
-				defer decScratchPool.Put(pad)
+			cmds = src[sec2Offset+1 : sec2Offset+hdr.CmdStreamSize]
+		} else {
+			if sec2Offset+5 > len(src) {
+				return nil, fmt.Errorf("%w: truncated section 2 header", ErrCorruptedFrame)
 			}
-			if cap(pad.cmdBuf) < sec2OrigLen+64 {
-				pad.cmdBuf = bufkit.AlignedBytes(sec2OrigLen+64, bufkit.CacheLineSize)
+			sec2OrigLen := int(binary.LittleEndian.Uint32(src[sec2Offset+1 : sec2Offset+5]))
+			switch sec2Mode {
+			case ModeFlat:
+				if sec2Offset+5+sec2OrigLen > sec2Offset+hdr.CmdStreamSize || sec2Offset+5+sec2OrigLen > len(src) {
+					return nil, fmt.Errorf("%w: truncated flat command stream", ErrCorruptedFrame)
+				}
+				cmds = src[sec2Offset+5 : sec2Offset+5+sec2OrigLen]
+			case ModeHuffman4X, ModeHuffmanCompact, ModeHuffmanCompact4X, ModeRecursiveLZ, ModeVANS4X, ModeSplitVarint, ModeCommandEntropy:
+				if pad == nil {
+					pad = decScratchPool.Get()
+					defer decScratchPool.Put(pad)
+				}
+				if cap(pad.cmdBuf) < sec2OrigLen+64 {
+					pad.cmdBuf = bufkit.AlignedBytes(sec2OrigLen+64, bufkit.CacheLineSize)
+				}
+				n, err := UnpackStream(pad.cmdBuf[:sec2OrigLen], src[sec2Offset:sec2Offset+hdr.CmdStreamSize], &pad.table)
+				if err != nil {
+					return nil, err
+				}
+				cmds = pad.cmdBuf[:n]
+			default:
+				return nil, fmt.Errorf("%w: unknown command stream mode %d", ErrCorruptedFrame, sec2Mode)
 			}
-			n, err := UnpackStream(pad.cmdBuf[:sec2OrigLen], src[sec2Offset:sec2Offset+hdr.CmdStreamSize], &pad.table)
-			if err != nil {
-				return nil, err
-			}
-			cmds = pad.cmdBuf[:n]
-		default:
-			return nil, fmt.Errorf("%w: unknown command stream mode %d", ErrCorruptedFrame, sec2Mode)
 		}
 	}
 
@@ -404,17 +414,20 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 	if hdr.OffsetStreamSize == 0 {
 		offs = nil
 	} else {
-		if sec3Offset+5 > len(src) {
+		if sec3Offset >= len(src) {
 			return nil, fmt.Errorf("%w: truncated section 3 header", ErrCorruptedFrame)
 		}
 		sec3Mode := src[sec3Offset]
-		sec3OrigLen := int(binary.LittleEndian.Uint32(src[sec3Offset+1 : sec3Offset+5]))
-		if sec3Mode == ModeFlat {
-			if sec3Offset+5+sec3OrigLen > sec3Offset+hdr.OffsetStreamSize || sec3Offset+5+sec3OrigLen > len(src) {
+		if sec3Mode == ModeFlatCompact {
+			if sec3Offset+hdr.OffsetStreamSize > len(src) {
 				return nil, fmt.Errorf("%w: truncated flat offset stream", ErrCorruptedFrame)
 			}
-			offs = src[sec3Offset+5 : sec3Offset+5+sec3OrigLen]
-		} else if sec3Mode == ModeHuffman4X || sec3Mode == ModeHuffmanCompact || sec3Mode == ModeHuffmanCompact4X || sec3Mode == ModeRecursiveLZ || sec3Mode == ModeVANS4X || sec3Mode == ModeSplitVarint {
+			offs = src[sec3Offset+1 : sec3Offset+hdr.OffsetStreamSize]
+		} else if sec3Mode == ModeDistancePrefixByte {
+			if sec3Offset+4 > len(src) {
+				return nil, fmt.Errorf("%w: truncated section 3 header", ErrCorruptedFrame)
+			}
+			sec3OrigLen := int(src[sec3Offset+1])
 			if pad == nil {
 				pad = decScratchPool.Get()
 				defer decScratchPool.Put(pad)
@@ -431,7 +444,11 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 				return nil, err
 			}
 			offs = pad.offBuf[:n]
-		} else if sec3Mode == ModeDistancePrefix {
+		} else if sec3Mode == ModeDistancePrefixCompact {
+			if sec3Offset+7 > len(src) {
+				return nil, fmt.Errorf("%w: truncated section 3 header", ErrCorruptedFrame)
+			}
+			sec3OrigLen := int(binary.LittleEndian.Uint16(src[sec3Offset+1 : sec3Offset+3]))
 			if pad == nil {
 				pad = decScratchPool.Get()
 				defer decScratchPool.Put(pad)
@@ -439,18 +456,63 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 			if cap(pad.offBuf) < sec3OrigLen+64 {
 				pad.offBuf = bufkit.AlignedBytes(sec3OrigLen+64, bufkit.CacheLineSize)
 			}
-			n, err := DecodeDistancePrefix(
+			n, err := UnpackStream(
 				pad.offBuf[:sec3OrigLen],
 				src[sec3Offset:sec3Offset+hdr.OffsetStreamSize],
 				&pad.table,
-				pad.scanlineBuf,
 			)
 			if err != nil {
 				return nil, err
 			}
 			offs = pad.offBuf[:n]
 		} else {
-			return nil, fmt.Errorf("%w: unknown offset stream mode %d", ErrCorruptedFrame, sec3Mode)
+			if sec3Offset+5 > len(src) {
+				return nil, fmt.Errorf("%w: truncated section 3 header", ErrCorruptedFrame)
+			}
+			sec3OrigLen := int(binary.LittleEndian.Uint32(src[sec3Offset+1 : sec3Offset+5]))
+			if sec3Mode == ModeFlat {
+				if sec3Offset+5+sec3OrigLen > sec3Offset+hdr.OffsetStreamSize || sec3Offset+5+sec3OrigLen > len(src) {
+					return nil, fmt.Errorf("%w: truncated flat offset stream", ErrCorruptedFrame)
+				}
+				offs = src[sec3Offset+5 : sec3Offset+5+sec3OrigLen]
+			} else if sec3Mode == ModeHuffman4X || sec3Mode == ModeHuffmanCompact || sec3Mode == ModeHuffmanCompact4X || sec3Mode == ModeRecursiveLZ || sec3Mode == ModeVANS4X || sec3Mode == ModeSplitVarint {
+				if pad == nil {
+					pad = decScratchPool.Get()
+					defer decScratchPool.Put(pad)
+				}
+				if cap(pad.offBuf) < sec3OrigLen+64 {
+					pad.offBuf = bufkit.AlignedBytes(sec3OrigLen+64, bufkit.CacheLineSize)
+				}
+				n, err := UnpackStream(
+					pad.offBuf[:sec3OrigLen],
+					src[sec3Offset:sec3Offset+hdr.OffsetStreamSize],
+					&pad.table,
+				)
+				if err != nil {
+					return nil, err
+				}
+				offs = pad.offBuf[:n]
+			} else if sec3Mode == ModeDistancePrefix {
+				if pad == nil {
+					pad = decScratchPool.Get()
+					defer decScratchPool.Put(pad)
+				}
+				if cap(pad.offBuf) < sec3OrigLen+64 {
+					pad.offBuf = bufkit.AlignedBytes(sec3OrigLen+64, bufkit.CacheLineSize)
+				}
+				n, err := DecodeDistancePrefix(
+					pad.offBuf[:sec3OrigLen],
+					src[sec3Offset:sec3Offset+hdr.OffsetStreamSize],
+					&pad.table,
+					pad.scanlineBuf,
+				)
+				if err != nil {
+					return nil, err
+				}
+				offs = pad.offBuf[:n]
+			} else {
+				return nil, fmt.Errorf("%w: unknown offset stream mode %d", ErrCorruptedFrame, sec3Mode)
+			}
 		}
 	}
 

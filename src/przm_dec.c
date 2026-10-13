@@ -1140,6 +1140,75 @@ static inline uint8_t przm_ctx_var(uint8_t prev) {
     return 7;
 }
 
+#include "przm_dist_tables.h"
+
+static VANSModel przm_dist_static_models4[4];
+static int przm_dist_static_models4_initialized = 0;
+
+static void przm_init_dist_static_models4(void) {
+    if (przm_dist_static_models4_initialized) return;
+
+    for (int c = 0; c < 4; c++) {
+        uint32_t cdf = 0;
+        for (int s = 0; s < 64; s++) {
+            uint16_t f = przm_dist_static_freq4[c][s];
+            przm_dist_static_models4[c].freq[s] = f;
+            przm_dist_static_models4[c].cdf[s] = (uint16_t)cdf;
+            for (uint32_t j = 0; j < f; j++) {
+                przm_dist_static_models4[c].lookup[cdf + j] = (uint8_t)s;
+            }
+            cdf += f;
+        }
+        for (int s = 64; s < 256; s++) {
+            przm_dist_static_models4[c].freq[s] = 0;
+            przm_dist_static_models4[c].cdf[s] = (uint16_t)cdf;
+        }
+        przm_dist_static_models4[c].cdf[256] = (uint16_t)cdf;
+    }
+
+    przm_dist_static_models4_initialized = 1;
+}
+
+static inline int przm_get_dist_ctx(uint8_t prev) {
+    if (prev < 6) return 0;
+    if (prev < 14) return 1;
+    if (prev < 26) return 2;
+    return 3;
+}
+
+static int64_t przm_dist_vans_decode(const uint8_t* src, size_t src_len, uint8_t* dst, uint32_t orig_len) {
+    if (src == NULL || src_len < 5) return PRZM_ERR_CORRUPTED_FRAME;
+    if (src[0] != PRZM_ENTROPY_MODE_DIST_CLUSTERED_VANS_COMPACT) return PRZM_ERR_CORRUPTED_FRAME;
+    if (orig_len == 0) return 0;
+
+    przm_init_dist_static_models4();
+
+    uint32_t state = read_u32_le(src + 1);
+    size_t stream_ptr = 5;
+    uint8_t prev = 0;
+
+    for (uint32_t i = 0; i < orig_len; i++) {
+        int ctx = przm_get_dist_ctx(prev);
+        const VANSModel* m = &przm_dist_static_models4[ctx];
+
+        uint32_t slot = state & (VANS_M - 1);
+        uint8_t s = m->lookup[slot];
+        dst[i] = s;
+        prev = s;
+
+        uint32_t f = m->freq[s];
+        uint32_t c = m->cdf[s];
+        state = f * (state >> 12) + (slot - c);
+
+        while (state < VANS_L) {
+            if (stream_ptr >= src_len) return PRZM_ERR_CORRUPTED_FRAME;
+            state = (state << 8) | (uint32_t)src[stream_ptr++];
+        }
+    }
+
+    return (int64_t)orig_len;
+}
+
 static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_t orig_len) {
     if (src_len < 8) return PRZM_ERR_CORRUPTED_FRAME;
     if (src[0] != PRZM_MAGIC_VANS_0 || src[1] != PRZM_MAGIC_VANS_1 || src[2] != PRZM_VERSION_1) {
@@ -3130,33 +3199,33 @@ static int64_t przm_unpack_stream(const uint8_t* src, size_t src_len,
                                   uint8_t* dst, size_t dst_cap,
                                   przm_canonical_huff_table_t* dec_table);
 
-static int64_t distance_prefix_decode(const uint8_t* src, size_t src_len,
-                                      uint8_t* dst, size_t dst_cap,
-                                      przm_canonical_huff_table_t* dec_table,
-                                      uint8_t* scratch_codes, size_t scratch_cap) {
-    if (src == NULL || src_len < 13) return PRZM_ERR_CORRUPTED_FRAME;
-    if (src[0] != PRZM_ENTROPY_MODE_DISTANCE_PREFIX) return PRZM_ERR_CORRUPTED_FRAME;
-
-    uint32_t orig_varint_len = read_u32_le(src + 1);
-    uint32_t match_count = read_u32_le(src + 5);
-    uint32_t code_stream_len = read_u32_le(src + 9);
-
+static int64_t distance_prefix_decode_inner(uint32_t orig_varint_len,
+                                            uint32_t match_count,
+                                            uint32_t code_stream_len,
+                                            const uint8_t* payload, size_t payload_len,
+                                            uint8_t* dst, size_t dst_cap,
+                                            przm_canonical_huff_table_t* dec_table,
+                                            uint8_t* scratch_codes, size_t scratch_cap) {
     if (orig_varint_len == 0 || match_count == 0) return 0;
     if (dst_cap < (size_t)orig_varint_len) return PRZM_ERR_BUFFER_TOO_SMALL;
     if (scratch_cap < (size_t)match_count) return PRZM_ERR_BUFFER_TOO_SMALL;
-    if (13 + (size_t)code_stream_len > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+    if ((size_t)code_stream_len > payload_len) return PRZM_ERR_CORRUPTED_FRAME;
 
-    /* 1. Decode distance codes via stream unpack (supports Compact Huffman, Flat, etc.) */
-    int64_t dec_codes = przm_unpack_stream(src + 13, code_stream_len,
-                                           scratch_codes, scratch_cap, dec_table);
+    /* 1. Decode distance codes via Clustered V-ANS or standard stream unpack */
+    int64_t dec_codes;
+    if (code_stream_len > 0 && payload[0] == PRZM_ENTROPY_MODE_DIST_CLUSTERED_VANS_COMPACT) {
+        dec_codes = przm_dist_vans_decode(payload, code_stream_len, scratch_codes, match_count);
+    } else {
+        dec_codes = przm_unpack_stream(payload, code_stream_len, scratch_codes, scratch_cap, dec_table);
+    }
     if (dec_codes < 0 || (uint32_t)dec_codes != match_count) {
         return PRZM_ERR_CORRUPTED_FRAME;
     }
 
     /* 2. Read extra bits and reconstruct LEB128 varints */
     przm_huff_bit_reader_t r;
-    size_t extra_bits_offset = 13 + (size_t)code_stream_len;
-    huff_reader_init(&r, src + extra_bits_offset, src_len - extra_bits_offset);
+    size_t extra_bits_offset = (size_t)code_stream_len;
+    huff_reader_init(&r, payload + extra_bits_offset, payload_len - extra_bits_offset);
 
     size_t dst_pos = 0;
     for (size_t i = 0; i < (size_t)match_count; i++) {
@@ -3205,11 +3274,63 @@ static int64_t distance_prefix_decode(const uint8_t* src, size_t src_len,
     return (int64_t)dst_pos;
 }
 
+static int64_t distance_prefix_decode(const uint8_t* src, size_t src_len,
+                                      uint8_t* dst, size_t dst_cap,
+                                      przm_canonical_huff_table_t* dec_table,
+                                      uint8_t* scratch_codes, size_t scratch_cap) {
+    if (src == NULL || src_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+    uint8_t mode = src[0];
+    if (mode == PRZM_ENTROPY_MODE_DISTANCE_PREFIX_BYTE) {
+        if (src_len < 4) return PRZM_ERR_CORRUPTED_FRAME;
+        uint32_t orig_varint_len = src[1];
+        uint32_t match_count = src[2];
+        uint32_t code_stream_len = src[3];
+        return distance_prefix_decode_inner(orig_varint_len, match_count, code_stream_len,
+                                            src + 4, src_len - 4, dst, dst_cap, dec_table,
+                                            scratch_codes, scratch_cap);
+    }
+    if (mode == PRZM_ENTROPY_MODE_DISTANCE_PREFIX_COMPACT) {
+        if (src_len < 7) return PRZM_ERR_CORRUPTED_FRAME;
+        uint32_t orig_varint_len = read_u16_le(src + 1);
+        uint32_t match_count = read_u16_le(src + 3);
+        uint32_t code_stream_len = read_u16_le(src + 5);
+        return distance_prefix_decode_inner(orig_varint_len, match_count, code_stream_len,
+                                            src + 7, src_len - 7, dst, dst_cap, dec_table,
+                                            scratch_codes, scratch_cap);
+    }
+    if (mode == PRZM_ENTROPY_MODE_DISTANCE_PREFIX) {
+        if (src_len < 13) return PRZM_ERR_CORRUPTED_FRAME;
+        uint32_t orig_varint_len = read_u32_le(src + 1);
+        uint32_t match_count = read_u32_le(src + 5);
+        uint32_t code_stream_len = read_u32_le(src + 9);
+        return distance_prefix_decode_inner(orig_varint_len, match_count, code_stream_len,
+                                            src + 13, src_len - 13, dst, dst_cap, dec_table,
+                                            scratch_codes, scratch_cap);
+    }
+    return PRZM_ERR_CORRUPTED_FRAME;
+}
+
 static int64_t przm_unpack_stream(const uint8_t* src, size_t src_len,
                                   uint8_t* dst, size_t dst_cap,
                                   przm_canonical_huff_table_t* dec_table) {
-    if (src == NULL || src_len < 5) return PRZM_ERR_CORRUPTED_FRAME;
+    if (src == NULL || src_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
     uint8_t mode = src[0];
+
+    if (mode == PRZM_ENTROPY_MODE_FLAT_COMPACT) {
+        size_t orig_len = src_len - 1;
+        if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        if (dst_cap < orig_len) return PRZM_ERR_BUFFER_TOO_SMALL;
+        memcpy(dst, src + 1, orig_len);
+        return (int64_t)orig_len;
+    }
+
+    if (mode == PRZM_ENTROPY_MODE_DISTANCE_PREFIX_BYTE ||
+        mode == PRZM_ENTROPY_MODE_DISTANCE_PREFIX_COMPACT) {
+        return distance_prefix_decode(src, src_len, dst, dst_cap, dec_table,
+                                      tls_archival_scratch, sizeof(tls_archival_scratch));
+    }
+
+    if (src_len < 5) return PRZM_ERR_CORRUPTED_FRAME;
     uint32_t orig_len = read_u32_le(src + 1);
     if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
     if (dst_cap < (size_t)orig_len) return PRZM_ERR_BUFFER_TOO_SMALL;
@@ -3768,8 +3889,15 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
     const uint8_t* cmds = NULL;
     size_t cmds_len = 0;
     if (cmd_size > 0) {
-        if (sec2_offset + 5 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
-        uint32_t sec2_orig_len = read_u32_le(src + sec2_offset + 1);
+        if (sec2_offset >= src_len) return PRZM_ERR_CORRUPTED_FRAME;
+        uint8_t m = src[sec2_offset];
+        uint32_t sec2_orig_len;
+        if (m == PRZM_ENTROPY_MODE_FLAT_COMPACT) {
+            sec2_orig_len = (uint32_t)(cmd_size - 1);
+        } else {
+            if (sec2_offset + 5 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+            sec2_orig_len = read_u32_le(src + sec2_offset + 1);
+        }
         if (sec2_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
         int64_t dec_n = przm_unpack_stream(src + sec2_offset, cmd_size, tls_cmd_scratch, sizeof(tls_cmd_scratch), &tls_huff_table);
         if (dec_n < 0 || (uint32_t)dec_n != sec2_orig_len) return (dec_n < 0) ? (int)dec_n : PRZM_ERR_CORRUPTED_FRAME;
@@ -3781,8 +3909,21 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
     const uint8_t* offs = NULL;
     size_t offs_len = 0;
     if (off_size > 0) {
-        if (sec3_offset + 5 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
-        uint32_t sec3_orig_len = read_u32_le(src + sec3_offset + 1);
+        if (sec3_offset >= src_len) return PRZM_ERR_CORRUPTED_FRAME;
+        uint8_t m = src[sec3_offset];
+        uint32_t sec3_orig_len;
+        if (m == PRZM_ENTROPY_MODE_FLAT_COMPACT) {
+            sec3_orig_len = (uint32_t)(off_size - 1);
+        } else if (m == PRZM_ENTROPY_MODE_DISTANCE_PREFIX_BYTE) {
+            if (sec3_offset + 4 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+            sec3_orig_len = src[sec3_offset + 1];
+        } else if (m == PRZM_ENTROPY_MODE_DISTANCE_PREFIX_COMPACT) {
+            if (sec3_offset + 7 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+            sec3_orig_len = read_u16_le(src + sec3_offset + 1);
+        } else {
+            if (sec3_offset + 5 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+            sec3_orig_len = read_u32_le(src + sec3_offset + 1);
+        }
         if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
         int64_t dec_n = przm_unpack_stream(src + sec3_offset, off_size, tls_off_scratch, sizeof(tls_off_scratch), &tls_huff_table);
         if (dec_n < 0 || (uint32_t)dec_n != sec3_orig_len) return (dec_n < 0) ? (int)dec_n : PRZM_ERR_CORRUPTED_FRAME;

@@ -589,11 +589,12 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			clear(dpPad.macro8[:])
 			clear(dpPad.dagProd[:])
 			clear(dpPad.dagProd32[:])
+			populateMacroTables(src, dictLen, dpPad, pad, windowLog, sp1M, sp8M)
 
 			bStart := dictLen
 			for bStart < uSize {
 				bSize := min(uSize-bStart, BlockSize64K)
-				compressBlockOptimal(
+				consumed := compressBlockOptimal(
 					src,
 					bStart,
 					bSize,
@@ -616,7 +617,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					hasStride,
 					stride,
 				)
-				bStart += bSize
+				bStart += consumed
 			}
 		} else {
 			compressFastOrGreedy(dictLen, origUSize)
@@ -652,6 +653,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			}
 
 			bSize := min(uSize-bStart, DedupBlockSize)
+			consumed := bSize
 			if bSize == DedupBlockSize && blockIdx > 0 {
 				h := Hash64KBlock(src[bStart : bStart+DedupBlockSize])
 				if matchedIdx, found := pad.dedup.Probe(h, src, bStart); found {
@@ -663,7 +665,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					continue
 				}
 				if dpPad != nil {
-					compressBlockOptimal(
+					consumed = compressBlockOptimal(
 						src,
 						bStart,
 						bSize,
@@ -692,7 +694,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 				pad.dedup.Insert(h, blockIdx)
 			} else if bSize == DedupBlockSize && blockIdx == 0 {
 				if dpPad != nil {
-					compressBlockOptimal(
+					consumed = compressBlockOptimal(
 						src,
 						bStart,
 						bSize,
@@ -723,7 +725,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			} else {
 				// Tail block (< 65536 bytes) compressed via standard LZ77
 				if dpPad != nil {
-					compressBlockOptimal(
+					consumed = compressBlockOptimal(
 						src,
 						bStart,
 						bSize,
@@ -750,7 +752,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					compressBlockGreedyOrSLP(bStart, bSize)
 				}
 			}
-			bStart += bSize
+			bStart += consumed
 			blockIdx++
 		}
 	} else {
@@ -766,7 +768,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			bStart := 0
 			for bStart < uSize {
 				bSize := min(uSize-bStart, BlockSize64K)
-				compressBlockOptimal(
+				consumed := compressBlockOptimal(
 					src,
 					bStart,
 					bSize,
@@ -789,7 +791,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					hasStride,
 					stride,
 				)
-				bStart += bSize
+				bStart += consumed
 			}
 		} else {
 			compressBlockGreedyOrSLP(0, uSize)

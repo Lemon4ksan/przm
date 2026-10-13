@@ -24,8 +24,12 @@ const (
 	ModeRecursiveLZ      uint8 = 4 // Recursive PRZM LZ77 frame (for structured, highly-repetitive command streams)
 	ModeVANS4X           uint8 = 5 // 4-way interleaved Vector-State ANS coder
 	ModeDistancePrefix   uint8 = 6 // Log2 Distance Prefix Codebook (Entropy-coded DistanceCode + Raw ExtraBits)
-	ModeSplitVarint      uint8 = 7 // De-interleaved LEB128 Varint Stream (LSB channel + MSB continuation channel)
-	ModeCommandEntropy   uint8 = 8 // 3-way structural splitting of command stream (Opcodes, Meta, Varints)
+	ModeSplitVarint               uint8 = 7  // De-interleaved LEB128 Varint Stream (LSB channel + MSB continuation channel)
+	ModeCommandEntropy            uint8 = 8  // 3-way structural splitting of command stream (Opcodes, Meta, Varints)
+	ModeFlatCompact               uint8 = 9  // Compact 1-byte header raw uncompressed payload (origLen = streamLen - 1)
+	ModeDistancePrefixCompact     uint8 = 10 // 7-byte header Distance Prefix (uint16 origLen, matchCount, codeStreamLen)
+	ModeDistancePrefixByte        uint8 = 11 // 4-byte header Distance Prefix (uint8 origLen, matchCount, codeStreamLen)
+	ModeDistClusteredVANSCompact  uint8 = 12 // 5-byte header 4-context Clustered V-ANS for Distance Codes (1B mode, 4B state)
 )
 
 var ErrCorruptedStream = errors.New("entropy_pack: corrupted stream")
@@ -1280,10 +1284,44 @@ var cmdSplitScratchPool = generic.NewPool(func() *[3][]byte {
 
 // UnpackStream decompresses a packed stream into dst with ZERO heap allocations.
 func UnpackStream(dst, src []byte, scratchTable *CanonicalHuffmanTable) (int, error) {
-	if len(src) < 5 {
+	if len(src) == 0 {
 		return 0, ErrCorruptedStream
 	}
 	mode := src[0]
+	if mode == ModeFlatCompact {
+		origLen := len(src) - 1
+		if len(dst) < origLen {
+			return 0, ErrBufferTooSmall
+		}
+		copy(dst[:origLen], src[1:])
+		return origLen, nil
+	}
+	if mode == ModeDistancePrefixByte {
+		if len(src) < 4 {
+			return 0, ErrCorruptedStream
+		}
+		origVarintLen := int(src[1])
+		matchCount := int(src[2])
+		codeStreamLen := int(src[3])
+		scratchBuf := distCodeScratchPool.Get()
+		defer distCodeScratchPool.Put(scratchBuf)
+		return decodeDistancePrefixPayload(dst, origVarintLen, matchCount, codeStreamLen, src[4:], scratchTable, *scratchBuf)
+	}
+	if mode == ModeDistancePrefixCompact {
+		if len(src) < 7 {
+			return 0, ErrCorruptedStream
+		}
+		origVarintLen := int(binary.LittleEndian.Uint16(src[1:3]))
+		matchCount := int(binary.LittleEndian.Uint16(src[3:5]))
+		codeStreamLen := int(binary.LittleEndian.Uint16(src[5:7]))
+		scratchBuf := distCodeScratchPool.Get()
+		defer distCodeScratchPool.Put(scratchBuf)
+		return decodeDistancePrefixPayload(dst, origVarintLen, matchCount, codeStreamLen, src[7:], scratchTable, *scratchBuf)
+	}
+
+	if len(src) < 5 {
+		return 0, ErrCorruptedStream
+	}
 	origLen := int(binary.LittleEndian.Uint32(src[1:5]))
 	if len(dst) < origLen {
 		return 0, ErrBufferTooSmall
@@ -1569,6 +1607,11 @@ func EncodeDistancePrefix(varints []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	bestCodes := packedCodes
+	vansCodes := EncodeDistClusteredVANS(codes)
+	if len(vansCodes) < len(bestCodes) {
+		bestCodes = vansCodes
+	}
 
 	extraBytesCap := (totalExtraBits + 7) / 8
 	var writer HuffBitWriter
@@ -1581,49 +1624,70 @@ func EncodeDistancePrefix(varints []byte) ([]byte, error) {
 	}
 	extraBitsBuf := writer.Flush()
 
-	codeStreamLen := len(packedCodes)
-	totalLen := 13 + codeStreamLen + len(extraBitsBuf)
-	out := make([]byte, totalLen)
-	out[0] = ModeDistancePrefix
-	binary.LittleEndian.PutUint32(out[1:5], uint32(origVarintLen))
-	binary.LittleEndian.PutUint32(out[5:9], uint32(matchCount))
-	binary.LittleEndian.PutUint32(out[9:13], uint32(codeStreamLen))
-	copy(out[13:13+codeStreamLen], packedCodes)
-	copy(out[13+codeStreamLen:], extraBitsBuf)
-
-	return out, nil
+	codeStreamLen := len(bestCodes)
+	if origVarintLen <= 255 && matchCount <= 255 && codeStreamLen <= 255 {
+		totalLen := 4 + codeStreamLen + len(extraBitsBuf)
+		out := make([]byte, totalLen)
+		out[0] = ModeDistancePrefixByte
+		out[1] = uint8(origVarintLen)
+		out[2] = uint8(matchCount)
+		out[3] = uint8(codeStreamLen)
+		copy(out[4:4+codeStreamLen], bestCodes)
+		copy(out[4+codeStreamLen:], extraBitsBuf)
+		return out, nil
+	} else if origVarintLen <= 65535 && matchCount <= 65535 && codeStreamLen <= 65535 {
+		totalLen := 7 + codeStreamLen + len(extraBitsBuf)
+		out := make([]byte, totalLen)
+		out[0] = ModeDistancePrefixCompact
+		binary.LittleEndian.PutUint16(out[1:3], uint16(origVarintLen))
+		binary.LittleEndian.PutUint16(out[3:5], uint16(matchCount))
+		binary.LittleEndian.PutUint16(out[5:7], uint16(codeStreamLen))
+		copy(out[7:7+codeStreamLen], bestCodes)
+		copy(out[7+codeStreamLen:], extraBitsBuf)
+		return out, nil
+	} else {
+		totalLen := 13 + codeStreamLen + len(extraBitsBuf)
+		out := make([]byte, totalLen)
+		out[0] = ModeDistancePrefix
+		binary.LittleEndian.PutUint32(out[1:5], uint32(origVarintLen))
+		binary.LittleEndian.PutUint32(out[5:9], uint32(matchCount))
+		binary.LittleEndian.PutUint32(out[9:13], uint32(codeStreamLen))
+		copy(out[13:13+codeStreamLen], bestCodes)
+		copy(out[13+codeStreamLen:], extraBitsBuf)
+		return out, nil
+	}
 }
 
-// DecodeDistancePrefix decodes a ModeDistancePrefix stream into dst with zero heap allocations.
-func DecodeDistancePrefix(dst []byte, src []byte, scratchTable *CanonicalHuffmanTable, scratchCodes []byte) (int, error) {
-	if len(src) < 13 {
-		return 0, ErrCorruptedStream
+func decodeDistancePrefixPayload(dst []byte, origVarintLen, matchCount, codeStreamLen int, payload []byte, scratchTable *CanonicalHuffmanTable, scratchCodes []byte) (int, error) {
+	if origVarintLen == 0 || matchCount == 0 {
+		return 0, nil
 	}
-	if src[0] != ModeDistancePrefix {
-		return 0, ErrCorruptedStream
-	}
-	origVarintLen := int(binary.LittleEndian.Uint32(src[1:5]))
-	matchCount := int(binary.LittleEndian.Uint32(src[5:9]))
-	codeStreamLen := int(binary.LittleEndian.Uint32(src[9:13]))
-
 	if origVarintLen > len(dst) {
 		return 0, ErrBufferTooSmall
 	}
-	if 13+codeStreamLen > len(src) {
+	if codeStreamLen > len(payload) {
 		return 0, ErrCorruptedStream
 	}
-
 	if len(scratchCodes) < matchCount {
 		return 0, ErrBufferTooSmall
 	}
+
 	codes := scratchCodes[:matchCount]
-	nCodes, err := UnpackStream(codes, src[13:13+codeStreamLen], scratchTable)
-	if err != nil || nCodes != matchCount {
-		return 0, ErrCorruptedStream
+	codeStream := payload[:codeStreamLen]
+	if len(codeStream) > 0 && codeStream[0] == ModeDistClusteredVANSCompact {
+		nCodes, err := DecodeDistClusteredVANSTo(codes, codeStream, matchCount)
+		if err != nil || nCodes != matchCount {
+			return 0, ErrCorruptedStream
+		}
+	} else {
+		nCodes, err := UnpackStream(codes, codeStream, scratchTable)
+		if err != nil || nCodes != matchCount {
+			return 0, ErrCorruptedStream
+		}
 	}
 
 	var reader HuffBitReader
-	reader.Init(src[13+codeStreamLen:])
+	reader.Init(payload[codeStreamLen:])
 
 	dstPos := 0
 	for i := 0; i < matchCount; i++ {
@@ -1688,11 +1752,47 @@ func DecodeDistancePrefix(dst []byte, src []byte, scratchTable *CanonicalHuffman
 	return dstPos, nil
 }
 
+// DecodeDistancePrefix decodes a ModeDistancePrefix (standard, compact, or byte) stream into dst with zero heap allocations.
+func DecodeDistancePrefix(dst []byte, src []byte, scratchTable *CanonicalHuffmanTable, scratchCodes []byte) (int, error) {
+	if len(src) == 0 {
+		return 0, ErrCorruptedStream
+	}
+	mode := src[0]
+	if mode == ModeDistancePrefixByte {
+		if len(src) < 4 {
+			return 0, ErrCorruptedStream
+		}
+		origVarintLen := int(src[1])
+		matchCount := int(src[2])
+		codeStreamLen := int(src[3])
+		return decodeDistancePrefixPayload(dst, origVarintLen, matchCount, codeStreamLen, src[4:], scratchTable, scratchCodes)
+	}
+	if mode == ModeDistancePrefixCompact {
+		if len(src) < 7 {
+			return 0, ErrCorruptedStream
+		}
+		origVarintLen := int(binary.LittleEndian.Uint16(src[1:3]))
+		matchCount := int(binary.LittleEndian.Uint16(src[3:5]))
+		codeStreamLen := int(binary.LittleEndian.Uint16(src[5:7]))
+		return decodeDistancePrefixPayload(dst, origVarintLen, matchCount, codeStreamLen, src[7:], scratchTable, scratchCodes)
+	}
+	if mode == ModeDistancePrefix {
+		if len(src) < 13 {
+			return 0, ErrCorruptedStream
+		}
+		origVarintLen := int(binary.LittleEndian.Uint32(src[1:5]))
+		matchCount := int(binary.LittleEndian.Uint32(src[5:9]))
+		codeStreamLen := int(binary.LittleEndian.Uint32(src[9:13]))
+		return decodeDistancePrefixPayload(dst, origVarintLen, matchCount, codeStreamLen, src[13:], scratchTable, scratchCodes)
+	}
+	return 0, ErrCorruptedStream
+}
+
 // PackOffsetStream encodes Section 3 match offsets.
 // Evaluates ModeDistancePrefix against standard PackStream and selects the smallest.
 func PackOffsetStream(src []byte, prefMode uint8) ([]byte, error) {
 	if len(src) == 0 {
-		return []byte{ModeFlat, 0, 0, 0, 0}, nil
+		return []byte{ModeFlatCompact}, nil
 	}
 	var best []byte
 	if prefMode != ModeFlat && len(src) >= 8 {
@@ -1706,6 +1806,14 @@ func PackOffsetStream(src []byte, prefMode uint8) ([]byte, error) {
 			return best, nil
 		}
 		return nil, err
+	}
+	if std[0] == ModeFlat {
+		flatCompact := make([]byte, 1+len(src))
+		flatCompact[0] = ModeFlatCompact
+		copy(flatCompact[1:], src)
+		if len(flatCompact) < len(std) {
+			std = flatCompact
+		}
 	}
 	if best == nil || len(std) < len(best) {
 		return std, nil
@@ -2264,7 +2372,7 @@ func EncodeCommandSplit(src []byte, prefMode uint8) ([]byte, error) {
 // Evaluates ModeCommandEntropy against standard PackStream and selects the smallest.
 func PackCommandStream(src []byte, prefMode uint8) ([]byte, error) {
 	if len(src) == 0 {
-		return []byte{ModeFlat, 0, 0, 0, 0}, nil
+		return []byte{ModeFlatCompact}, nil
 	}
 	var best []byte
 	if prefMode != ModeFlat && len(src) >= 64 {
@@ -2279,10 +2387,19 @@ func PackCommandStream(src []byte, prefMode uint8) ([]byte, error) {
 		}
 		return nil, err
 	}
+	if std[0] == ModeFlat {
+		flatCompact := make([]byte, 1+len(src))
+		flatCompact[0] = ModeFlatCompact
+		copy(flatCompact[1:], src)
+		if len(flatCompact) < len(std) {
+			std = flatCompact
+		}
+	}
 	if best == nil || len(std) < len(best) {
 		return std, nil
 	}
 	return best, nil
 }
+
 
 

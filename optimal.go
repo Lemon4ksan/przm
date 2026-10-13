@@ -355,6 +355,66 @@ func insertHashPRZM(
 	}
 }
 
+// populateMacroTables indexes dictionary history into all DP scratchpad macro tables.
+func populateMacroTables(
+	src []byte,
+	dictLen int,
+	dpPad *dpScratchpad,
+	pad *scratchpad,
+	windowLog int,
+	sp1M *HenselScratchpad1M,
+	sp8M *HenselScratchpad8M,
+) {
+	if dictLen <= 0 || dpPad == nil {
+		return
+	}
+	for pos := 0; pos < dictLen; pos++ {
+		insertHashPRZM(src, pos, dictLen, pad, windowLog, sp1M, sp8M)
+		if pos+3 <= dictLen {
+			h3 := uint32(src[pos]) | (uint32(src[pos+1]) << 8) | (uint32(src[pos+2]) << 16)
+			base3 := int(((h3 * 0x1E35A7BD) >> 16) & 0xFFFF) * 2
+			if int(dpPad.table3[base3])-1 != pos {
+				dpPad.table3[base3+1] = dpPad.table3[base3]
+				dpPad.table3[base3] = int32(pos + 1)
+			}
+		}
+		if pos+8 <= dictLen {
+			w8 := binary.LittleEndian.Uint64(src[pos : pos+8])
+			h8 := uint32((w8 * 0x517cc1b727220a95) >> 48)
+			base8 := int(h8&0xFFFF) * 8
+			if int(dpPad.macro8[base8])-1 != pos {
+				for s := 7; s > 0; s-- {
+					dpPad.macro8[base8+s] = dpPad.macro8[base8+s-1]
+				}
+				dpPad.macro8[base8] = int32(pos + 1)
+			}
+		}
+		if pos+16 <= dictLen {
+			w16_0 := binary.LittleEndian.Uint64(src[pos : pos+8])
+			w16_1 := binary.LittleEndian.Uint64(src[pos+8 : pos+16])
+			h16 := uint32(((w16_0 ^ (w16_1 * 0x9E3779B97F4A7C15)) * 0x517cc1b727220a95) >> 48)
+			base16 := int(h16&0xFFFF) * 2
+			if int(dpPad.dagProd[base16])-1 != pos {
+				dpPad.dagProd[base16+1] = dpPad.dagProd[base16]
+				dpPad.dagProd[base16] = int32(pos + 1)
+			}
+		}
+		if pos+32 <= dictLen {
+			w32_0 := binary.LittleEndian.Uint64(src[pos : pos+8])
+			w32_1 := binary.LittleEndian.Uint64(src[pos+8 : pos+16])
+			w32_2 := binary.LittleEndian.Uint64(src[pos+16 : pos+24])
+			w32_3 := binary.LittleEndian.Uint64(src[pos+24 : pos+32])
+			h32 := uint32(((w32_0 ^ (w32_1 * 0x9E3779B97F4A7C15) ^ (w32_2 * 0xC6A4A7935BD1E995) ^ (w32_3 * 0x517cc1b727220a95)) * 0x517cc1b727220a95) >> 48)
+			base32 := int(h32&0xFFFF) * 2
+			if int(dpPad.dagProd32[base32])-1 != pos {
+				dpPad.dagProd32[base32+1] = dpPad.dagProd32[base32]
+				dpPad.dagProd32[base32] = int32(pos + 1)
+			}
+		}
+	}
+}
+
+
 var isDelimLUT = [256]bool{
 	' ': true, '\t': true, '\n': true, '\r': true,
 	';': true, ',': true, '(': true, ')': true,
@@ -790,12 +850,12 @@ func compressBlockOptimal(
 	compactDict bool,
 	hasStride bool,
 	stride int,
-) {
+) int {
 	if bSize <= 0 {
-		return
+		return 0
 	}
 	if bSize > BlockSize64K {
-		return
+		return 0
 	}
 
 	cmdStart := len(pad.cmdBuf)
@@ -867,12 +927,8 @@ func compressBlockOptimal(
 			t.repCode = -1
 		}
 
-		maxL := min(bSize-i, 65535)
-		dpMaxL := min(maxL, 1023)
-		if dpMaxL < 4 {
-			insertHashPRZM(src, pos, uSize, pad, windowLog, sp1M, sp8M)
-			continue
-		}
+		maxL := min(uSize-pos, 65535)
+		dpMaxL := min(bSize-i, 1023)
 
 		// 2. Candidate Generation with Bracket Dominance Pareto Pruning & Long Match Shortcut
 		var candidates [64]dpCandidate
@@ -894,6 +950,11 @@ func compressBlockOptimal(
 				bestLongScore = score
 				bestLong = dpCandidate{dist: int32(d), length: int32(l), repCode: int32(repCode)}
 			}
+		}
+
+		if dpMaxL < 4 {
+			insertHashPRZM(src, pos, uSize, pad, windowLog, sp1M, sp8M)
+			continue
 		}
 
 		// Dictionary Token Matching
@@ -1098,8 +1159,8 @@ func compressBlockOptimal(
 			}
 		}
 
-		// Explicit match candidates sorted into 24 distance brackets
-		var bracketBest [24]dpCandidate
+		// Explicit match candidates sorted into 24 distance brackets (2 Pareto slots per bracket)
+		var bracketBest [24][2]dpCandidate
 		updateBracket := func(d, l int) {
 			l = min(l, maxL)
 			if d <= 0 || d > windowSize || d == r0 || d == r1 || d == r2 || d == r3 || l < minMatchBase {
@@ -1122,7 +1183,7 @@ func compressBlockOptimal(
 			updateLong(d, l, -1)
 			minExp := minMatchBase
 			if d >= 65536 {
-				minExp = minMatchBase + 2
+				minExp = minMatchBase + 1
 			} else if d >= 2048 {
 				minExp = minMatchBase + 1
 			}
@@ -1178,9 +1239,13 @@ func compressBlockOptimal(
 				b = 1
 			}
 			lClamped := min(l, dpMaxL)
-			prev := bracketBest[b]
-			if lClamped > int(prev.length) || (lClamped == int(prev.length) && (isBracketDist(d) || d < int(prev.dist))) {
-				bracketBest[b] = dpCandidate{dist: int32(d), length: int32(lClamped), repCode: -1}
+			p0 := &bracketBest[b][0]
+			p1 := &bracketBest[b][1]
+			if lClamped > int(p0.length) || (lClamped == int(p0.length) && (isBracketDist(d) || d < int(p0.dist))) {
+				*p0 = dpCandidate{dist: int32(d), length: int32(lClamped), repCode: -1}
+			}
+			if int(p0.dist) != d && (p1.length == 0 || d < int(p1.dist) || (d == int(p1.dist) && lClamped > int(p1.length))) {
+				*p1 = dpCandidate{dist: int32(d), length: int32(lClamped), repCode: -1}
 			}
 		}
 
@@ -1345,16 +1410,18 @@ func compressBlockOptimal(
 				(pos > 0 && isDelimLUT[src[pos-1]]) ||
 				dpPad.trace[i].dist != 0
 
-			maxHenselDepth := 8
+			maxHenselDepth := 32
 			if isBoundary {
-				maxHenselDepth = 32
+				maxHenselDepth = 96
 				if level >= 5 {
-					maxHenselDepth = 48
+					maxHenselDepth = 128
 				}
+			} else if level >= 5 {
+				maxHenselDepth = 64
 			}
 
 			henselMultiBracketProbe(
-				src, pos, uSize, maxHenselDepth, windowSize, windowLog, dpMaxL,
+				src, pos, uSize, maxHenselDepth, windowSize, windowLog, maxL,
 				pad, sp1M, sp8M, updateBracket,
 			)
 		}
@@ -1532,8 +1599,12 @@ func compressBlockOptimal(
 		}
 
 		for b := range 24 {
-			if bracketBest[b].length >= int32(minMatchBase) && candCount < 60 {
-				candidates[candCount] = bracketBest[b]
+			if bracketBest[b][0].length >= int32(minMatchBase) && candCount < 60 {
+				candidates[candCount] = bracketBest[b][0]
+				candCount++
+			}
+			if bracketBest[b][1].length >= int32(minMatchBase) && candCount < 60 {
+				candidates[candCount] = bracketBest[b][1]
 				candCount++
 			}
 		}
@@ -1662,7 +1733,7 @@ func compressBlockOptimal(
 
 	// 5. Rate-Distortion Evaluation: Hierarchical SLP Grammar DAG Bisection
 	// Reconstruct match segments via topological rule expansion without emitting Section 3 distance varints.
-	if dictLen == 0 && bSize >= 64 {
+	if dictLen == 0 && bSize >= 64 && segStart <= bSize {
 		cmdDelta := len(pad.cmdBuf) - cmdStart
 		offDelta := len(pad.offsetBuf) - offStart
 		litDelta := len(pad.literalBuf) - litStart
@@ -1689,4 +1760,10 @@ func compressBlockOptimal(
 			}
 		}
 	}
+
+	consumed := bSize
+	if segStart > bSize {
+		consumed = segStart
+	}
+	return consumed
 }

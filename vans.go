@@ -1396,5 +1396,104 @@ func ContextVANSDecodeVar8To(dst, src []byte) ([]byte, error) {
 	return dst, nil
 }
 
+// getDistCtx returns the Markov context class (0..3) for a distance code given the preceding code.
+func getDistCtx(prev byte) int {
+	if prev < 6 {
+		return 0
+	} else if prev < 14 {
+		return 1
+	} else if prev < 26 {
+		return 2
+	}
+	return 3
+}
 
+// EncodeDistClusteredVANS encodes distance codes using 4-context Markov Clustered V-ANS.
+// Emits [ModeDistClusteredVANSCompact, final_state (4B LittleEndian), bitstream...].
+func EncodeDistClusteredVANS(src []byte) []byte {
+	n := len(src)
+	if n == 0 {
+		return []byte{ModeDistClusteredVANSCompact, 0, 0, 0, 0}
+	}
 
+	state := uint32(vansL)
+	bitstream := make([]byte, 0, n+16)
+
+	// Encode backwards
+	for i := n - 1; i >= 0; i-- {
+		s := src[i]
+		prev := byte(0)
+		if i > 0 {
+			prev = src[i-1]
+		}
+		ctx := getDistCtx(prev)
+		m := &DistStaticModels4[ctx]
+		f := uint32(m.Freq[s])
+		cdf := uint32(m.CDF[s])
+
+		// Renormalization
+		xMax := (uint32(4096) * f) - 1
+		for state > xMax {
+			bitstream = append(bitstream, byte(state))
+			state >>= 8
+		}
+
+		// State transition
+		state = (state/f)*vansM + cdf + (state % f)
+	}
+
+	out := make([]byte, 5+len(bitstream))
+	out[0] = ModeDistClusteredVANSCompact
+	binary.LittleEndian.PutUint32(out[1:5], state)
+	pos := 5
+	for _, b := range slices.Backward(bitstream) {
+		out[pos] = b
+		pos++
+	}
+	return out
+}
+
+// DecodeDistClusteredVANSTo decodes a 4-context Markov Clustered V-ANS stream into dst.
+// Guarantees strictly 0 dynamic heap allocations if cap(dst) >= origLen.
+func DecodeDistClusteredVANSTo(dst []byte, src []byte, origLen int) (int, error) {
+	if len(src) < 5 {
+		return 0, ErrCorruptedStream
+	}
+	if src[0] != ModeDistClusteredVANSCompact {
+		return 0, ErrCorruptedStream
+	}
+	if len(dst) < origLen {
+		return 0, ErrBufferTooSmall
+	}
+	if origLen == 0 {
+		return 0, nil
+	}
+
+	state := binary.LittleEndian.Uint32(src[1:5])
+	streamPtr := 5
+	srcLen := len(src)
+
+	prev := byte(0)
+	for i := 0; i < origLen; i++ {
+		ctx := getDistCtx(prev)
+		m := &DistStaticModels4[ctx]
+
+		slot := state & (vansM - 1)
+		s := byte(m.DecodeTable[slot] & 0xFF)
+		dst[i] = s
+		prev = s
+
+		f := uint32(m.Freq[s])
+		cdf := uint32(m.CDF[s])
+		state = f*(state>>12) + (slot - cdf)
+
+		for state < vansL {
+			if streamPtr >= srcLen {
+				return 0, ErrCorruptedStream
+			}
+			state = (state << 8) | uint32(src[streamPtr])
+			streamPtr++
+		}
+	}
+	return origLen, nil
+}
