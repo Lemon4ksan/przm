@@ -382,7 +382,7 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 				return nil, fmt.Errorf("%w: truncated flat command stream", ErrCorruptedFrame)
 			}
 			cmds = src[sec2Offset+5 : sec2Offset+5+sec2OrigLen]
-		case ModeHuffman4X, ModeHuffmanCompact, ModeHuffmanCompact4X, ModeRecursiveLZ, ModeVANS4X, ModeSplitVarint:
+		case ModeHuffman4X, ModeHuffmanCompact, ModeHuffmanCompact4X, ModeRecursiveLZ, ModeVANS4X, ModeSplitVarint, ModeCommandEntropy:
 			if pad == nil {
 				pad = decScratchPool.Get()
 				defer decScratchPool.Put(pad)

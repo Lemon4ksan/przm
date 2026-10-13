@@ -320,7 +320,7 @@ func tryCompressGPU(src []byte, opts CompressOptions, pad *scratchpad) (out []by
 	}
 	if len(cmdSection) == 0 {
 		var err error
-		cmdSection, err = PackStream(pad.cmdBuf, cmdMode)
+		cmdSection, err = PackCommandStream(pad.cmdBuf, cmdMode)
 		if err != nil {
 			return nil, false
 		}

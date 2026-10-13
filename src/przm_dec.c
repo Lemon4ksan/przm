@@ -34,6 +34,9 @@ static PRZM_TLS uint8_t tls_cmd_scratch[PRZM_TLS_SCRATCH_SIZE];
 static PRZM_TLS uint8_t tls_off_scratch[PRZM_TLS_SCRATCH_SIZE];
 static PRZM_TLS uint8_t tls_norm_scratch[PRZM_TLS_SCRATCH_SIZE];
 static PRZM_TLS uint8_t tls_archival_scratch[PRZM_TLS_SCRATCH_SIZE];
+static PRZM_TLS uint8_t tls_cmd_op_scratch[PRZM_TLS_SPLIT_SIZE];
+static PRZM_TLS uint8_t tls_cmd_meta_scratch[PRZM_TLS_SPLIT_SIZE];
+static PRZM_TLS uint8_t tls_cmd_var_scratch[PRZM_TLS_SPLIT_SIZE];
 
 /* ============================================================================
  * 1. Byte-Level Helpers & Unaligned Integer Access
@@ -3048,6 +3051,205 @@ static int64_t przm_unpack_stream(const uint8_t* src, size_t src_len,
                 }
             }
             if (dst_ptr != (size_t)orig_len || lsb_ptr != (size_t)lsb_orig_len || msb_ptr != (size_t)msb_orig_len) {
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
+            return (int64_t)orig_len;
+        }
+
+        case PRZM_ENTROPY_MODE_COMMAND_SPLIT: {
+            if (src_len < 13) return PRZM_ERR_CORRUPTED_FRAME;
+            size_t c_op_len = (size_t)read_u32_le(src + 5);
+            size_t c_meta_len = (size_t)read_u32_le(src + 9);
+            if (13 + c_op_len + c_meta_len > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+            const uint8_t* c_op = src + 13;
+            const uint8_t* c_meta = src + 13 + c_op_len;
+            const uint8_t* c_var = src + 13 + c_op_len + c_meta_len;
+            size_t c_var_len = src_len - (13 + c_op_len + c_meta_len);
+
+            if (c_op_len < 5 || c_meta_len < 5 || c_var_len < 5) return PRZM_ERR_CORRUPTED_FRAME;
+            uint32_t op_orig_len = read_u32_le(c_op + 1);
+            uint32_t meta_orig_len = read_u32_le(c_meta + 1);
+            uint32_t var_orig_len = read_u32_le(c_var + 1);
+
+            if (op_orig_len > sizeof(tls_cmd_op_scratch) ||
+                meta_orig_len > sizeof(tls_cmd_meta_scratch) ||
+                var_orig_len > sizeof(tls_cmd_var_scratch)) {
+                return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            }
+
+            int64_t n_op = przm_unpack_stream(c_op, c_op_len, tls_cmd_op_scratch, sizeof(tls_cmd_op_scratch), dec_table);
+            if (n_op < 0 || (uint32_t)n_op != op_orig_len) return (n_op < 0) ? n_op : PRZM_ERR_CORRUPTED_FRAME;
+
+            int64_t n_meta = przm_unpack_stream(c_meta, c_meta_len, tls_cmd_meta_scratch, sizeof(tls_cmd_meta_scratch), dec_table);
+            if (n_meta < 0 || (uint32_t)n_meta != meta_orig_len) return (n_meta < 0) ? n_meta : PRZM_ERR_CORRUPTED_FRAME;
+
+            int64_t n_var = przm_unpack_stream(c_var, c_var_len, tls_cmd_var_scratch, sizeof(tls_cmd_var_scratch), dec_table);
+            if (n_var < 0 || (uint32_t)n_var != var_orig_len) return (n_var < 0) ? n_var : PRZM_ERR_CORRUPTED_FRAME;
+
+            size_t op_ptr = 0, meta_ptr = 0, var_ptr = 0, dst_ptr = 0;
+            const uint8_t* op_stream = tls_cmd_op_scratch;
+            const uint8_t* meta_stream = tls_cmd_meta_scratch;
+            const uint8_t* var_stream = tls_cmd_var_scratch;
+
+            while (op_ptr < (size_t)op_orig_len && dst_ptr < (size_t)orig_len) {
+                uint8_t op = op_stream[op_ptr++];
+                dst[dst_ptr++] = op;
+
+                if (op < 0x80) continue;
+                if (op < 0xC0) {
+                    if ((op & 0x0F) == 15) {
+                        uint8_t b;
+                        do {
+                            if (var_ptr >= (size_t)var_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                            b = var_stream[var_ptr++];
+                            dst[dst_ptr++] = b;
+                        } while (b & 0x80);
+                    }
+                    continue;
+                }
+                if (op >= 0xC0 && op <= 0xC3) {
+                    if (meta_ptr >= (size_t)meta_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    uint8_t tok = meta_stream[meta_ptr++];
+                    dst[dst_ptr++] = tok;
+                    if ((tok & 0x0F) == 15) {
+                        uint8_t b;
+                        do {
+                            if (var_ptr >= (size_t)var_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                            b = var_stream[var_ptr++];
+                            dst[dst_ptr++] = b;
+                        } while (b & 0x80);
+                    }
+                    continue;
+                }
+                if (op >= 0xC4 && op <= 0xCD) {
+                    if (meta_ptr >= (size_t)meta_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    dst[dst_ptr++] = meta_stream[meta_ptr++];
+                    continue;
+                }
+                if (op == 0xCE) {
+                    if (meta_ptr + 2 > (size_t)meta_orig_len || dst_ptr + 2 > (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    uint8_t desc = meta_stream[meta_ptr++];
+                    uint8_t delta = meta_stream[meta_ptr++];
+                    dst[dst_ptr++] = desc;
+                    dst[dst_ptr++] = delta;
+                    if (((desc >> 3) & 7) == 7) {
+                        uint8_t b;
+                        do {
+                            if (var_ptr >= (size_t)var_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                            b = var_stream[var_ptr++];
+                            dst[dst_ptr++] = b;
+                        } while (b & 0x80);
+                    }
+                    if ((desc & 7) == 7) {
+                        uint8_t b;
+                        do {
+                            if (var_ptr >= (size_t)var_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                            b = var_stream[var_ptr++];
+                            dst[dst_ptr++] = b;
+                        } while (b & 0x80);
+                    }
+                    continue;
+                }
+                if (op == 0xCF) {
+                    if (meta_ptr >= (size_t)meta_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    dst[dst_ptr++] = meta_stream[meta_ptr++];
+                    uint8_t b;
+                    do {
+                        if (var_ptr >= (size_t)var_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                        b = var_stream[var_ptr++];
+                        dst[dst_ptr++] = b;
+                    } while (b & 0x80);
+                    continue;
+                }
+                if (op >= 0xD0 && op <= 0xD7) {
+                    if (meta_ptr >= (size_t)meta_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    dst[dst_ptr++] = meta_stream[meta_ptr++];
+                    continue;
+                }
+                if (op >= 0xD8 && op <= 0xDF) {
+                    continue;
+                }
+                if (op >= 0xE0 && op <= 0xE8) {
+                    if (meta_ptr >= (size_t)meta_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    uint8_t base_len = meta_stream[meta_ptr++];
+                    dst[dst_ptr++] = base_len;
+                    if (base_len == 255) {
+                        uint8_t b;
+                        do {
+                            if (var_ptr >= (size_t)var_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                            b = var_stream[var_ptr++];
+                            dst[dst_ptr++] = b;
+                        } while (b & 0x80);
+                    }
+                    continue;
+                }
+                if (op == 0xE9) {
+                    if (meta_ptr >= (size_t)meta_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    uint8_t tok = meta_stream[meta_ptr++];
+                    dst[dst_ptr++] = tok;
+                    if ((tok & 0x0F) == 15) {
+                        uint8_t b;
+                        do {
+                            if (var_ptr >= (size_t)var_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                            b = var_stream[var_ptr++];
+                            dst[dst_ptr++] = b;
+                        } while (b & 0x80);
+                    }
+                    continue;
+                }
+                if ((op >= 0xEA && op <= 0xEF) || op == 0xFB || op == 0xFC || op == 0xF2) {
+                    if (meta_ptr >= (size_t)meta_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    dst[dst_ptr++] = meta_stream[meta_ptr++];
+                    continue;
+                }
+                if (op == 0xF0 || op == 0xF1) {
+                    uint8_t b;
+                    do {
+                        if (var_ptr >= (size_t)var_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                        b = var_stream[var_ptr++];
+                        dst[dst_ptr++] = b;
+                    } while (b & 0x80);
+                    continue;
+                }
+                if (op >= 0xF3 && op <= 0xFA) {
+                    continue;
+                }
+                if (op == 0xFD) {
+                    if (var_ptr + 4 > (size_t)var_orig_len || dst_ptr + 4 > (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    memcpy(dst + dst_ptr, var_stream + var_ptr, 4);
+                    var_ptr += 4;
+                    dst_ptr += 4;
+                    continue;
+                }
+                if (op == 0xFE) {
+                    uint32_t val = 0;
+                    uint32_t shift = 0;
+                    uint8_t b;
+                    do {
+                        if (var_ptr >= (size_t)var_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                        b = var_stream[var_ptr++];
+                        dst[dst_ptr++] = b;
+                        val |= (uint32_t)(b & 0x7F) << shift;
+                        shift += 7;
+                    } while (b & 0x80);
+                    if (var_ptr + val > (size_t)var_orig_len || dst_ptr + val > (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    memcpy(dst + dst_ptr, var_stream + var_ptr, val);
+                    var_ptr += val;
+                    dst_ptr += val;
+                    continue;
+                }
+                if (op == 0xFF) {
+                    if (meta_ptr + 2 > (size_t)meta_orig_len || dst_ptr + 2 > (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    dst[dst_ptr++] = meta_stream[meta_ptr++];
+                    dst[dst_ptr++] = meta_stream[meta_ptr++];
+                    continue;
+                }
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
+
+            if (dst_ptr != (size_t)orig_len || op_ptr != (size_t)op_orig_len ||
+                meta_ptr != (size_t)meta_orig_len || var_ptr != (size_t)var_orig_len) {
                 return PRZM_ERR_CORRUPTED_FRAME;
             }
             return (int64_t)orig_len;

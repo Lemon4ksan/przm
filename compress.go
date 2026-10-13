@@ -799,7 +799,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	if level <= 3 {
 		cmdMode = ModeFlat
 	}
-	cmdSection, err := PackStream(pad.cmdBuf, cmdMode)
+	cmdSection, err := PackCommandStream(pad.cmdBuf, cmdMode)
 	if err != nil {
 		return nil, err
 	}

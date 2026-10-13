@@ -179,6 +179,7 @@ typedef struct {
 #define PRZM_ENTROPY_MODE_VANS_4X            5
 #define PRZM_ENTROPY_MODE_DISTANCE_PREFIX    6
 #define PRZM_ENTROPY_MODE_SPLIT_VARINT       7
+#define PRZM_ENTROPY_MODE_COMMAND_SPLIT      8
 
 /* WindowLog levels (PRZM-SPEC-0.5 Milestone 2 Window Scaling) */
 #define PRZM_WINDOW_LOG_64K           16

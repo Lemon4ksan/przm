@@ -25,6 +25,7 @@ const (
 	ModeVANS4X           uint8 = 5 // 4-way interleaved Vector-State ANS coder
 	ModeDistancePrefix   uint8 = 6 // Log2 Distance Prefix Codebook (Entropy-coded DistanceCode + Raw ExtraBits)
 	ModeSplitVarint      uint8 = 7 // De-interleaved LEB128 Varint Stream (LSB channel + MSB continuation channel)
+	ModeCommandEntropy   uint8 = 8 // 3-way structural splitting of command stream (Opcodes, Meta, Varints)
 )
 
 var ErrCorruptedStream = errors.New("entropy_pack: corrupted stream")
@@ -1232,6 +1233,21 @@ func PackStream(src []byte, prefMode uint8) ([]byte, error) {
 	return best, nil
 }
 
+var splitVarintScratchPool = generic.NewPool(func() *[2][]byte {
+	return &[2][]byte{
+		bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+		bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+	}
+})
+
+var cmdSplitScratchPool = generic.NewPool(func() *[3][]byte {
+	return &[3][]byte{
+		bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+		bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+		bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize),
+	}
+})
+
 // UnpackStream decompresses a packed stream into dst with ZERO heap allocations.
 func UnpackStream(dst, src []byte, scratchTable *CanonicalHuffmanTable) (int, error) {
 	if len(src) < 5 {
@@ -1294,12 +1310,15 @@ func UnpackStream(dst, src []byte, scratchTable *CanonicalHuffmanTable) (int, er
 
 		lsbOrigLen := int(binary.LittleEndian.Uint32(cLsb[1:5]))
 		msbOrigLen := int(binary.LittleEndian.Uint32(cMsb[1:5]))
-		if lsbOrigLen+msbOrigLen != origLen || lsbOrigLen < 0 || msbOrigLen < 0 {
+		if lsbOrigLen+msbOrigLen != origLen || lsbOrigLen < 0 || msbOrigLen < 0 ||
+			lsbOrigLen > MaxBlockSize || msbOrigLen > MaxBlockSize {
 			return 0, ErrCorruptedStream
 		}
 
-		lsbBuf := make([]byte, lsbOrigLen)
-		msbBuf := make([]byte, msbOrigLen)
+		scratch := splitVarintScratchPool.Get()
+		defer splitVarintScratchPool.Put(scratch)
+		lsbBuf := scratch[0][:lsbOrigLen]
+		msbBuf := scratch[1][:msbOrigLen]
 		if _, err := UnpackStream(lsbBuf, cLsb, scratchTable); err != nil {
 			return 0, err
 		}
@@ -1337,6 +1356,54 @@ func UnpackStream(dst, src []byte, scratchTable *CanonicalHuffmanTable) (int, er
 		scratchBuf := distCodeScratchPool.Get()
 		defer distCodeScratchPool.Put(scratchBuf)
 		return DecodeDistancePrefix(dst[:origLen], src, scratchTable, *scratchBuf)
+
+	case ModeCommandEntropy:
+		if len(src) < 13 {
+			return 0, ErrCorruptedStream
+		}
+		cOpLen := int(binary.LittleEndian.Uint32(src[5:9]))
+		cMetaLen := int(binary.LittleEndian.Uint32(src[9:13]))
+		if 13+cOpLen+cMetaLen > len(src) {
+			return 0, ErrCorruptedStream
+		}
+		cOp := src[13 : 13+cOpLen]
+		cMeta := src[13+cOpLen : 13+cOpLen+cMetaLen]
+		cVar := src[13+cOpLen+cMetaLen:]
+
+		if len(cOp) < 5 || len(cMeta) < 5 || len(cVar) < 5 {
+			return 0, ErrCorruptedStream
+		}
+
+		opOrigLen := int(binary.LittleEndian.Uint32(cOp[1:5]))
+		metaOrigLen := int(binary.LittleEndian.Uint32(cMeta[1:5]))
+		varOrigLen := int(binary.LittleEndian.Uint32(cVar[1:5]))
+
+		if opOrigLen < 0 || metaOrigLen < 0 || varOrigLen < 0 ||
+			opOrigLen > MaxBlockSize || metaOrigLen > MaxBlockSize || varOrigLen > MaxBlockSize {
+			return 0, ErrCorruptedStream
+		}
+
+		cmdScratch := cmdSplitScratchPool.Get()
+		defer cmdSplitScratchPool.Put(cmdScratch)
+
+		opBuf := cmdScratch[0][:opOrigLen]
+		metaBuf := cmdScratch[1][:metaOrigLen]
+		varBuf := cmdScratch[2][:varOrigLen]
+
+		if _, err := UnpackStream(opBuf, cOp, scratchTable); err != nil {
+			return 0, err
+		}
+		if _, err := UnpackStream(metaBuf, cMeta, scratchTable); err != nil {
+			return 0, err
+		}
+		if _, err := UnpackStream(varBuf, cVar, scratchTable); err != nil {
+			return 0, err
+		}
+
+		if err := joinCommands(dst[:origLen], opBuf, metaBuf, varBuf, origLen); err != nil {
+			return 0, err
+		}
+		return origLen, nil
 
 	default:
 		return 0, fmt.Errorf("%w: unknown mode %d", ErrCorruptedStream, mode)
@@ -1613,4 +1680,577 @@ func PackOffsetStream(src []byte, prefMode uint8) ([]byte, error) {
 	}
 	return best, nil
 }
+
+// -----------------------------------------------------------------------------
+// Command Stream 3-Way Structural Splitting (ModeCommandEntropy = 8)
+// -----------------------------------------------------------------------------
+
+func readVarintLen(src []byte, ptr int) (int, int, error) {
+	start := ptr
+	for ptr < len(src) {
+		b := src[ptr]
+		ptr++
+		if (b & 0x80) == 0 {
+			return ptr - start, ptr, nil
+		}
+	}
+	return 0, ptr, ErrCorruptedStream
+}
+
+func splitCommands(src []byte) ([]byte, []byte, []byte, error) {
+	n := len(src)
+	opStream := make([]byte, 0, n/2)
+	metaStream := make([]byte, 0, n/4)
+	varStream := make([]byte, 0, n/4)
+	ptr := 0
+
+	for ptr < n {
+		op := src[ptr]
+		ptr++
+		opStream = append(opStream, op)
+
+		if op < 0x80 {
+			continue
+		}
+		if op < 0xC0 {
+			baseLen := op & 0x0F
+			if baseLen == 15 {
+				_, newPtr, err := readVarintLen(src, ptr)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				varStream = append(varStream, src[ptr:newPtr]...)
+				ptr = newPtr
+			}
+			continue
+		}
+		if op >= 0xC0 && op <= 0xC3 {
+			if ptr >= n {
+				return nil, nil, nil, ErrCorruptedStream
+			}
+			token := src[ptr]
+			ptr++
+			metaStream = append(metaStream, token)
+			baseLen := token & 0x0F
+			if baseLen == 15 {
+				_, newPtr, err := readVarintLen(src, ptr)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				varStream = append(varStream, src[ptr:newPtr]...)
+				ptr = newPtr
+			}
+			continue
+		}
+		if op >= 0xC4 && op <= 0xCD {
+			if ptr >= n {
+				return nil, nil, nil, ErrCorruptedStream
+			}
+			token := src[ptr]
+			ptr++
+			metaStream = append(metaStream, token)
+			continue
+		}
+		if op == 0xCE {
+			if ptr+1 >= n {
+				return nil, nil, nil, ErrCorruptedStream
+			}
+			desc := src[ptr]
+			delta := src[ptr+1]
+			ptr += 2
+			metaStream = append(metaStream, desc, delta)
+			litLen := (desc >> 3) & 7
+			baseLen := desc & 7
+			if litLen == 7 {
+				_, newPtr, err := readVarintLen(src, ptr)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				varStream = append(varStream, src[ptr:newPtr]...)
+				ptr = newPtr
+			}
+			if baseLen == 7 {
+				_, newPtr, err := readVarintLen(src, ptr)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				varStream = append(varStream, src[ptr:newPtr]...)
+				ptr = newPtr
+			}
+			continue
+		}
+		if op == 0xCF {
+			if ptr >= n {
+				return nil, nil, nil, ErrCorruptedStream
+			}
+			transID := src[ptr]
+			ptr++
+			metaStream = append(metaStream, transID)
+			_, newPtr, err := readVarintLen(src, ptr)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			varStream = append(varStream, src[ptr:newPtr]...)
+			ptr = newPtr
+			continue
+		}
+		if op >= 0xD0 && op <= 0xD7 {
+			if ptr >= n {
+				return nil, nil, nil, ErrCorruptedStream
+			}
+			token := src[ptr]
+			ptr++
+			metaStream = append(metaStream, token)
+			continue
+		}
+		if op >= 0xD8 && op <= 0xDF {
+			continue
+		}
+		if op >= 0xE0 && op <= 0xE8 {
+			if ptr >= n {
+				return nil, nil, nil, ErrCorruptedStream
+			}
+			baseLen := src[ptr]
+			ptr++
+			metaStream = append(metaStream, baseLen)
+			if baseLen == 255 {
+				_, newPtr, err := readVarintLen(src, ptr)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				varStream = append(varStream, src[ptr:newPtr]...)
+				ptr = newPtr
+			}
+			continue
+		}
+		if op == 0xE9 {
+			if ptr >= n {
+				return nil, nil, nil, ErrCorruptedStream
+			}
+			token := src[ptr]
+			ptr++
+			metaStream = append(metaStream, token)
+			baseLen := token & 0x0F
+			if baseLen == 15 {
+				_, newPtr, err := readVarintLen(src, ptr)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				varStream = append(varStream, src[ptr:newPtr]...)
+				ptr = newPtr
+			}
+			continue
+		}
+		if (op >= 0xEA && op <= 0xEF) || op == 0xFB || op == 0xFC || op == 0xF2 {
+			if ptr >= n {
+				return nil, nil, nil, ErrCorruptedStream
+			}
+			tok := src[ptr]
+			ptr++
+			metaStream = append(metaStream, tok)
+			continue
+		}
+		if op == 0xF0 || op == 0xF1 {
+			_, newPtr, err := readVarintLen(src, ptr)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			varStream = append(varStream, src[ptr:newPtr]...)
+			ptr = newPtr
+			continue
+		}
+		if op >= 0xF3 && op <= 0xFA {
+			continue
+		}
+		if op == 0xFD {
+			if ptr+4 > n {
+				return nil, nil, nil, ErrCorruptedStream
+			}
+			varStream = append(varStream, src[ptr:ptr+4]...)
+			ptr += 4
+			continue
+		}
+		if op == 0xFE {
+			vLen, newPtr, err := readVarintLen(src, ptr)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			vStart := ptr
+			var val uint64
+			var shift uint
+			for i := 0; i < vLen; i++ {
+				b := src[vStart+i]
+				val |= uint64(b&0x7F) << shift
+				shift += 7
+			}
+			pwsLen := int(val)
+			varStream = append(varStream, src[vStart:newPtr]...)
+			ptr = newPtr
+			if ptr+pwsLen > n {
+				return nil, nil, nil, ErrCorruptedStream
+			}
+			varStream = append(varStream, src[ptr:ptr+pwsLen]...)
+			ptr += pwsLen
+			continue
+		}
+		if op == 0xFF {
+			if ptr+2 > n {
+				return nil, nil, nil, ErrCorruptedStream
+			}
+			metaStream = append(metaStream, src[ptr:ptr+2]...)
+			ptr += 2
+			continue
+		}
+		return nil, nil, nil, ErrCorruptedStream
+	}
+
+	return opStream, metaStream, varStream, nil
+}
+
+func joinCommands(dst, opStream, metaStream, varStream []byte, origLen int) error {
+	opPtr := 0
+	metaPtr := 0
+	varPtr := 0
+	dstPtr := 0
+	opLen := len(opStream)
+	metaLen := len(metaStream)
+	varLen := len(varStream)
+
+	for opPtr < opLen && dstPtr < origLen {
+		op := opStream[opPtr]
+		opPtr++
+		dst[dstPtr] = op
+		dstPtr++
+
+		if op < 0x80 {
+			continue
+		}
+		if op < 0xC0 {
+			baseLen := op & 0x0F
+			if baseLen == 15 {
+				for {
+					if varPtr >= varLen || dstPtr >= origLen {
+						return ErrCorruptedStream
+					}
+					b := varStream[varPtr]
+					varPtr++
+					dst[dstPtr] = b
+					dstPtr++
+					if (b & 0x80) == 0 {
+						break
+					}
+				}
+			}
+			continue
+		}
+		if op >= 0xC0 && op <= 0xC3 {
+			if metaPtr >= metaLen || dstPtr >= origLen {
+				return ErrCorruptedStream
+			}
+			token := metaStream[metaPtr]
+			metaPtr++
+			dst[dstPtr] = token
+			dstPtr++
+			baseLen := token & 0x0F
+			if baseLen == 15 {
+				for {
+					if varPtr >= varLen || dstPtr >= origLen {
+						return ErrCorruptedStream
+					}
+					b := varStream[varPtr]
+					varPtr++
+					dst[dstPtr] = b
+					dstPtr++
+					if (b & 0x80) == 0 {
+						break
+					}
+				}
+			}
+			continue
+		}
+		if op >= 0xC4 && op <= 0xCD {
+			if metaPtr >= metaLen || dstPtr >= origLen {
+				return ErrCorruptedStream
+			}
+			dst[dstPtr] = metaStream[metaPtr]
+			metaPtr++
+			dstPtr++
+			continue
+		}
+		if op == 0xCE {
+			if metaPtr+2 > metaLen || dstPtr+2 > origLen {
+				return ErrCorruptedStream
+			}
+			desc := metaStream[metaPtr]
+			delta := metaStream[metaPtr+1]
+			metaPtr += 2
+			dst[dstPtr] = desc
+			dst[dstPtr+1] = delta
+			dstPtr += 2
+			litLen := (desc >> 3) & 7
+			baseLen := desc & 7
+			if litLen == 7 {
+				for {
+					if varPtr >= varLen || dstPtr >= origLen {
+						return ErrCorruptedStream
+					}
+					b := varStream[varPtr]
+					varPtr++
+					dst[dstPtr] = b
+					dstPtr++
+					if (b & 0x80) == 0 {
+						break
+					}
+				}
+			}
+			if baseLen == 7 {
+				for {
+					if varPtr >= varLen || dstPtr >= origLen {
+						return ErrCorruptedStream
+					}
+					b := varStream[varPtr]
+					varPtr++
+					dst[dstPtr] = b
+					dstPtr++
+					if (b & 0x80) == 0 {
+						break
+					}
+				}
+			}
+			continue
+		}
+		if op == 0xCF {
+			if metaPtr >= metaLen || dstPtr >= origLen {
+				return ErrCorruptedStream
+			}
+			dst[dstPtr] = metaStream[metaPtr]
+			metaPtr++
+			dstPtr++
+			for {
+				if varPtr >= varLen || dstPtr >= origLen {
+					return ErrCorruptedStream
+				}
+				b := varStream[varPtr]
+				varPtr++
+				dst[dstPtr] = b
+				dstPtr++
+				if (b & 0x80) == 0 {
+					break
+				}
+			}
+			continue
+		}
+		if op >= 0xD0 && op <= 0xD7 {
+			if metaPtr >= metaLen || dstPtr >= origLen {
+				return ErrCorruptedStream
+			}
+			dst[dstPtr] = metaStream[metaPtr]
+			metaPtr++
+			dstPtr++
+			continue
+		}
+		if op >= 0xD8 && op <= 0xDF {
+			continue
+		}
+		if op >= 0xE0 && op <= 0xE8 {
+			if metaPtr >= metaLen || dstPtr >= origLen {
+				return ErrCorruptedStream
+			}
+			baseLen := metaStream[metaPtr]
+			metaPtr++
+			dst[dstPtr] = baseLen
+			dstPtr++
+			if baseLen == 255 {
+				for {
+					if varPtr >= varLen || dstPtr >= origLen {
+						return ErrCorruptedStream
+					}
+					b := varStream[varPtr]
+					varPtr++
+					dst[dstPtr] = b
+					dstPtr++
+					if (b & 0x80) == 0 {
+						break
+					}
+				}
+			}
+			continue
+		}
+		if op == 0xE9 {
+			if metaPtr >= metaLen || dstPtr >= origLen {
+				return ErrCorruptedStream
+			}
+			token := metaStream[metaPtr]
+			metaPtr++
+			dst[dstPtr] = token
+			dstPtr++
+			baseLen := token & 0x0F
+			if baseLen == 15 {
+				for {
+					if varPtr >= varLen || dstPtr >= origLen {
+						return ErrCorruptedStream
+					}
+					b := varStream[varPtr]
+					varPtr++
+					dst[dstPtr] = b
+					dstPtr++
+					if (b & 0x80) == 0 {
+						break
+					}
+				}
+			}
+			continue
+		}
+		if (op >= 0xEA && op <= 0xEF) || op == 0xFB || op == 0xFC || op == 0xF2 {
+			if metaPtr >= metaLen || dstPtr >= origLen {
+				return ErrCorruptedStream
+			}
+			dst[dstPtr] = metaStream[metaPtr]
+			metaPtr++
+			dstPtr++
+			continue
+		}
+		if op == 0xF0 || op == 0xF1 {
+			for {
+				if varPtr >= varLen || dstPtr >= origLen {
+					return ErrCorruptedStream
+				}
+				b := varStream[varPtr]
+				varPtr++
+				dst[dstPtr] = b
+				dstPtr++
+				if (b & 0x80) == 0 {
+					break
+				}
+			}
+			continue
+		}
+		if op >= 0xF3 && op <= 0xFA {
+			continue
+		}
+		if op == 0xFD {
+			if varPtr+4 > varLen || dstPtr+4 > origLen {
+				return ErrCorruptedStream
+			}
+			copy(dst[dstPtr:dstPtr+4], varStream[varPtr:varPtr+4])
+			varPtr += 4
+			dstPtr += 4
+			continue
+		}
+		if op == 0xFE {
+			var val uint64
+			var shift uint
+			for {
+				if varPtr >= varLen || dstPtr >= origLen {
+					return ErrCorruptedStream
+				}
+				b := varStream[varPtr]
+				varPtr++
+				dst[dstPtr] = b
+				dstPtr++
+				val |= uint64(b&0x7F) << shift
+				shift += 7
+				if (b & 0x80) == 0 {
+					break
+				}
+			}
+			pwsLen := int(val)
+			if varPtr+pwsLen > varLen || dstPtr+pwsLen > origLen {
+				return ErrCorruptedStream
+			}
+			copy(dst[dstPtr:dstPtr+pwsLen], varStream[varPtr:varPtr+pwsLen])
+			varPtr += pwsLen
+			dstPtr += pwsLen
+			continue
+		}
+		if op == 0xFF {
+			if metaPtr+2 > metaLen || dstPtr+2 > origLen {
+				return ErrCorruptedStream
+			}
+			dst[dstPtr] = metaStream[metaPtr]
+			dst[dstPtr+1] = metaStream[metaPtr+1]
+			metaPtr += 2
+			dstPtr += 2
+			continue
+		}
+		return ErrCorruptedStream
+	}
+
+	if dstPtr != origLen || opPtr != opLen || metaPtr != metaLen || varPtr != varLen {
+		return ErrCorruptedStream
+	}
+	return nil
+}
+
+// EncodeCommandSplit encodes a command stream using 3-way structural splitting into
+// dedicated opcodes, metadata (tokens, IDs, descriptors), and varints (lengths, word IDs).
+func EncodeCommandSplit(src []byte, prefMode uint8) ([]byte, error) {
+	n := len(src)
+	if n < 64 {
+		return nil, ErrCorruptedStream
+	}
+
+	opStream, metaStream, varStream, err := splitCommands(src)
+	if err != nil {
+		return nil, err
+	}
+
+	cOp, errOp := PackStream(opStream, prefMode)
+	if errOp != nil {
+		return nil, errOp
+	}
+
+	cMeta, errMeta := PackStream(metaStream, prefMode)
+	if errMeta != nil {
+		return nil, errMeta
+	}
+
+	cVar, errVar := PackStream(varStream, prefMode)
+	if errVar != nil {
+		return nil, errVar
+	}
+
+	total := 13 + len(cOp) + len(cMeta) + len(cVar)
+	if total >= n {
+		return nil, ErrCorruptedStream
+	}
+
+	out := make([]byte, total)
+	out[0] = ModeCommandEntropy
+	binary.LittleEndian.PutUint32(out[1:5], uint32(n))
+	binary.LittleEndian.PutUint32(out[5:9], uint32(len(cOp)))
+	binary.LittleEndian.PutUint32(out[9:13], uint32(len(cMeta)))
+
+	copy(out[13:13+len(cOp)], cOp)
+	copy(out[13+len(cOp):13+len(cOp)+len(cMeta)], cMeta)
+	copy(out[13+len(cOp)+len(cMeta):], cVar)
+
+	return out, nil
+}
+
+// PackCommandStream encodes Section 2 commands.
+// Evaluates ModeCommandEntropy against standard PackStream and selects the smallest.
+func PackCommandStream(src []byte, prefMode uint8) ([]byte, error) {
+	if len(src) == 0 {
+		return []byte{ModeFlat, 0, 0, 0, 0}, nil
+	}
+	var best []byte
+	if prefMode != ModeFlat && len(src) >= 64 {
+		if cs, err := EncodeCommandSplit(src, prefMode); err == nil {
+			best = cs
+		}
+	}
+	std, err := PackStream(src, prefMode)
+	if err != nil {
+		if best != nil {
+			return best, nil
+		}
+		return nil, err
+	}
+	if best == nil || len(std) < len(best) {
+		return std, nil
+	}
+	return best, nil
+}
+
 

@@ -267,6 +267,63 @@ static void test_standard_fused_lz(void) {
     TEST_PASS("standard_fused_lz");
 }
 
+/* 5.1 Test Standard Fused LZ77 with ModeCommandEntropy (Mode 8) Command Splitting */
+static void test_command_split_decompression(void) {
+    uint8_t frame[128];
+    size_t fptr = 0;
+    memcpy(frame + fptr, "PRZM", 4); fptr += 4;
+    frame[fptr++] = 0x00; /* Flags */
+    frame[fptr++] = 25;   /* Uncompressed size = 25 */
+    frame[fptr++] = 0;
+    frame[fptr++] = 0;
+
+    /* Section Directory: CmdStreamSize = 32, OffsetStreamSize = 6 */
+    frame[fptr++] = 32; frame[fptr++] = 0; /* CmdSize = 32 */
+    frame[fptr++] = 6;  frame[fptr++] = 0; /* OffSize = 6 */
+
+    /* Section 1: 8 zeroes */
+    memset(frame + fptr, 0, 8); fptr += 8;
+
+    /* Section 2: Command stream (Mode 8: ModeCommandEntropy) */
+    frame[fptr++] = PRZM_ENTROPY_MODE_COMMAND_SPLIT;
+    write_u32_le(frame + fptr, 4); fptr += 4;  /* orig_len = 4 */
+    write_u32_le(frame + fptr, 8); fptr += 4;  /* c_op_len = 8 */
+    write_u32_le(frame + fptr, 5); fptr += 4;  /* c_meta_len = 5 */
+
+    /* c_op: ModeFlat, orig_len 3, [0xF3, 0x00, 0x8F] */
+    frame[fptr++] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame + fptr, 3); fptr += 4;
+    frame[fptr++] = 0xF3; /* 1 literal */
+    frame[fptr++] = 0x00; /* Fused Repeat: L=0, M=4, k=0 (d=1) -> 4 'A's */
+    frame[fptr++] = 0x8F; /* Fused Match: L=0, M=15+extra, baseLen=15 */
+
+    /* c_meta: ModeFlat, orig_len 0 */
+    frame[fptr++] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame + fptr, 0); fptr += 4;
+
+    /* c_var: ModeFlat, orig_len 1, [0x05] (extra=5 -> M=15+4+5=24, wait: minMatchBase=4, 15+4+5=24, wait total=1+4+20=25? Let's check: 0x8F gives baseLen 15, mLen = 15 + minMatchBase + extra = 15 + 4 + 1 = 20) */
+    frame[fptr++] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame + fptr, 1); fptr += 4;
+    frame[fptr++] = 0x01; /* extra = 1 -> mLen = 15 + 4 + 1 = 20 */
+
+    /* Section 3: Offset stream (ModeFlat, orig_len 1, offset = 1) */
+    frame[fptr++] = PRZM_ENTROPY_MODE_FLAT;
+    write_u32_le(frame + fptr, 1); fptr += 4;
+    frame[fptr++] = 0x01; /* offset = 1 */
+
+    /* Section 4: Literals (1 byte 'A') */
+    frame[fptr++] = 'A';
+
+    uint8_t dst[128];
+    int64_t res = przm_decompress(frame, fptr, dst, sizeof(dst));
+    TEST_ASSERT(res == 25, "Command split decompress size mismatch");
+    for (int i = 0; i < 25; i++) {
+        TEST_ASSERT(dst[i] == 'A', "Command split decompress payload mismatch");
+    }
+
+    TEST_PASS("command_split_decompression");
+}
+
 /* 6. Test PWS 5-Layer Grammar Unrolling */
 static void test_pws_grammar(void) {
     /* Construct a synthetic PWS frame:
@@ -1787,6 +1844,7 @@ int main(int argc, char** argv) {
     test_mahler_transform();
     test_standard_fused_raw();
     test_standard_fused_lz();
+    test_command_split_decompression();
     test_pws_grammar();
     test_ggtc_grammar();
     test_isoquant_uncollimation();
