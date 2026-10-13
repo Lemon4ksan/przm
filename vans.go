@@ -462,7 +462,7 @@ func VANSDecode4xTo(dst, src []byte, model *VANSModel) ([]byte, error) {
 		return ContextVANSDecodeOrder2To(dst, src)
 	}
 	if (flags & vansFlagOpcodeOrder2) != 0 {
-		return ContextVANSDecodeOpcode8To(dst, src)
+		return ContextVANSDecodeOpcode16To(dst, src)
 	}
 	if (flags & vansFlagMetaOrder2) != 0 {
 		return ContextVANSDecodeMeta8To(dst, src)
@@ -1009,8 +1009,8 @@ func ContextVANSDecodeOrder2(src []byte) ([]byte, error) {
 	return ContextVANSDecodeOrder2To(dst, src)
 }
 
-// ContextVANSEncodeOpcode8 encodes opStream using 8-context Bigram V-ANS.
-func ContextVANSEncodeOpcode8(src []byte) ([]byte, error) {
+// ContextVANSEncodeOpcode16 encodes opStream using 16-context Bigram V-ANS.
+func ContextVANSEncodeOpcode16(src []byte) ([]byte, error) {
 	n := len(src)
 	if n == 0 {
 		return []byte{}, nil
@@ -1031,8 +1031,8 @@ func ContextVANSEncodeOpcode8(src []byte) ([]byte, error) {
 		if i > 0 {
 			p = src[i-1]
 		}
-		ctx := ctxOpcode(p)
-		m := &OpcodeStaticModels8[ctx]
+		ctx := ctxOpcode16(p)
+		m := &OpcodeStaticModels16[ctx]
 		f := uint32(m.Freq[s])
 		cdf := uint32(m.CDF[s])
 
@@ -1069,8 +1069,13 @@ func ContextVANSEncodeOpcode8(src []byte) ([]byte, error) {
 	return out, nil
 }
 
-// ContextVANSDecodeOpcode8To decodes an 8-context Bigram V-ANS stream into dst with 0 allocations.
-func ContextVANSDecodeOpcode8To(dst, src []byte) ([]byte, error) {
+// ContextVANSEncodeOpcode8 is a backward-compatible alias for ContextVANSEncodeOpcode16.
+func ContextVANSEncodeOpcode8(src []byte) ([]byte, error) {
+	return ContextVANSEncodeOpcode16(src)
+}
+
+// ContextVANSDecodeOpcode16To decodes a 16-context Bigram V-ANS stream into dst with 0 allocations.
+func ContextVANSDecodeOpcode16To(dst, src []byte) ([]byte, error) {
 	if len(src) == 0 {
 		return dst[:0], nil
 	}
@@ -1113,8 +1118,8 @@ func ContextVANSDecodeOpcode8To(dst, src []byte) ([]byte, error) {
 
 	for i := 0; i < origLen; i++ {
 		lane := i & 3
-		ctx := ctxOpcode(prev)
-		m := &OpcodeStaticModels8[ctx]
+		ctx := ctxOpcode16(prev)
+		m := &OpcodeStaticModels16[ctx]
 
 		slot := x[lane] & (vansM - 1)
 		s := byte(m.DecodeTable[slot] & 0xFF)
@@ -1136,6 +1141,11 @@ func ContextVANSDecodeOpcode8To(dst, src []byte) ([]byte, error) {
 	}
 
 	return dst, nil
+}
+
+// ContextVANSDecodeOpcode8To is a backward-compatible alias for ContextVANSDecodeOpcode16To.
+func ContextVANSDecodeOpcode8To(dst, src []byte) ([]byte, error) {
+	return ContextVANSDecodeOpcode16To(dst, src)
 }
 
 // ContextVANSEncodeMeta8 encodes metaStream using 8-context Bigram V-ANS.

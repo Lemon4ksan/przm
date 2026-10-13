@@ -1223,13 +1223,13 @@ func PackStream(src []byte, prefMode uint8) ([]byte, error) {
 			best = out
 		}
 	}
-	if vOp8, err := ContextVANSEncodeOpcode8(src); err == nil {
-		vSize := 5 + len(vOp8)
+	if vOp16, err := ContextVANSEncodeOpcode16(src); err == nil {
+		vSize := 5 + len(vOp16)
 		if vSize < len(best) {
 			out := make([]byte, vSize)
 			out[0] = ModeVANS4X
 			binary.LittleEndian.PutUint32(out[1:5], uint32(n))
-			copy(out[5:], vOp8)
+			copy(out[5:], vOp16)
 			best = out
 		}
 	}

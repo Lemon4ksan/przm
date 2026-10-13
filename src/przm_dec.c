@@ -1038,27 +1038,27 @@ static void przm_init_static_context_models_order2(void) {
 
 #include "przm_cmd_entropy_tables.h"
 
-static VANSModel przm_static_opcode_models8[8];
-static int przm_static_opcode_models8_initialized = 0;
+static VANSModel przm_static_opcode_models16[16];
+static int przm_static_opcode_models16_initialized = 0;
 
-static void przm_init_static_opcode_models8(void) {
-    if (przm_static_opcode_models8_initialized) return;
+static void przm_init_static_opcode_models16(void) {
+    if (przm_static_opcode_models16_initialized) return;
 
-    for (int c = 0; c < 8; c++) {
+    for (int c = 0; c < 16; c++) {
         uint32_t cdf = 0;
         for (int s = 0; s < 256; s++) {
-            uint16_t f = przm_static_opcode_freq8[c][s];
-            przm_static_opcode_models8[c].freq[s] = f;
-            przm_static_opcode_models8[c].cdf[s] = (uint16_t)cdf;
+            uint16_t f = przm_static_opcode_freq16[c][s];
+            przm_static_opcode_models16[c].freq[s] = f;
+            przm_static_opcode_models16[c].cdf[s] = (uint16_t)cdf;
             for (uint32_t j = 0; j < f; j++) {
-                przm_static_opcode_models8[c].lookup[cdf + j] = (uint8_t)s;
+                przm_static_opcode_models16[c].lookup[cdf + j] = (uint8_t)s;
             }
             cdf += f;
         }
-        przm_static_opcode_models8[c].cdf[256] = (uint16_t)cdf;
+        przm_static_opcode_models16[c].cdf[256] = (uint16_t)cdf;
     }
 
-    przm_static_opcode_models8_initialized = 1;
+    przm_static_opcode_models16_initialized = 1;
 }
 
 static VANSModel przm_static_meta_models8[8];
@@ -1084,15 +1084,12 @@ static void przm_init_static_meta_models8(void) {
     przm_static_meta_models8_initialized = 1;
 }
 
+static inline uint8_t przm_ctx_opcode16(uint8_t prev) {
+    return przm_ctx_opcode16_map[prev];
+}
+
 static inline uint8_t przm_ctx_opcode(uint8_t prev) {
-    if (prev == 0xF3 || prev == 0xF4) return 0;
-    if ((prev >= 0xF5 && prev <= 0xFA) || prev == 0xF0) return 1;
-    if (prev == 0xCF) return 2;
-    if (prev >= 0x80 && prev <= 0x8F) return 3;
-    if (prev >= 0x90 && prev <= 0xBF) return 4;
-    if (prev < 0x80 || (prev >= 0xC0 && prev <= 0xC3)) return 5;
-    if (prev >= 0xC4 && prev <= 0xCE) return 6;
-    return 7;
+    return przm_ctx_opcode16(prev);
 }
 
 static inline uint8_t przm_ctx_meta(uint8_t prev) {
@@ -1226,7 +1223,7 @@ static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_
         if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
         if (orig_len == 0) return PRZM_OK;
 
-        przm_init_static_opcode_models8();
+        przm_init_static_opcode_models16();
 
         uint32_t x[4];
         x[0] = read_u32_le(src + 8);
@@ -1239,8 +1236,8 @@ static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_
 
         for (size_t i = 0; i < orig_len; i++) {
             size_t lane = i & 3;
-            uint8_t ctx = przm_ctx_opcode(prev);
-            const VANSModel* m = &przm_static_opcode_models8[ctx];
+            uint8_t ctx = przm_ctx_opcode16(prev);
+            const VANSModel* m = &przm_static_opcode_models16[ctx];
             uint32_t slot = x[lane] & (VANS_M - 1);
             uint8_t s = m->lookup[slot];
             dst[i] = s;
