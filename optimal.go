@@ -51,7 +51,7 @@ type dpCandidate struct {
 // Optimized to stay strictly in L1 cache during forward DAG relaxation.
 type dpScratchpad struct {
 	window       [1024]dpState             // 16 KB Hot Window
-	table3       [32768]int32              // 128 KB Hash Table
+	table3       [65536 * 2]int32          // 512 KB 2-way 3-byte Hash Table
 	macro8       [65536 * 8]int32          // 2 MB 8-way 8-byte Macro Sliding Window Table
 	dagProd      [65536 * 2]int32          // 512 KB 2-way 16-byte DAG Production Table
 	dagProd32    [65536 * 2]int32          // 512 KB 2-way 32-byte Structural Macro Production Table
@@ -133,10 +133,7 @@ func calcDistPrefixCostPRZM(d int) int32 {
 	if d <= 65536 {
 		return 30 // 15 extra bits = 30 units
 	}
-	if d <= 2097152 {
-		return 34 // 17 extra bits = 34 units (under 2MB, varint is 3 bytes)
-	}
-	return 42 // 21-24 extra bits = 42 units (up to 16MB)
+	return 48 // 24 extra bits = 48 units (up to 16MB)
 }
 
 // calcOffCostPRZM returns the number of bytes required to serialize offset d in Section 3.
@@ -524,7 +521,8 @@ func emitPathPRZM(
 		to := path[i]
 		repCode := int(dpPad.trace[to].repCode)
 
-		if len(coalesced) > 0 && repCode == 0 {
+		dist := int(dpPad.trace[to].dist)
+		if len(coalesced) > 0 && (repCode == 0 || (repCode == -1 && dist > 0 && dist == int(dpPad.trace[coalesced[len(coalesced)-1]].dist))) {
 			prevTo := coalesced[len(coalesced)-1]
 			prevRep := int(dpPad.trace[prevTo].repCode)
 			prevDist := int(dpPad.trace[prevTo].dist)
@@ -1008,7 +1006,8 @@ func compressBlockOptimal(
 				b = 1
 			}
 			lClamped := min(l, dpMaxL)
-			if lClamped > int(bracketBest[b].length) {
+			prev := bracketBest[b]
+			if lClamped > int(prev.length) || (lClamped == int(prev.length) && (isBracketDist(d) || d < int(prev.dist))) {
 				bracketBest[b] = dpCandidate{dist: int32(d), length: int32(lClamped), repCode: -1}
 			}
 		}
@@ -1027,20 +1026,25 @@ func compressBlockOptimal(
 			}
 		}
 
-		// Secondary 3-byte direct-mapped table
+		// Secondary 3-byte 2-way associative table (64K buckets x 2 slots)
 		if pos+3 <= uSize {
 			h3 := uint32(src[pos]) | (uint32(src[pos+1]) << 8) | (uint32(src[pos+2]) << 16)
-			idx3 := (h3 * 0x1E35A7BD) >> 17
-			prev3 := int(dpPad.table3[idx3]) - 1
-			dpPad.table3[idx3] = int32(pos + 1)
-			if prev3 >= 0 {
-				d3 := pos - prev3
-				if d3 > 0 && d3 <= windowSize && d3 != r0 && d3 != r1 && d3 != r2 {
-					if src[pos] == src[prev3] && src[pos+1] == src[prev3+1] && src[pos+2] == src[prev3+2] {
-						l3 := HenselLCPPos(src, pos, prev3, maxL)
-						updateBracket(d3, l3)
+			base3 := int(((h3 * 0x1E35A7BD) >> 16) & 0xFFFF) * 2
+			for s := 0; s < 2; s++ {
+				prev3 := int(dpPad.table3[base3+s]) - 1
+				if prev3 >= 0 && prev3 < pos {
+					d3 := pos - prev3
+					if d3 > 0 && d3 <= windowSize && d3 != r0 && d3 != r1 && d3 != r2 {
+						if src[pos] == src[prev3] && src[pos+1] == src[prev3+1] && src[pos+2] == src[prev3+2] {
+							l3 := HenselLCPPos(src, pos, prev3, maxL)
+							updateBracket(d3, l3)
+						}
 					}
 				}
+			}
+			if int(dpPad.table3[base3])-1 != pos {
+				dpPad.table3[base3+1] = dpPad.table3[base3]
+				dpPad.table3[base3] = int32(pos + 1)
 			}
 		}
 
