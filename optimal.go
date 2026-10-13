@@ -201,23 +201,15 @@ func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int, hasStride bool, str
 		}
 	} else if isBracketDist(dist) && mLen <= 15+minMatchBase {
 		// Fused Bracket: 2 bytes in Section 1, 0 offset bytes in Section 3
-		cost = 32
-	} else if (!hasStride || stride <= 1) && dist <= 256 {
-		// Diff Lattice (Immediate 1-byte Offset): 3 bytes in Section 1, 0 offset bytes in Section 3
-		if mLen <= 6+minMatchBase {
-			cost = 48
-		} else if mLen <= 6+minMatchBase+127 {
-			cost = 64
-		} else {
-			cost = 80
-		}
+		cost = 24
+
 	} else {
 		// Explicit match: opcode byte in Section 1 + Section 3 Huffman distance code (~24 units)
-		var baseCost int32 = 24
+		var baseCost int32 = 18
 		if mLen > 14+minMatchBase+127 {
-			baseCost = 52
+			baseCost = 48
 		} else if mLen > 14+minMatchBase {
-			baseCost = 38
+			baseCost = 32
 		}
 		cost = baseCost + calcDistPrefixCostPRZM(dist)
 	}
@@ -686,7 +678,7 @@ func emitPathPRZM(
 			*rep2 = *rep1
 			*rep1 = *rep0
 			*rep0 = mDist
-		} else if (!hasStride || stride <= 1) && mDist <= 256 {
+		} else if (!hasStride || stride <= 1) && mDist >= 128 && mDist <= 256 && litLen > 3 && litLen <= 6 && mLen-minMatchBase <= 6 {
 			if litLen > 6 {
 				flushLen := litLen - 6
 				flushLiteralsPRZM(&pad.cmdBuf, &pad.literalBuf, src[litStart:litStart+flushLen])
@@ -1244,23 +1236,7 @@ func compressBlockOptimal(
 				pad.cmdBuf = append(pad.cmdBuf, op, token)
 				*rep2 = *rep1
 				*rep1 = *rep0
-				*rep0 = mDist
-			} else if (!hasStride || stride <= 1) && mDist <= 256 {
-				baseLen := mLen - minMatchBase
-				if baseLen > 6 {
-					baseLen = 7
-				}
-				desc := uint8((3 << 6) | baseLen) // litLen = 0
-				deltaByte := uint8(mDist - 1)
-				pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixDiffLattice, desc, deltaByte)
-				if baseLen == 7 {
-					var varBuf [8]byte
-					n := binary.PutUvarint(varBuf[:], uint64(mLen-(7+minMatchBase)))
-					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
-				}
-				*rep2 = *rep1
-				*rep1 = *rep0
-				*rep0 = mDist
+
 			} else {
 				baseLen := mLen - minMatchBase
 				if baseLen > 14 {
