@@ -3761,6 +3761,34 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             continue;
         }
 
+        if (op == 0xCF) {
+            /* RFC 7932 Transformed Match (0xCF <trans_id> <varint word_id>) */
+            if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t trans_id = cmds[cmd_ptr++];
+            int word_id = 0;
+            int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &word_id);
+            if (err != PRZM_OK || word_id < 0) return PRZM_ERR_CORRUPTED_FRAME;
+
+            const char* word_str = NULL;
+            size_t word_len = 0;
+            if (word_id < 256) {
+                word_str = get_schema_token(dict_id, (uint8_t)word_id, ext_dict, &word_len);
+            } else {
+                size_t rfc_idx = (size_t)(word_id - 256);
+                if (rfc_idx < PRZM_RFC_WORDS_COUNT) {
+                    word_str = przm_rfc_words[rfc_idx].str;
+                    word_len = przm_rfc_words[rfc_idx].len;
+                }
+            }
+            if (!word_str || word_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+
+            if (!przm_check_cap(alloc_size, dst_pos, word_len + 32)) return PRZM_ERR_CORRUPTED_FRAME;
+            size_t out_len = przm_apply_rfc_transform(decode_dst + dst_pos, trans_id, word_str, word_len);
+            if (out_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+            dst_pos += out_len;
+            continue;
+        }
+
         if (op == 0xF0) {
             /* Pure Literal Run */
             int run_len = 0;

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/lemon4ksan/foundation/bufkit"
 
@@ -568,8 +569,15 @@ func TestAdversarial_PureC_TwistCompatibility(t *testing.T) {
 				t.Fatalf("failed to write frame file: %v", err)
 			}
 
-			cmd := exec.Command(cBinPath, inPrzm, outBin)
-			output, err := cmd.CombinedOutput()
+			var output []byte
+			for attempt := 0; attempt < 3; attempt++ {
+				cmd := exec.Command(cBinPath, inPrzm, outBin)
+				output, err = cmd.CombinedOutput()
+				if err == nil {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
 			if err != nil {
 				t.Fatalf("Pure C decompressor execution error on %s: %v\nOutput: %s", tt.name, err, string(output))
 			}

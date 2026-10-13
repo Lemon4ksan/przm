@@ -257,3 +257,746 @@ static const przm_dict_entry_t przm_brotli_web_tokens[256] = {
     { (const char[]) { 0x75, 0x69, 0x6E, 0x74, 0x33, 0x32, 0x5F, 0x74, 0x20 }, 9 }, /* [254] */
     { (const char[]) { 0x73, 0x69, 0x7A, 0x65, 0x5F, 0x74, 0x20 }, 7 }, /* [255] */
 };
+/* RFC 7932 121-Word Transformation Matrix Constants */
+static const uint8_t przm_rfc_prefix_suffix[218] = {
+0x01,0x20,0x02,0x2C,0x20,0x08,0x20,0x6F,0x66,0x20,0x74,0x68,0x65,0x20,0x04,0x20,
+0x6F,0x66,0x20,0x02,0x73,0x20,0x01,0x2E,0x05,0x20,0x61,0x6E,0x64,0x20,0x04,0x20,
+0x69,0x6E,0x20,0x01,0x22,0x04,0x20,0x74,0x6F,0x20,0x02,0x22,0x3E,0x01,0x0A,0x02,
+0x2E,0x20,0x01,0x5D,0x05,0x20,0x66,0x6F,0x72,0x20,0x03,0x20,0x61,0x20,0x06,0x20,
+0x74,0x68,0x61,0x74,0x20,0x01,0x27,0x06,0x20,0x77,0x69,0x74,0x68,0x20,0x06,0x20,
+0x66,0x72,0x6F,0x6D,0x20,0x04,0x20,0x62,0x79,0x20,0x01,0x28,0x06,0x2E,0x20,0x54,
+0x68,0x65,0x20,0x04,0x20,0x6F,0x6E,0x20,0x04,0x20,0x61,0x73,0x20,0x04,0x20,0x69,
+0x73,0x20,0x04,0x69,0x6E,0x67,0x20,0x02,0x0A,0x09,0x01,0x3A,0x03,0x65,0x64,0x20,
+0x02,0x3D,0x22,0x04,0x20,0x61,0x74,0x20,0x03,0x6C,0x79,0x20,0x01,0x2C,0x02,0x3D,
+0x27,0x05,0x2E,0x63,0x6F,0x6D,0x2F,0x07,0x2E,0x20,0x54,0x68,0x69,0x73,0x20,0x05,
+0x20,0x6E,0x6F,0x74,0x20,0x03,0x65,0x72,0x20,0x03,0x61,0x6C,0x20,0x04,0x66,0x75,
+0x6C,0x20,0x04,0x69,0x76,0x65,0x20,0x05,0x6C,0x65,0x73,0x73,0x20,0x04,0x65,0x73,
+0x74,0x20,0x04,0x69,0x7A,0x65,0x20,0x02,0xC2,0xA0,0x04,0x6F,0x75,0x73,0x20,0x05,
+0x20,0x74,0x68,0x65,0x20,0x02,0x65,0x20,0x00,
+};
+
+static const uint16_t przm_rfc_prefix_suffix_map[50] = {
+0x0000,0x0002,0x0005,0x000E,0x0013,0x0016,0x0018,0x001E,0x0023,0x0025,
+0x002A,0x002D,0x002F,0x0032,0x0034,0x003A,0x003E,0x0045,0x0047,0x004E,
+0x0055,0x005A,0x005C,0x0063,0x0068,0x006D,0x0072,0x0077,0x007A,0x007C,
+0x0080,0x0083,0x0088,0x008C,0x008E,0x0091,0x0097,0x009F,0x00A5,0x00A9,
+0x00AD,0x00B2,0x00B7,0x00BD,0x00C2,0x00C7,0x00CA,0x00CF,0x00D5,0x00D8,
+
+};
+
+static const uint8_t przm_rfc_transforms[121][3] = {
+    {49, 0, 49}, /* [0] */
+    {49, 0, 0}, /* [1] */
+    {0, 0, 0}, /* [2] */
+    {49, 12, 49}, /* [3] */
+    {49, 10, 0}, /* [4] */
+    {49, 0, 47}, /* [5] */
+    {0, 0, 49}, /* [6] */
+    {4, 0, 0}, /* [7] */
+    {49, 0, 3}, /* [8] */
+    {49, 10, 49}, /* [9] */
+    {49, 0, 6}, /* [10] */
+    {49, 13, 49}, /* [11] */
+    {49, 1, 49}, /* [12] */
+    {1, 0, 0}, /* [13] */
+    {49, 0, 1}, /* [14] */
+    {0, 10, 0}, /* [15] */
+    {49, 0, 7}, /* [16] */
+    {49, 0, 9}, /* [17] */
+    {48, 0, 0}, /* [18] */
+    {49, 0, 8}, /* [19] */
+    {49, 0, 5}, /* [20] */
+    {49, 0, 10}, /* [21] */
+    {49, 0, 11}, /* [22] */
+    {49, 3, 49}, /* [23] */
+    {49, 0, 13}, /* [24] */
+    {49, 0, 14}, /* [25] */
+    {49, 14, 49}, /* [26] */
+    {49, 2, 49}, /* [27] */
+    {49, 0, 15}, /* [28] */
+    {49, 0, 16}, /* [29] */
+    {0, 10, 49}, /* [30] */
+    {49, 0, 12}, /* [31] */
+    {5, 0, 49}, /* [32] */
+    {0, 0, 1}, /* [33] */
+    {49, 15, 49}, /* [34] */
+    {49, 0, 18}, /* [35] */
+    {49, 0, 17}, /* [36] */
+    {49, 0, 19}, /* [37] */
+    {49, 0, 20}, /* [38] */
+    {49, 16, 49}, /* [39] */
+    {49, 17, 49}, /* [40] */
+    {47, 0, 49}, /* [41] */
+    {49, 4, 49}, /* [42] */
+    {49, 0, 22}, /* [43] */
+    {49, 11, 49}, /* [44] */
+    {49, 0, 23}, /* [45] */
+    {49, 0, 24}, /* [46] */
+    {49, 0, 25}, /* [47] */
+    {49, 7, 49}, /* [48] */
+    {49, 1, 26}, /* [49] */
+    {49, 0, 27}, /* [50] */
+    {49, 0, 28}, /* [51] */
+    {0, 0, 12}, /* [52] */
+    {49, 0, 29}, /* [53] */
+    {49, 20, 49}, /* [54] */
+    {49, 18, 49}, /* [55] */
+    {49, 6, 49}, /* [56] */
+    {49, 0, 21}, /* [57] */
+    {49, 10, 1}, /* [58] */
+    {49, 8, 49}, /* [59] */
+    {49, 0, 31}, /* [60] */
+    {49, 0, 32}, /* [61] */
+    {47, 0, 3}, /* [62] */
+    {49, 5, 49}, /* [63] */
+    {49, 9, 49}, /* [64] */
+    {0, 10, 1}, /* [65] */
+    {49, 10, 8}, /* [66] */
+    {5, 0, 21}, /* [67] */
+    {49, 11, 0}, /* [68] */
+    {49, 10, 10}, /* [69] */
+    {49, 0, 30}, /* [70] */
+    {0, 0, 5}, /* [71] */
+    {35, 0, 49}, /* [72] */
+    {47, 0, 2}, /* [73] */
+    {49, 10, 17}, /* [74] */
+    {49, 0, 36}, /* [75] */
+    {49, 0, 33}, /* [76] */
+    {5, 0, 0}, /* [77] */
+    {49, 10, 21}, /* [78] */
+    {49, 10, 5}, /* [79] */
+    {49, 0, 37}, /* [80] */
+    {0, 0, 30}, /* [81] */
+    {49, 0, 38}, /* [82] */
+    {0, 11, 0}, /* [83] */
+    {49, 0, 39}, /* [84] */
+    {0, 11, 49}, /* [85] */
+    {49, 0, 34}, /* [86] */
+    {49, 11, 8}, /* [87] */
+    {49, 10, 12}, /* [88] */
+    {0, 0, 21}, /* [89] */
+    {49, 0, 40}, /* [90] */
+    {0, 10, 12}, /* [91] */
+    {49, 0, 41}, /* [92] */
+    {49, 0, 42}, /* [93] */
+    {49, 11, 17}, /* [94] */
+    {49, 0, 43}, /* [95] */
+    {0, 10, 5}, /* [96] */
+    {49, 11, 10}, /* [97] */
+    {0, 0, 34}, /* [98] */
+    {49, 10, 33}, /* [99] */
+    {49, 0, 44}, /* [100] */
+    {49, 11, 5}, /* [101] */
+    {45, 0, 49}, /* [102] */
+    {0, 0, 33}, /* [103] */
+    {49, 10, 30}, /* [104] */
+    {49, 11, 30}, /* [105] */
+    {49, 0, 46}, /* [106] */
+    {49, 11, 1}, /* [107] */
+    {49, 10, 34}, /* [108] */
+    {0, 10, 33}, /* [109] */
+    {0, 11, 30}, /* [110] */
+    {0, 11, 1}, /* [111] */
+    {49, 11, 33}, /* [112] */
+    {49, 11, 21}, /* [113] */
+    {49, 11, 12}, /* [114] */
+    {0, 11, 5}, /* [115] */
+    {49, 11, 34}, /* [116] */
+    {0, 11, 12}, /* [117] */
+    {0, 10, 30}, /* [118] */
+    {0, 11, 34}, /* [119] */
+    {0, 10, 34}, /* [120] */
+};
+
+#define PRZM_RFC_WORDS_COUNT 512
+static const przm_dict_entry_t przm_rfc_words[512] = {
+    { "return", 6 }, /* [0] */
+    { "mathcal", 7 }, /* [1] */
+    { "uint8_t", 7 }, /* [2] */
+    { "size_t", 6 }, /* [3] */
+    { "background", 10 }, /* [4] */
+    { "mathbb", 6 }, /* [5] */
+    { "compression", 11 }, /* [6] */
+    { "decompression", 13 }, /* [7] */
+    { "mathbf", 6 }, /* [8] */
+    { "dst_pos", 7 }, /* [9] */
+    { "literal_pct", 11 }, /* [10] */
+    { "text", 4 }, /* [11] */
+    { "errcorruptedframe", 17 }, /* [12] */
+    { "orig_len", 8 }, /* [13] */
+    { "mathematical", 12 }, /* [14] */
+    { "aes_distinguisher", 17 }, /* [15] */
+    { "repeat_pct", 10 }, /* [16] */
+    { "bytes", 5 }, /* [17] */
+    { "read_u32_le", 11 }, /* [18] */
+    { "section", 7 }, /* [19] */
+    { "throughput", 10 }, /* [20] */
+    { "src_len", 7 }, /* [21] */
+    { "uint32_t", 8 }, /* [22] */
+    { "match_pct", 9 }, /* [23] */
+    { "decompressor", 12 }, /* [24] */
+    { "timeline", 8 }, /* [25] */
+    { "entropy", 7 }, /* [26] */
+    { "dictionary", 10 }, /* [27] */
+    { "allocations", 11 }, /* [28] */
+    { "minmatchbase", 12 }, /* [29] */
+    { "byte", 4 }, /* [30] */
+    { "vector", 6 }, /* [31] */
+    { "class", 5 }, /* [32] */
+    { "color", 5 }, /* [33] */
+    { "dstpos", 6 }, /* [34] */
+    { "stream", 6 }, /* [35] */
+    { "discrete", 8 }, /* [36] */
+    { "match", 5 }, /* [37] */
+    { "strictly", 8 }, /* [38] */
+    { "tooltip", 7 }, /* [39] */
+    { "style", 5 }, /* [40] */
+    { "coordinate", 10 }, /* [41] */
+    { "execution", 9 }, /* [42] */
+    { "uncompressed", 12 }, /* [43] */
+    { "offset", 6 }, /* [44] */
+    { "payload", 7 }, /* [45] */
+    { "memory", 6 }, /* [46] */
+    { "architecture", 12 }, /* [47] */
+    { "implementation", 14 }, /* [48] */
+    { "przm", 4 }, /* [49] */
+    { "standard", 8 }, /* [50] */
+    { "multiplication", 14 }, /* [51] */
+    { "codingprojects", 14 }, /* [52] */
+    { "theorem", 7 }, /* [53] */
+    { "accent", 6 }, /* [54] */
+    { "specification", 13 }, /* [55] */
+    { "transformation", 14 }, /* [56] */
+    { "length", 6 }, /* [57] */
+    { "instruction", 11 }, /* [58] */
+    { "deterministic", 13 }, /* [59] */
+    { "compressed", 10 }, /* [60] */
+    { "gf256_mul", 9 }, /* [61] */
+    { "across", 6 }, /* [62] */
+    { "invariant", 9 }, /* [63] */
+    { "information", 11 }, /* [64] */
+    { "verification", 12 }, /* [65] */
+    { "baselen", 7 }, /* [66] */
+    { "contracted_len", 14 }, /* [67] */
+    { "bigoplus_", 9 }, /* [68] */
+    { "algebraic", 9 }, /* [69] */
+    { "decode_dst", 10 }, /* [70] */
+    { "times", 5 }, /* [71] */
+    { "empirical", 9 }, /* [72] */
+    { "latency", 7 }, /* [73] */
+    { "directory", 9 }, /* [74] */
+    { "przm_safety_padding", 19 }, /* [75] */
+    { "active", 6 }, /* [76] */
+    { "continue", 8 }, /* [77] */
+    { "przm_max_huff_bits", 18 }, /* [78] */
+    { "instantaneous", 13 }, /* [79] */
+    { "distribution", 12 }, /* [80] */
+    { "przm_gpu_experiments", 20 }, /* [81] */
+    { "parallel", 8 }, /* [82] */
+    { "total_literals", 14 }, /* [83] */
+    { "matches", 7 }, /* [84] */
+    { "int64_t", 7 }, /* [85] */
+    { "allocation", 10 }, /* [86] */
+    { "architectural", 13 }, /* [87] */
+    { "operations", 10 }, /* [88] */
+    { "purple", 6 }, /* [89] */
+    { "matrix", 6 }, /* [90] */
+    { "cycles", 6 }, /* [91] */
+    { "register", 8 }, /* [92] */
+    { "percentage", 10 }, /* [93] */
+    { "transform", 9 }, /* [94] */
+    { "przm_check_cap", 14 }, /* [95] */
+    { "tls_archival_scratch", 20 }, /* [96] */
+    { "literal", 7 }, /* [97] */
+    { "huff_reader_consume", 19 }, /* [98] */
+    { "theoretical", 11 }, /* [99] */
+    { "przm_huff_entry_t", 17 }, /* [100] */
+    { "differential", 12 }, /* [101] */
+    { "header", 6 }, /* [102] */
+    { "dimensional", 11 }, /* [103] */
+    { "permutation", 11 }, /* [104] */
+    { "oplus", 5 }, /* [105] */
+    { "uint16_t", 8 }, /* [106] */
+    { "tls_split_scratch", 17 }, /* [107] */
+    { "kernel", 6 }, /* [108] */
+    { "przm_max_block_size", 19 }, /* [109] */
+    { "cryptographic", 13 }, /* [110] */
+    { "total_matches", 13 }, /* [111] */
+    { "alloc_size", 10 }, /* [112] */
+    { "reconstruction", 14 }, /* [113] */
+    { "with", 4 }, /* [114] */
+    { "without", 7 }, /* [115] */
+    { "distance", 8 }, /* [116] */
+    { "litlen", 6 }, /* [117] */
+    { "data", 4 }, /* [118] */
+    { "allocs", 6 }, /* [119] */
+    { "verified", 8 }, /* [120] */
+    { "symplectic", 10 }, /* [121] */
+    { "state", 5 }, /* [122] */
+    { "uint64", 6 }, /* [123] */
+    { "cmdbuf", 6 }, /* [124] */
+    { "start", 5 }, /* [125] */
+    { "instructions", 12 }, /* [126] */
+    { "formulation", 11 }, /* [127] */
+    { "mixcolumns", 10 }, /* [128] */
+    { "stride", 6 }, /* [129] */
+    { "binary", 6 }, /* [130] */
+    { "unsafe", 6 }, /* [131] */
+    { "token", 5 }, /* [132] */
+    { "const", 5 }, /* [133] */
+    { "expansion", 9 }, /* [134] */
+    { "table", 5 }, /* [135] */
+    { "registers", 9 }, /* [136] */
+    { "benchmark", 9 }, /* [137] */
+    { "extended", 8 }, /* [138] */
+    { "hardware", 8 }, /* [139] */
+    { "structured", 10 }, /* [140] */
+    { "huff_reader_peek", 16 }, /* [141] */
+    { "context", 7 }, /* [142] */
+    { "block", 5 }, /* [143] */
+    { "huff_entry_codelen", 18 }, /* [144] */
+    { "border", 6 }, /* [145] */
+    { "dynamic", 7 }, /* [146] */
+    { "dst_cap", 7 }, /* [147] */
+    { "target", 6 }, /* [148] */
+    { "litptr", 6 }, /* [149] */
+    { "memcpy", 6 }, /* [150] */
+    { "gpu_archival_report", 19 }, /* [151] */
+    { "payload_len", 11 }, /* [152] */
+    { "linear", 6 }, /* [153] */
+    { "huff_entry_symbol", 17 }, /* [154] */
+    { "cryptanalysis", 13 }, /* [155] */
+    { "zero", 4 }, /* [156] */
+    { "column", 6 }, /* [157] */
+    { "topological", 11 }, /* [158] */
+    { "interleaved", 11 }, /* [159] */
+    { "coordinates", 11 }, /* [160] */
+    { "independent", 11 }, /* [161] */
+    { "opcode", 6 }, /* [162] */
+    { "windowlog", 9 }, /* [163] */
+    { "round", 5 }, /* [164] */
+    { "tropical", 8 }, /* [165] */
+    { "literalbuf", 10 }, /* [166] */
+    { "delta", 5 }, /* [167] */
+    { "description", 11 }, /* [168] */
+    { "repcode", 7 }, /* [169] */
+    { "pointer", 7 }, /* [170] */
+    { "przm_inline", 11 }, /* [171] */
+    { "outbuf", 6 }, /* [172] */
+    { "przm_decompress", 15 }, /* [173] */
+    { "polynomial", 10 }, /* [174] */
+    { "function", 8 }, /* [175] */
+    { "orig_size", 9 }, /* [176] */
+    { "streaming", 9 }, /* [177] */
+    { "uint32", 6 }, /* [178] */
+    { "vgf2p8affineqb", 14 }, /* [179] */
+    { "analysis", 8 }, /* [180] */
+    { "truncated", 9 }, /* [181] */
+    { "przm_ok", 7 }, /* [182] */
+    { "crossover", 9 }, /* [183] */
+    { "lit_len", 7 }, /* [184] */
+    { "cmdptr", 6 }, /* [185] */
+    { "ultrametric", 11 }, /* [186] */
+    { "grammar", 7 }, /* [187] */
+    { "exact", 5 }, /* [188] */
+    { "executes", 8 }, /* [189] */
+    { "reference", 9 }, /* [190] */
+    { "boundary", 8 }, /* [191] */
+    { "errorf", 6 }, /* [192] */
+    { "pipeline", 8 }, /* [193] */
+    { "reduction", 9 }, /* [194] */
+    { "integration", 11 }, /* [195] */
+    { "cmd_ptr", 7 }, /* [196] */
+    { "original_request", 16 }, /* [197] */
+    { "littleendian", 12 }, /* [198] */
+    { "static", 6 }, /* [199] */
+    { "signature", 9 }, /* [200] */
+    { "complexity", 10 }, /* [201] */
+    { "structural", 10 }, /* [202] */
+    { "directly", 8 }, /* [203] */
+    { "where", 5 }, /* [204] */
+    { "fusedext", 8 }, /* [205] */
+    { "frame", 5 }, /* [206] */
+    { "gpu_bench_test", 14 }, /* [207] */
+    { "acceleration", 12 }, /* [208] */
+    { "mathrm", 6 }, /* [209] */
+    { "decompressed", 12 }, /* [210] */
+    { "https", 5 }, /* [211] */
+    { "branchless", 10 }, /* [212] */
+    { "przm_expand_base64", 18 }, /* [213] */
+    { "uint64_t", 8 }, /* [214] */
+    { "sequence", 8 }, /* [215] */
+    { "single", 6 }, /* [216] */
+    { "archivestartoffset", 18 }, /* [217] */
+    { "evaluates", 9 }, /* [218] */
+    { "algorithm", 9 }, /* [219] */
+    { "dec_table", 9 }, /* [220] */
+    { "requires", 8 }, /* [221] */
+    { "cachelinesize", 13 }, /* [222] */
+    { "property", 8 }, /* [223] */
+    { "template", 8 }, /* [224] */
+    { "encryption", 10 }, /* [225] */
+    { "else", 4 }, /* [226] */
+    { "basedst", 7 }, /* [227] */
+    { "inverse", 7 }, /* [228] */
+    { "dedupblocksize", 14 }, /* [229] */
+    { "bitstream", 9 }, /* [230] */
+    { "secondary", 9 }, /* [231] */
+    { "over", 4 }, /* [232] */
+    { "repeat", 6 }, /* [233] */
+    { "cellular", 8 }, /* [234] */
+    { "lit_ptr", 7 }, /* [235] */
+    { "level", 5 }, /* [236] */
+    { "because", 7 }, /* [237] */
+    { "identically", 11 }, /* [238] */
+    { "chunk_size", 10 }, /* [239] */
+    { "fast_read_varint", 16 }, /* [240] */
+    { "contiguous", 10 }, /* [241] */
+    { "identical", 9 }, /* [242] */
+    { "geometric", 9 }, /* [243] */
+    { "engine", 6 }, /* [244] */
+    { "int32", 5 }, /* [245] */
+    { "chunk", 5 }, /* [246] */
+    { "streams", 7 }, /* [247] */
+    { "bounded", 7 }, /* [248] */
+    { "shannon", 7 }, /* [249] */
+    { "structures", 10 }, /* [250] */
+    { "degree", 6 }, /* [251] */
+    { "annihilation", 12 }, /* [252] */
+    { "alignedbytes", 12 }, /* [253] */
+    { "galois", 6 }, /* [254] */
+    { "litstart", 8 }, /* [255] */
+    { "cryptanalytic", 13 }, /* [256] */
+    { "distinguisher", 13 }, /* [257] */
+    { "get_schema_token", 16 }, /* [258] */
+    { "synthesis", 9 }, /* [259] */
+    { "blacksquare", 11 }, /* [260] */
+    { "arithmetic", 10 }, /* [261] */
+    { "integrity", 9 }, /* [262] */
+    { "immediately", 11 }, /* [263] */
+    { "compressoptions", 15 }, /* [264] */
+    { "vgf2p8mulb", 10 }, /* [265] */
+    { "read_u16_le", 11 }, /* [266] */
+    { "integer", 7 }, /* [267] */
+    { "parameters", 10 }, /* [268] */
+    { "field", 5 }, /* [269] */
+    { "size", 4 }, /* [270] */
+    { "uint8", 5 }, /* [271] */
+    { "extra", 5 }, /* [272] */
+    { "append", 6 }, /* [273] */
+    { "fastreadvarint", 14 }, /* [274] */
+    { "isoquant", 8 }, /* [275] */
+    { "lossless", 8 }, /* [276] */
+    { "lengths", 7 }, /* [277] */
+    { "framedecoder", 12 }, /* [278] */
+    { "inversion", 9 }, /* [279] */
+    { "offsetbuf", 9 }, /* [280] */
+    { "classical", 9 }, /* [281] */
+    { "prefix", 6 }, /* [282] */
+    { "canonical", 9 }, /* [283] */
+    { "windowsize", 10 }, /* [284] */
+    { "overhead", 8 }, /* [285] */
+    { "mapping", 7 }, /* [286] */
+    { "exactly", 7 }, /* [287] */
+    { "probability", 11 }, /* [288] */
+    { "uintptr", 7 }, /* [289] */
+    { "direct", 6 }, /* [290] */
+    { "uint16", 6 }, /* [291] */
+    { "from", 4 }, /* [292] */
+    { "uncompressedsize", 16 }, /* [293] */
+    { "tls_norm_scratch", 16 }, /* [294] */
+    { "centraldiroffset", 16 }, /* [295] */
+    { "container", 9 }, /* [296] */
+    { "machine", 7 }, /* [297] */
+    { "norm_mode", 9 }, /* [298] */
+    { "shiftrows", 9 }, /* [299] */
+    { "mlen", 4 }, /* [300] */
+    { "measured", 8 }, /* [301] */
+    { "archival", 8 }, /* [302] */
+    { "division", 8 }, /* [303] */
+    { "culaunchkernel", 14 }, /* [304] */
+    { "min_match_base", 14 }, /* [305] */
+    { "characteristic", 14 }, /* [306] */
+    { "identifier", 10 }, /* [307] */
+    { "window", 6 }, /* [308] */
+    { "statistical", 11 }, /* [309] */
+    { "error", 5 }, /* [310] */
+    { "pmatrix", 7 }, /* [311] */
+    { "into", 4 }, /* [312] */
+    { "vectors", 7 }, /* [313] */
+    { "padding", 7 }, /* [314] */
+    { "flags", 5 }, /* [315] */
+    { "explicit", 8 }, /* [316] */
+    { "reserved", 8 }, /* [317] */
+    { "decomposition", 13 }, /* [318] */
+    { "fused", 5 }, /* [319] */
+    { "right", 5 }, /* [320] */
+    { "sheaf", 5 }, /* [321] */
+    { "documentation", 13 }, /* [322] */
+    { "uint32_le", 9 }, /* [323] */
+    { "family", 6 }, /* [324] */
+    { "count", 5 }, /* [325] */
+    { "number", 6 }, /* [326] */
+    { "lemon4ksan", 10 }, /* [327] */
+    { "chunkindex", 10 }, /* [328] */
+    { "evaluating", 10 }, /* [329] */
+    { "sequential", 10 }, /* [330] */
+    { "constant", 8 }, /* [331] */
+    { "przm_dec", 8 }, /* [332] */
+    { "span", 4 }, /* [333] */
+    { "transformed", 11 }, /* [334] */
+    { "output", 6 }, /* [335] */
+    { "optimal", 7 }, /* [336] */
+    { "satisfies", 9 }, /* [337] */
+    { "width", 5 }, /* [338] */
+    { "przm_err_offset_oob", 19 }, /* [339] */
+    { "hierarchical", 12 }, /* [340] */
+    { "offsets", 7 }, /* [341] */
+    { "hasstride", 9 }, /* [342] */
+    { "initpadsize", 11 }, /* [343] */
+    { "bandwidth", 9 }, /* [344] */
+    { "mathematically", 14 }, /* [345] */
+    { "huff_reader_init", 16 }, /* [346] */
+    { "sigma", 5 }, /* [347] */
+    { "space", 5 }, /* [348] */
+    { "multi", 5 }, /* [349] */
+    { "bits", 4 }, /* [350] */
+    { "symbol", 6 }, /* [351] */
+    { "cell", 4 }, /* [352] */
+    { "default", 7 }, /* [353] */
+    { "continuous", 10 }, /* [354] */
+    { "decoding", 8 }, /* [355] */
+    { "trellis", 7 }, /* [356] */
+    { "bstart", 6 }, /* [357] */
+    { "candcount", 9 }, /* [358] */
+    { "this", 4 }, /* [359] */
+    { "microcode", 9 }, /* [360] */
+    { "command", 7 }, /* [361] */
+    { "proof", 5 }, /* [362] */
+    { "defined", 7 }, /* [363] */
+    { "float64", 7 }, /* [364] */
+    { "collimation", 11 }, /* [365] */
+    { "woffset", 7 }, /* [366] */
+    { "channel", 7 }, /* [367] */
+    { "magic", 5 }, /* [368] */
+    { "overflow", 8 }, /* [369] */
+    { "diagonal", 8 }, /* [370] */
+    { "harmonic", 8 }, /* [371] */
+    { "balanced", 8 }, /* [372] */
+    { "theorems", 8 }, /* [373] */
+    { "lambda", 6 }, /* [374] */
+    { "physical", 8 }, /* [375] */
+    { "frac", 4 }, /* [376] */
+    { "dppad", 5 }, /* [377] */
+    { "rep0", 4 }, /* [378] */
+    { "difference", 10 }, /* [379] */
+    { "evaluation", 10 }, /* [380] */
+    { "przm_version_1", 14 }, /* [381] */
+    { "frequency", 9 }, /* [382] */
+    { "leftrightarrow", 14 }, /* [383] */
+    { "stratification", 14 }, /* [384] */
+    { "transformations", 15 }, /* [385] */
+    { "cycle", 5 }, /* [386] */
+    { "achieves", 8 }, /* [387] */
+    { "activematcher", 13 }, /* [388] */
+    { "test_przm_dec", 13 }, /* [389] */
+    { "affine", 6 }, /* [390] */
+    { "performance", 11 }, /* [391] */
+    { "product", 7 }, /* [392] */
+    { "sliding", 7 }, /* [393] */
+    { "encoder", 7 }, /* [394] */
+    { "m_len", 5 }, /* [395] */
+    { "index", 5 }, /* [396] */
+    { "programming", 11 }, /* [397] */
+    { "between", 7 }, /* [398] */
+    { "precomputed", 11 }, /* [399] */
+    { "correlation", 11 }, /* [400] */
+    { "equiv", 5 }, /* [401] */
+    { "chunksize", 9 }, /* [402] */
+    { "buffer", 6 }, /* [403] */
+    { "formal", 6 }, /* [404] */
+    { "coefficients", 12 }, /* [405] */
+    { "write_u64_le", 12 }, /* [406] */
+    { "transition", 10 }, /* [407] */
+    { "usize", 5 }, /* [408] */
+    { "following", 9 }, /* [409] */
+    { "dependencies", 12 }, /* [410] */
+    { "stratified", 10 }, /* [411] */
+    { "random", 6 }, /* [412] */
+    { "finite", 6 }, /* [413] */
+    { "branch", 6 }, /* [414] */
+    { "bufkit", 6 }, /* [415] */
+    { "orchestrator", 12 }, /* [416] */
+    { "internal", 8 }, /* [417] */
+    { "matrices", 8 }, /* [418] */
+    { "complete", 8 }, /* [419] */
+    { "variable", 8 }, /* [420] */
+    { "literals", 8 }, /* [421] */
+    { "operator", 8 }, /* [422] */
+    { "display", 7 }, /* [423] */
+    { "rawdict", 7 }, /* [424] */
+    { "cdot", 4 }, /* [425] */
+    { "include", 7 }, /* [426] */
+    { "case", 4 }, /* [427] */
+    { "bridge", 6 }, /* [428] */
+    { "rules", 5 }, /* [429] */
+    { "bits_remaining", 14 }, /* [430] */
+    { "approx", 6 }, /* [431] */
+    { "associative", 11 }, /* [432] */
+    { "integral", 8 }, /* [433] */
+    { "microarchitectural", 18 }, /* [434] */
+    { "relative", 8 }, /* [435] */
+    { "decoder", 7 }, /* [436] */
+    { "implementations", 15 }, /* [437] */
+    { "computational", 13 }, /* [438] */
+    { "dpcandidate", 11 }, /* [439] */
+    { "t_len", 5 }, /* [440] */
+    { "runtime", 7 }, /* [441] */
+    { "driver", 6 }, /* [442] */
+    { "srcidx", 6 }, /* [443] */
+    { "through", 7 }, /* [444] */
+    { "decompress", 10 }, /* [445] */
+    { "chunkcount", 10 }, /* [446] */
+    { "hyperbolic", 10 }, /* [447] */
+    { "dictionaries", 12 }, /* [448] */
+    { "applications", 12 }, /* [449] */
+    { "offsetstreamsize", 16 }, /* [450] */
+    { "break", 5 }, /* [451] */
+    { "systems", 7 }, /* [452] */
+    { "cmd_end", 7 }, /* [453] */
+    { "ratio", 5 }, /* [454] */
+    { "contains", 8 }, /* [455] */
+    { "document", 8 }, /* [456] */
+    { "spectral", 8 }, /* [457] */
+    { "baseline", 8 }, /* [458] */
+    { "margin", 6 }, /* [459] */
+    { "epsilon_i", 9 }, /* [460] */
+    { "fixed", 5 }, /* [461] */
+    { "functions", 9 }, /* [462] */
+    { "source", 6 }, /* [463] */
+    { "structure", 9 }, /* [464] */
+    { "while", 5 }, /* [465] */
+    { "status", 6 }, /* [466] */
+    { "rep1", 4 }, /* [467] */
+    { "using", 5 }, /* [468] */
+    { "block_log2", 10 }, /* [469] */
+    { "completely", 10 }, /* [470] */
+    { "flushliteralsprzm", 17 }, /* [471] */
+    { "uleb128", 7 }, /* [472] */
+    { "font", 4 }, /* [473] */
+    { "serialized", 10 }, /* [474] */
+    { "destination", 11 }, /* [475] */
+    { "blocks", 6 }, /* [476] */
+    { "within", 6 }, /* [477] */
+    { "critical", 8 }, /* [478] */
+    { "gpucompressor", 13 }, /* [479] */
+    { "phase", 5 }, /* [480] */
+    { "updatebracket", 13 }, /* [481] */
+    { "cascaded", 8 }, /* [482] */
+    { "total", 5 }, /* [483] */
+    { "manifold", 8 }, /* [484] */
+    { "blocksizeshift", 14 }, /* [485] */
+    { "simd", 4 }, /* [486] */
+    { "dictlen", 7 }, /* [487] */
+    { "outbuflen", 9 }, /* [488] */
+    { "total_u_size", 12 }, /* [489] */
+    { "chunks", 6 }, /* [490] */
+    { "deficit", 7 }, /* [491] */
+    { "under", 5 }, /* [492] */
+    { "pattern", 7 }, /* [493] */
+    { "isoclinic", 9 }, /* [494] */
+    { "multiplications", 15 }, /* [495] */
+    { "orig_varint_len", 15 }, /* [496] */
+    { "buffers", 7 }, /* [497] */
+    { "leftarrow", 9 }, /* [498] */
+    { "maximum", 7 }, /* [499] */
+    { "cache", 5 }, /* [500] */
+    { "dots", 4 }, /* [501] */
+    { "write_u32_le", 12 }, /* [502] */
+    { "archive", 7 }, /* [503] */
+    { "threads", 7 }, /* [504] */
+    { "that", 4 }, /* [505] */
+    { "dist", 4 }, /* [506] */
+    { "compressor", 10 }, /* [507] */
+    { "benchmarks", 10 }, /* [508] */
+    { "invariants", 10 }, /* [509] */
+    { "homology", 8 }, /* [510] */
+    { "reversible", 10 }, /* [511] */
+};
+
+/* ============================================================================
+ * RFC 7932 121-Word Transformation Application Function
+ * Strictly 0 dynamic allocations (0 malloc). Writes directly into dst.
+ * ============================================================================ */
+PRZM_INLINE size_t przm_apply_rfc_transform(
+    uint8_t* dst,
+    uint8_t trans_id,
+    const char* word,
+    size_t word_len
+) {
+    if (trans_id >= 121) return 0;
+    uint8_t pfx_idx = przm_rfc_transforms[trans_id][0];
+    uint8_t op = przm_rfc_transforms[trans_id][1];
+    uint8_t sfx_idx = przm_rfc_transforms[trans_id][2];
+
+    uint16_t pfx_off = przm_rfc_prefix_suffix_map[pfx_idx];
+    uint8_t pfx_len = przm_rfc_prefix_suffix[pfx_off];
+    const uint8_t* pfx_str = &przm_rfc_prefix_suffix[pfx_off + 1];
+
+    uint16_t sfx_off = przm_rfc_prefix_suffix_map[sfx_idx];
+    uint8_t sfx_len = przm_rfc_prefix_suffix[sfx_off];
+    const uint8_t* sfx_str = &przm_rfc_prefix_suffix[sfx_off + 1];
+
+    size_t out_len = 0;
+    if (pfx_len > 0) {
+        memcpy(dst + out_len, pfx_str, pfx_len);
+        out_len += pfx_len;
+    }
+
+    size_t mid_start = 0;
+    size_t mid_len = word_len;
+
+    if (op >= 1 && op <= 9) {
+        /* OmitLast 1..9 */
+        size_t omit = (size_t)op;
+        mid_len = (word_len > omit) ? (word_len - omit) : 0;
+    } else if (op >= 12 && op <= 20) {
+        /* OmitFirst 1..9 */
+        size_t omit = (size_t)(op - 11);
+        if (word_len > omit) {
+            mid_start = omit;
+            mid_len = word_len - omit;
+        } else {
+            mid_len = 0;
+        }
+    }
+
+    if (mid_len > 0) {
+        const uint8_t* src_w = (const uint8_t*)word + mid_start;
+        uint8_t* dst_mid = dst + out_len;
+        if (op == 10) {
+            /* UppercaseFirst */
+            memcpy(dst_mid, src_w, mid_len);
+            if (dst_mid[0] >= 'a' && dst_mid[0] <= 'z') {
+                dst_mid[0] -= 32;
+            }
+        } else if (op == 11) {
+            /* UppercaseAll */
+            for (size_t i = 0; i < mid_len; i++) {
+                uint8_t c = src_w[i];
+                if (c >= 'a' && c <= 'z') c -= 32;
+                dst_mid[i] = c;
+            }
+        } else {
+            memcpy(dst_mid, src_w, mid_len);
+        }
+        out_len += mid_len;
+    }
+
+    if (sfx_len > 0) {
+        memcpy(dst + out_len, sfx_str, sfx_len);
+        out_len += sfx_len;
+    }
+
+    return out_len;
+}

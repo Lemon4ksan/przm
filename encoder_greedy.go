@@ -470,8 +470,8 @@ func (e *greedyBlockEncoder) findBest(pos, blockEnd int) matchCandidate {
 	best := matchCandidate{}
 
 	if e.activeMatcher != nil {
-		tokIdx, transOp, tokLen, cost, _, pairTok2 := e.activeMatcher.match(e.src, pos)
-		if tokLen >= 3 && tokLen <= maxBlockLen {
+		tokIdx, transOp, tokLen, cost, _, pairTok2, isRFC := e.activeMatcher.match(e.src, pos)
+		if !isRFC && tokLen >= 3 && tokLen <= maxBlockLen {
 			var mType int
 			dictBonus := 0
 			if transOp == 0 && tokIdx < 8 {

@@ -65,6 +65,7 @@ const (
 	OpcodePrefixLongRepeat      uint8 = 0xC0 // 0xC0 .. 0xC3: Locality queue indices 0..3
 	OpcodePrefixFusedBracket    uint8 = 0xC4 // 0xC4 .. 0xCD: Direct fused brackets for d in {1..8, 16, 32}
 	OpcodePrefixDiffLattice     uint8 = 0xCE // 0xCE: Diff Lattice / Direct 1-byte immediate offset (1 <= d <= 256)
+	OpcodePrefixRFCTransform    uint8 = 0xCF // 0xCF: RFC 7932 121-Word Transformed Match (transID, wordID)
 	OpcodePrefixStride          uint8 = 0xD0 // 0xD0 .. 0xD7
 	OpcodePrefixShortDict       uint8 = 0xD8 // 0xD8 .. 0xDF: Top-8 direct 1-byte schema tokens
 	OpcodePrefixDeltaRing       uint8 = 0xE0 // 0xE0 .. 0xE7

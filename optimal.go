@@ -54,6 +54,7 @@ type dpScratchpad struct {
 	table3       [32768]int32              // 128 KB Hash Table
 	macro8       [65536 * 8]int32          // 2 MB 8-way 8-byte Macro Sliding Window Table
 	dagProd      [65536 * 2]int32          // 512 KB 2-way 16-byte DAG Production Table
+	dagProd32    [65536 * 2]int32          // 512 KB 2-way 32-byte Structural Macro Production Table
 	trace        [BlockSize64K + 1]dpTrace // 768 KB Sequential Trace
 	litCostTable [256]int32                // 1 KB Shannon Entropy Bit-Cost Table
 	path         []int32
@@ -166,6 +167,14 @@ func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int, hasStride bool, str
 		// Compact Raw Dict: 1 byte opcode (0xE9) + 1 byte token + offCost
 		offCost := calcDistPrefixCostPRZM(dist)
 		return 32 + offCost
+	}
+	if repCode == -7 {
+		// RFC 7932 Transformed Dictionary Match:
+		// 1 byte opcode (0xCF) + 1 byte transID + varint(wordID)
+		if dist < 128 {
+			return 24 // 3 command bytes (~12 bits)
+		}
+		return 32 // 4 command bytes (~16 bits)
 	}
 	var cost int32
 	if repCode >= 0 {
@@ -598,6 +607,14 @@ func emitPathPRZM(
 					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
 				}
 				writeOffsetPRZM(&pad.offsetBuf, mDist)
+			case -7:
+				// RFC 7932 Transformed Dictionary Match (0xCF <transID> <varint wordID>)
+				transID := dpPad.trace[to].extra1
+				wordID := int(dpPad.trace[to].dist)
+				pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixRFCTransform, transID)
+				var varBuf [8]byte
+				n := binary.PutUvarint(varBuf[:], uint64(wordID))
+				pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
 			}
 			litStart = -1
 			litLen = 0
@@ -840,7 +857,7 @@ func compressBlockOptimal(
 
 		updateLong := func(d, l, repCode int) {
 			l = min(l, maxL)
-			if l < 32 {
+			if l < 512 {
 				return
 			}
 			score := l
@@ -855,9 +872,17 @@ func compressBlockOptimal(
 
 		// Dictionary Token Matching
 		if activeMatcher != nil {
-			tokIdx, transOp, tokLen, _, score, pairTok2 := activeMatcher.match(src, pos)
+			tokIdx, transOp, tokLen, _, score, pairTok2, isRFC := activeMatcher.match(src, pos)
 			if score >= 1 && tokLen >= 2 && candCount < 30 {
-				if tokIdx < 8 && transOp == 0 {
+				if isRFC {
+					candidates[candCount] = dpCandidate{
+						dist:    int32(tokIdx),
+						length:  int32(tokLen),
+						repCode: -7,
+						extra:   int32(transOp),
+					}
+					candCount++
+				} else if tokIdx < 8 && transOp == 0 {
 					candidates[candCount] = dpCandidate{
 						dist:    0,
 						length:  int32(tokLen),
@@ -1027,6 +1052,36 @@ func compressBlockOptimal(
 			}
 		}
 
+		// Inter-Block 32-byte Structural Macro Production Factorization (2-way associative)
+		if pos+32 <= uSize {
+			w32_0 := binary.LittleEndian.Uint64(src[pos : pos+8])
+			w32_1 := binary.LittleEndian.Uint64(src[pos+8 : pos+16])
+			w32_2 := binary.LittleEndian.Uint64(src[pos+16 : pos+24])
+			w32_3 := binary.LittleEndian.Uint64(src[pos+24 : pos+32])
+			h32 := uint32(((w32_0 ^ (w32_1 * 0x9E3779B97F4A7C15) ^ (w32_2 * 0xC6A4A7935BD1E995) ^ (w32_3 * 0x517cc1b727220a95)) * 0x517cc1b727220a95) >> 48)
+			base32 := int(h32&0xFFFF) * 2
+			for s := 0; s < 2; s++ {
+				cand32 := int(dpPad.dagProd32[base32+s]) - 1
+				if cand32 >= 0 && cand32 < pos {
+					d32 := pos - cand32
+					if d32 > 0 && d32 <= windowSize && d32 != r0 && d32 != r1 && d32 != r2 {
+						if binary.LittleEndian.Uint64(src[cand32:cand32+8]) == w32_0 &&
+							binary.LittleEndian.Uint64(src[cand32+8:cand32+16]) == w32_1 &&
+							binary.LittleEndian.Uint64(src[cand32+16:cand32+24]) == w32_2 &&
+							binary.LittleEndian.Uint64(src[cand32+24:cand32+32]) == w32_3 {
+							l32 := 32 + HenselLCPPos(src, pos+32, cand32+32, maxL-32)
+							updateBracket(d32, l32)
+							updateLong(d32, l32, -1)
+						}
+					}
+				}
+			}
+			if int(dpPad.dagProd32[base32])-1 != pos {
+				dpPad.dagProd32[base32+1] = dpPad.dagProd32[base32]
+				dpPad.dagProd32[base32] = int32(pos + 1)
+			}
+		}
+
 		// Inter-Block 16-byte DAG Production Factorization (2-way associative)
 		if pos+16 <= uSize {
 			w16_0 := binary.LittleEndian.Uint64(src[pos : pos+8])
@@ -1137,7 +1192,7 @@ func compressBlockOptimal(
 		}
 
 		// Check if Long Match Shortcut triggers
-		if bestLongScore >= 32 {
+		if bestLongScore >= 512 {
 			// 1. Emit optimal path up to current position i
 			emitPathPRZM(src, bStart, segStart, i, uSize, pad, dpPad, rep0, rep1, rep2, minMatchBase, hasStride, stride)
 
@@ -1232,6 +1287,18 @@ func compressBlockOptimal(
 			if pos+mLen-1+4 <= uSize {
 				insertHashPRZM(src, pos+mLen-1, uSize, pad, windowLog, sp1M, sp8M)
 			}
+			if mLen >= 12 && pos+12 <= uSize {
+				p4 := pos + 4
+				w8_4 := binary.LittleEndian.Uint64(src[p4 : p4+8])
+				h8_4 := uint32((w8_4 * 0x517cc1b727220a95) >> 48)
+				b4 := int(h8_4&0xFFFF) * 8
+				if int(dpPad.macro8[b4])-1 != p4 {
+					for s := 7; s > 0; s-- {
+						dpPad.macro8[b4+s] = dpPad.macro8[b4+s-1]
+					}
+					dpPad.macro8[b4] = int32(p4 + 1)
+				}
+			}
 			for pStep := pos; pStep < pos+mLen; pStep += 8 {
 				if pStep+8 <= uSize {
 					w8Step := binary.LittleEndian.Uint64(src[pStep : pStep+8])
@@ -1253,6 +1320,30 @@ func compressBlockOptimal(
 						dpPad.dagProd[base16Step+1] = dpPad.dagProd[base16Step]
 						dpPad.dagProd[base16Step] = int32(pStep + 1)
 					}
+				}
+				if pStep+32 <= uSize {
+					w32_0 := binary.LittleEndian.Uint64(src[pStep : pStep+8])
+					w32_1 := binary.LittleEndian.Uint64(src[pStep+8 : pStep+16])
+					w32_2 := binary.LittleEndian.Uint64(src[pStep+16 : pStep+24])
+					w32_3 := binary.LittleEndian.Uint64(src[pStep+24 : pStep+32])
+					h32 := uint32(((w32_0 ^ (w32_1 * 0x9E3779B97F4A7C15) ^ (w32_2 * 0xC6A4A7935BD1E995) ^ (w32_3 * 0x517cc1b727220a95)) * 0x517cc1b727220a95) >> 48)
+					base32Step := int(h32&0xFFFF) * 2
+					if int(dpPad.dagProd32[base32Step])-1 != pStep {
+						dpPad.dagProd32[base32Step+1] = dpPad.dagProd32[base32Step]
+						dpPad.dagProd32[base32Step] = int32(pStep + 1)
+					}
+				}
+			}
+			if pos+mLen-8 >= 0 && pos+mLen <= uSize {
+				pEnd := pos + mLen - 8
+				w8End := binary.LittleEndian.Uint64(src[pEnd : pEnd+8])
+				h8End := uint32((w8End * 0x517cc1b727220a95) >> 48)
+				bEnd := int(h8End&0xFFFF) * 8
+				if int(dpPad.macro8[bEnd])-1 != pEnd {
+					for s := 7; s > 0; s-- {
+						dpPad.macro8[bEnd+s] = dpPad.macro8[bEnd+s-1]
+					}
+					dpPad.macro8[bEnd] = int32(pEnd + 1)
 				}
 			}
 

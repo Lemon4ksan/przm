@@ -547,6 +547,8 @@ func (d *frameDecoder) decode() error {
 			err = d.decodeDeltaMaskLocality(op)
 		case op == 0xE8:
 			err = d.decodeDeltaMaskExplicit()
+		case op == OpcodePrefixRFCTransform:
+			err = d.decodeRFCTransform()
 		case op == OpcodePrefixRawDict:
 			err = d.decodeRawDictMatch()
 		case op == 0xF0:
@@ -895,6 +897,45 @@ func (d *frameDecoder) decodeRawDictMatch() error {
 	}
 	copy(d.outBuf[d.dstPos:d.dstPos+mLen], d.rawDict[dictOff:dictOff+mLen])
 	d.dstPos += mLen
+	return nil
+}
+
+// decodeRFCTransform handles RFC 7932 121-Word Transformed Matches (OpcodePrefixRFCTransform = 0xCF).
+func (d *frameDecoder) decodeRFCTransform() error {
+	if d.cmdPtr >= d.cmdEnd {
+		return fmt.Errorf("%w: truncated command stream", ErrCorruptedFrame)
+	}
+	transID := d.cmds[d.cmdPtr]
+	d.cmdPtr++
+
+	wordID, newCmdPtr, err := fastReadVarint(d.cmds, d.cmdPtr)
+	if err != nil {
+		return err
+	}
+	d.cmdPtr = newCmdPtr
+
+	var word []byte
+	if wordID < 256 {
+		if wordID < len(d.activeDict) {
+			word = d.activeDict[wordID]
+		} else if wordID < len(webTokensRawBytes) {
+			word = webTokensRawBytes[wordID]
+		}
+	} else {
+		rfcIdx := wordID - 256
+		if rfcIdx < len(rfcTopWordsBytes) {
+			word = rfcTopWordsBytes[rfcIdx]
+		}
+	}
+	if len(word) == 0 {
+		return fmt.Errorf("%w: invalid RFC word ID %d", ErrCorruptedFrame, wordID)
+	}
+
+	n, err := applyRFC7932Transform(d.outBuf[d.dstPos:], transID, word)
+	if err != nil {
+		return err
+	}
+	d.dstPos += n
 	return nil
 }
 

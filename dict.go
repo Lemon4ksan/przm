@@ -15,8 +15,9 @@ import (
 
 type dictEntry struct {
 	pattern []byte
-	tokIdx  uint8
+	tokIdx  uint16
 	transOp uint8
+	isRFC   bool
 	length  uint8
 	cost    uint8
 }
@@ -49,7 +50,7 @@ func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
 		m.tokens[i] = []byte(s)
 	}
 
-	addEntry := func(pattern []byte, tokIdx, transOp, cost uint8) {
+	addEntry := func(pattern []byte, tokIdx uint16, transOp, cost uint8, isRFC bool) {
 		if len(pattern) < 2 || len(pattern) > 255 {
 			return
 		}
@@ -58,6 +59,7 @@ func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
 			pattern: pattern,
 			tokIdx:  tokIdx,
 			transOp: transOp,
+			isRFC:   isRFC,
 			length:  uint8(len(pattern)),
 			cost:    cost,
 		})
@@ -88,7 +90,7 @@ func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
 		if i < 8 {
 			cost = 1
 		}
-		addEntry(b, uint8(i), 0, cost)
+		addEntry(b, uint16(i), 0, cost, false)
 	}
 
 	// 2. Static Word Transforms (only for tokens where len >= 2 and <= 32)
@@ -96,66 +98,119 @@ func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
 		if len(b) < 2 || len(b) > 32 {
 			continue
 		}
-		tokIdx := uint8(i)
+		tokIdx := uint16(i)
 
 		// 0xEA: Prefix space: " " + tok
 		sp := make([]byte, len(b)+1)
 		sp[0] = ' '
 		copy(sp[1:], b)
-		addEntry(sp, tokIdx, OpcodePrefixTransSpace, 2)
+		addEntry(sp, tokIdx, OpcodePrefixTransSpace, 2, false)
 
 		// 0xEB: Suffix quote: tok + "\""
 		sq := make([]byte, len(b)+1)
 		copy(sq, b)
 		sq[len(b)] = '"'
-		addEntry(sq, tokIdx, OpcodePrefixTransQuote, 2)
+		addEntry(sq, tokIdx, OpcodePrefixTransQuote, 2, false)
 
 		// 0xEC: Suffix brace: tok + "{"
 		sb := make([]byte, len(b)+1)
 		copy(sb, b)
 		sb[len(b)] = '{'
-		addEntry(sb, tokIdx, OpcodePrefixTransBrace, 2)
+		addEntry(sb, tokIdx, OpcodePrefixTransBrace, 2, false)
 
 		// 0xED: Uppercase first letter: upper(b[0]) + b[1:]
 		if b[0] >= 'a' && b[0] <= 'z' {
 			uf := make([]byte, len(b))
 			copy(uf, b)
 			uf[0] -= ('a' - 'A')
-			addEntry(uf, tokIdx, OpcodePrefixTransUpper, 2)
+			addEntry(uf, tokIdx, OpcodePrefixTransUpper, 2, false)
 		}
 
 		// 0xEE: Suffix semicolon: tok + ";"
 		ss := make([]byte, len(b)+1)
 		copy(ss, b)
 		ss[len(b)] = ';'
-		addEntry(ss, tokIdx, OpcodePrefixTransSemi, 2)
+		addEntry(ss, tokIdx, OpcodePrefixTransSemi, 2, false)
 
 		// 0xEF: Space around: " " + tok + " "
 		sa := make([]byte, len(b)+2)
 		sa[0] = ' '
 		copy(sa[1:], b)
 		sa[len(b)+1] = ' '
-		addEntry(sa, tokIdx, OpcodePrefixTransSpaceSpace, 2)
+		addEntry(sa, tokIdx, OpcodePrefixTransSpaceSpace, 2, false)
 
 		// 0xFB: Suffix equal quote: tok + "=\""
 		seq := make([]byte, len(b)+2)
 		copy(seq, b)
 		seq[len(b)] = '='
 		seq[len(b)+1] = '"'
-		addEntry(seq, tokIdx, OpcodePrefixTransEqQuote, 2)
+		addEntry(seq, tokIdx, OpcodePrefixTransEqQuote, 2, false)
 
 		// 0xFC: Suffix tag close: tok + ">"
 		stc := make([]byte, len(b)+1)
 		copy(stc, b)
 		stc[len(b)] = '>'
-		addEntry(stc, tokIdx, OpcodePrefixTransTagClose, 2)
+		addEntry(stc, tokIdx, OpcodePrefixTransTagClose, 2, false)
+	}
+
+	// 3. RFC 7932 121-Word Transformation Matrix
+	if id == DictIDBrotliWeb {
+		type rfcPatternCandidate struct {
+			pattern []byte
+			tokIdx  uint16
+			transOp uint8
+			cost    uint8
+		}
+		seen := make(map[string]rfcPatternCandidate)
+
+		var allWords [][]byte
+		allWords = append(allWords, m.tokens...)
+		allWords = append(allWords, rfcTopWordsBytes...)
+
+		var tmpBuf [256]byte
+		for wordID, w := range allWords {
+			if len(w) == 0 {
+				continue
+			}
+			for transID := 0; transID < 121; transID++ {
+				outLen, err := applyRFC7932Transform(tmpBuf[:], uint8(transID), w)
+				if err != nil || outLen < 4 || outLen > 128 {
+					continue
+				}
+				cost := uint8(4)
+				if wordID < 128 {
+					cost = 3
+				}
+				if int(outLen)-int(cost) < 1 {
+					continue
+				}
+				patStr := string(tmpBuf[:outLen])
+				cand := rfcPatternCandidate{
+					pattern: append([]byte(nil), tmpBuf[:outLen]...),
+					tokIdx:  uint16(wordID),
+					transOp: uint8(transID),
+					cost:    cost,
+				}
+				if existing, found := seen[patStr]; !found {
+					seen[patStr] = cand
+				} else {
+					if cand.cost < existing.cost || (cand.cost == existing.cost && cand.tokIdx < existing.tokIdx) {
+						seen[patStr] = cand
+					}
+				}
+			}
+		}
+
+		for _, cand := range seen {
+			addEntry(cand.pattern, cand.tokIdx, cand.transOp, cand.cost, true)
+		}
 	}
 }
 
 func (m *dictMatcher) match(
 	src []byte,
 	pos int,
-) (bestIdx int, bestTransOp uint8, bestLen, bestCost, bestScore, pairTok2 int) {
+) (bestIdx int, bestTransOp uint8, bestLen, bestCost, bestScore, pairTok2 int, isRFC bool) {
 	uSize := len(src)
 	bestIdx = -1
 	pairTok2 = -1
@@ -176,6 +231,7 @@ func (m *dictMatcher) match(
 					bestLen = pLen
 					bestCost = int(e.cost)
 					bestScore = score
+					isRFC = e.isRFC
 				}
 			}
 		}
@@ -196,6 +252,7 @@ func (m *dictMatcher) match(
 					bestLen = pLen
 					bestCost = int(e.cost)
 					bestScore = score
+					isRFC = e.isRFC
 				}
 			}
 		}
@@ -215,13 +272,14 @@ func (m *dictMatcher) match(
 					bestLen = pLen
 					bestCost = int(e.cost)
 					bestScore = score
+					isRFC = e.isRFC
 				}
 			}
 		}
 	}
 
 	// 4. Sub-4-byte Token Pair probe (0xFF)
-	if bestLen >= 2 && bestTransOp == 0 && pos+bestLen+2 <= uSize {
+	if !isRFC && bestLen >= 2 && bestTransOp == 0 && pos+bestLen+2 <= uSize {
 		pos2 := pos + bestLen
 		tok2Idx := -1
 		tok2Len := 0
@@ -231,7 +289,7 @@ func (m *dictMatcher) match(
 			h := (u32 * 0x1E35A7BD) >> 16
 			for idx := m.head[h]; idx >= 0; idx = m.chain[idx] {
 				e := &m.entries[idx]
-				if e.transOp == 0 {
+				if !e.isRFC && e.transOp == 0 {
 					pLen := int(e.length)
 					if pLen > tok2Len && pos2+pLen <= uSize {
 						if bytes.Equal(src[pos2:pos2+pLen], e.pattern) {
@@ -247,7 +305,7 @@ func (m *dictMatcher) match(
 			h3 := (u24 * 0x1E35A7BD) >> 16
 			for idx := m.head3[h3]; idx >= 0; idx = m.chain3[idx] {
 				e := &m.entries[idx]
-				if e.transOp == 0 {
+				if !e.isRFC && e.transOp == 0 {
 					pLen := int(e.length)
 					if pLen > tok2Len && pos2+pLen <= uSize {
 						if bytes.Equal(src[pos2:pos2+pLen], e.pattern) {
@@ -262,7 +320,7 @@ func (m *dictMatcher) match(
 			u16 := uint16(src[pos2]) | (uint16(src[pos2+1]) << 8)
 			if idx := m.head2[u16]; idx >= 0 {
 				e := &m.entries[idx]
-				if e.transOp == 0 {
+				if !e.isRFC && e.transOp == 0 {
 					pLen := int(e.length)
 					if pLen > tok2Len && pos2+pLen <= uSize {
 						if bytes.Equal(src[pos2:pos2+pLen], e.pattern) {
@@ -284,11 +342,12 @@ func (m *dictMatcher) match(
 				bestLen = pairLen
 				bestCost = pairCost
 				bestScore = pairScore
+				isRFC = false
 			}
 		}
 	}
 
-	return bestIdx, bestTransOp, bestLen, bestCost, bestScore, pairTok2
+	return bestIdx, bestTransOp, bestLen, bestCost, bestScore, pairTok2, isRFC
 }
 
 // PRZMDMagic defines the 32-bit container magic for external dictionaries ('PRZD').
@@ -799,6 +858,7 @@ var webTokensRaw = []string{
 }
 
 func init() {
+	initRFCTables()
 	if webDict, err := NewDictionary(DictIDBrotliWeb, webTokensRaw); err == nil {
 		_ = RegisterDictionary(webDict)
 	}

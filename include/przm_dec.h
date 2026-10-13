@@ -66,6 +66,7 @@ typedef int przm_status_t;
 #define PRZM_OP_MOBIUS            0x11
 #define PRZM_OP_FUSED_BRACKET_BASE 0xC4              /* 0xC4 .. 0xCD: Direct fused brackets for d in {1..8, 16, 32} */
 #define PRZM_OP_DIFF_LATTICE       0xCE              /* 0xCE: Diff Lattice / Direct 1-byte immediate offset (1 <= d <= 256) */
+#define PRZM_OP_RFC_TRANSFORM      0xCF              /* 0xCF: RFC 7932 121-Word Transformed Match (transID, wordID) */
 #define PRZM_OP_COPY_BLOCK        0xFD               /* Aligned 64 KiB block replication (Milestone 5) */
 #define PRZM_OP_GRAMMAR_BLOCK     0xFE               /* Straight-Line Program / Grammar DAG Bisected Block */
 

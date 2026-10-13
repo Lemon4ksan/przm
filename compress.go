@@ -584,6 +584,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			clear(dpPad.table3[:])
 			clear(dpPad.macro8[:])
 			clear(dpPad.dagProd[:])
+			clear(dpPad.dagProd32[:])
 
 			bStart := dictLen
 			for bStart < uSize {
@@ -624,6 +625,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			clear(dpPad.table3[:])
 			clear(dpPad.macro8[:])
 			clear(dpPad.dagProd[:])
+			clear(dpPad.dagProd32[:])
 		}
 
 		bStart := 0
@@ -751,6 +753,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			clear(dpPad.table3[:])
 			clear(dpPad.macro8[:])
 			clear(dpPad.dagProd[:])
+			clear(dpPad.dagProd32[:])
 
 			bStart := 0
 			for bStart < uSize {
