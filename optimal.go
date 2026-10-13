@@ -25,6 +25,7 @@ type dpState struct {
 	rep0 int32
 	rep1 int32
 	rep2 int32
+	rep3 int32
 }
 
 // dpTrace stores the sequential backward trace links.
@@ -483,7 +484,7 @@ func emitPathPRZM(
 	uSize int,
 	pad *scratchpad,
 	dpPad *dpScratchpad,
-	rep0, rep1, rep2 *int,
+	rep0, rep1, rep2, rep3 *int,
 	minMatchBase int,
 	hasStride bool,
 	stride int,
@@ -678,6 +679,11 @@ func emitPathPRZM(
 				*rep2 = *rep1
 				*rep1 = *rep0
 				*rep0 = mDist
+			case 3:
+				*rep3 = *rep2
+				*rep2 = *rep1
+				*rep1 = *rep0
+				*rep0 = mDist
 			}
 		} else if isBracketDist(mDist) && mLen-minMatchBase <= 15 {
 			bracket := bracketIndex(mDist)
@@ -693,6 +699,7 @@ func emitPathPRZM(
 			if litLen > 0 {
 				pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
 			}
+			*rep3 = *rep2
 			*rep2 = *rep1
 			*rep1 = *rep0
 			*rep0 = mDist
@@ -718,6 +725,7 @@ func emitPathPRZM(
 			if litLen > 0 {
 				pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
 			}
+			*rep3 = *rep2
 			*rep2 = *rep1
 			*rep1 = *rep0
 			*rep0 = mDist
@@ -744,6 +752,7 @@ func emitPathPRZM(
 				pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
 			}
 			writeOffsetPRZM(&pad.offsetBuf, mDist)
+			*rep3 = *rep2
 			*rep2 = *rep1
 			*rep1 = *rep0
 			*rep0 = mDist
@@ -769,7 +778,7 @@ func compressBlockOptimal(
 	windowSize, windowLog, level int,
 	pad *scratchpad,
 	dpPad *dpScratchpad,
-	rep0, rep1, rep2 *int,
+	rep0, rep1, rep2, rep3 *int,
 	sp1M *HenselScratchpad1M,
 	sp8M *HenselScratchpad8M,
 	minMatchBase int,
@@ -792,6 +801,7 @@ func compressBlockOptimal(
 	r0Start := *rep0
 	r1Start := *rep1
 	r2Start := *rep2
+	r3Start := *rep3
 
 	dpPad.curGen++
 	if dpPad.curGen == 0 {
@@ -806,6 +816,7 @@ func compressBlockOptimal(
 		rep0: int32(*rep0),
 		rep1: int32(*rep1),
 		rep2: int32(*rep2),
+		rep3: int32(*rep3),
 	}
 	dpPad.trace[0] = dpTrace{
 		from:    0,
@@ -831,6 +842,7 @@ func compressBlockOptimal(
 		r0 := int(curNode.rep0)
 		r1 := int(curNode.rep1)
 		r2 := int(curNode.rep2)
+		r3 := int(curNode.rep3)
 
 		// Clear the node that is about to enter the far end of the lookahead window
 		dpPad.window[(i+1023)&1023].cost = 1 << 30
@@ -844,6 +856,7 @@ func compressBlockOptimal(
 			targetLit.rep0 = int32(r0)
 			targetLit.rep1 = int32(r1)
 			targetLit.rep2 = int32(r2)
+			targetLit.rep3 = int32(r3)
 
 			t := &dpPad.trace[i+1]
 			t.from = int32(i)
@@ -1045,11 +1058,25 @@ func compressBlockOptimal(
 			}
 		}
 
+		// Repeat 3 check
+		if r3 > 0 && pos-r3 >= 0 && r3 <= windowSize && r3 != r0 && r3 != r1 && r3 != r2 {
+			minR3 := minMatchBase
+			if pos+2 <= uSize &&
+				binary.LittleEndian.Uint16(src[pos:pos+2]) == binary.LittleEndian.Uint16(src[pos-r3:pos-r3+2]) {
+				l3 := HenselLCPPos(src, pos, pos-r3, maxL)
+				if l3 >= minR3 {
+					candidates[candCount] = dpCandidate{dist: int32(r3), length: int32(min(l3, dpMaxL)), repCode: 3}
+					candCount++
+					updateLong(r3, l3, 3)
+				}
+			}
+		}
+
 		// Explicit match candidates sorted into 24 distance brackets
 		var bracketBest [24]dpCandidate
 		updateBracket := func(d, l int) {
 			l = min(l, maxL)
-			if d <= 0 || d > windowSize || d == r0 || d == r1 || d == r2 || l < minMatchBase {
+			if d <= 0 || d > windowSize || d == r0 || d == r1 || d == r2 || d == r3 || l < minMatchBase {
 				return
 			}
 			mPos := pos - d
@@ -1134,7 +1161,7 @@ func compressBlockOptimal(
 		// Direct canonical strides evaluation
 		canDists := [...]int{344, 343, 342, 68692, 68746, 68741, 68694, 87268, 17200, 17150}
 		for _, cd := range canDists {
-			if cd > 0 && pos-cd >= 0 && cd <= windowSize && cd != r0 && cd != r1 && cd != r2 {
+			if cd > 0 && pos-cd >= 0 && cd <= windowSize && cd != r0 && cd != r1 && cd != r2 && cd != r3 {
 				if pos+4 <= uSize && pos-cd+4 <= uSize &&
 					binary.LittleEndian.Uint32(src[pos:pos+4]) == binary.LittleEndian.Uint32(src[pos-cd:pos-cd+4]) {
 					l := HenselLCPPos(src, pos, pos-cd, maxL)
@@ -1153,7 +1180,7 @@ func compressBlockOptimal(
 				prev3 := int(dpPad.table3[base3+s]) - 1
 				if prev3 >= 0 && prev3 < pos {
 					d3 := pos - prev3
-					if d3 > 0 && d3 <= windowSize && d3 != r0 && d3 != r1 && d3 != r2 {
+					if d3 > 0 && d3 <= windowSize && d3 != r0 && d3 != r1 && d3 != r2 && d3 != r3 {
 						if src[pos] == src[prev3] && src[pos+1] == src[prev3+1] && src[pos+2] == src[prev3+2] {
 							l3 := HenselLCPPos(src, pos, prev3, maxL)
 							updateBracket(d3, l3)
@@ -1179,7 +1206,7 @@ func compressBlockOptimal(
 				cand32 := int(dpPad.dagProd32[base32+s]) - 1
 				if cand32 >= 0 && cand32 < pos {
 					d32 := pos - cand32
-					if d32 > 0 && d32 <= windowSize && d32 != r0 && d32 != r1 && d32 != r2 {
+					if d32 > 0 && d32 <= windowSize && d32 != r0 && d32 != r1 && d32 != r2 && d32 != r3 {
 						if binary.LittleEndian.Uint64(src[cand32:cand32+8]) == w32_0 &&
 							binary.LittleEndian.Uint64(src[cand32+8:cand32+16]) == w32_1 &&
 							binary.LittleEndian.Uint64(src[cand32+16:cand32+24]) == w32_2 &&
@@ -1207,7 +1234,7 @@ func compressBlockOptimal(
 				cand16 := int(dpPad.dagProd[base16+s]) - 1
 				if cand16 >= 0 && cand16 < pos {
 					d16 := pos - cand16
-					if d16 > 0 && d16 <= windowSize && d16 != r0 && d16 != r1 && d16 != r2 {
+					if d16 > 0 && d16 <= windowSize && d16 != r0 && d16 != r1 && d16 != r2 && d16 != r3 {
 						l16 := HenselLCPPos(src, pos, cand16, maxL)
 						if l16 >= 16 {
 							updateBracket(d16, l16)
@@ -1231,7 +1258,7 @@ func compressBlockOptimal(
 				cand8 := int(dpPad.macro8[base8+s]) - 1
 				if cand8 >= 0 && cand8 < pos {
 					d8 := pos - cand8
-					if d8 > 0 && d8 <= windowSize && d8 != r0 && d8 != r1 && d8 != r2 {
+					if d8 > 0 && d8 <= windowSize && d8 != r0 && d8 != r1 && d8 != r2 && d8 != r3 {
 						if binary.LittleEndian.Uint64(src[cand8:cand8+8]) == w8 {
 							l8 := HenselLCPPos(src, pos, cand8, maxL)
 							if l8 >= 8 {
@@ -1309,7 +1336,7 @@ func compressBlockOptimal(
 		// Check if Long Match Shortcut triggers
 		if bestLongScore >= 512 {
 			// 1. Emit optimal path up to current position i
-			emitPathPRZM(src, bStart, segStart, i, uSize, pad, dpPad, rep0, rep1, rep2, minMatchBase, hasStride, stride)
+			emitPathPRZM(src, bStart, segStart, i, uSize, pad, dpPad, rep0, rep1, rep2, rep3, minMatchBase, hasStride, stride)
 
 			// 2. Emit the long match directly
 			mLen := int(bestLong.length)
@@ -1338,6 +1365,11 @@ func compressBlockOptimal(
 					*rep2 = *rep1
 					*rep1 = *rep0
 					*rep0 = mDist
+				case 3:
+					*rep3 = *rep2
+					*rep2 = *rep1
+					*rep1 = *rep0
+					*rep0 = mDist
 				}
 			} else if repCode == -6 {
 				baseLen := mLen - minMatchBase
@@ -1357,6 +1389,7 @@ func compressBlockOptimal(
 				op := OpcodePrefixFusedBracket + uint8(bracket)
 				token := uint8(mLen - minMatchBase)
 				pad.cmdBuf = append(pad.cmdBuf, op, token)
+				*rep3 = *rep2
 				*rep2 = *rep1
 				*rep1 = *rep0
 				*rep0 = mDist
@@ -1374,6 +1407,7 @@ func compressBlockOptimal(
 					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
 				}
 				writeOffsetPRZM(&pad.offsetBuf, mDist)
+				*rep3 = *rep2
 				*rep2 = *rep1
 				*rep1 = *rep0
 				*rep0 = mDist
@@ -1457,6 +1491,7 @@ func compressBlockOptimal(
 					rep0: int32(*rep0),
 					rep1: int32(*rep1),
 					rep2: int32(*rep2),
+					rep3: int32(*rep3),
 				}
 				dpPad.trace[segStart] = dpTrace{
 					from:    int32(segStart),
@@ -1507,6 +1542,7 @@ func compressBlockOptimal(
 					target.rep0 = int32(r0)
 					target.rep1 = int32(r1)
 					target.rep2 = int32(r2)
+					target.rep3 = int32(r3)
 				}
 				continue
 			}
@@ -1558,18 +1594,27 @@ func compressBlockOptimal(
 						target.rep0 = int32(r0)
 						target.rep1 = int32(r1)
 						target.rep2 = int32(r2)
+						target.rep3 = int32(r3)
 					case 1:
 						target.rep0 = int32(r1)
 						target.rep1 = int32(r0)
 						target.rep2 = int32(r2)
+						target.rep3 = int32(r3)
 					case 2:
 						target.rep0 = int32(r2)
 						target.rep1 = int32(r0)
 						target.rep2 = int32(r1)
+						target.rep3 = int32(r3)
+					case 3:
+						target.rep0 = int32(r3)
+						target.rep1 = int32(r0)
+						target.rep2 = int32(r1)
+						target.rep3 = int32(r2)
 					default:
 						target.rep0 = cand.dist
 						target.rep1 = int32(r0)
 						target.rep2 = int32(r1)
+						target.rep3 = int32(r2)
 					}
 				}
 			}
@@ -1580,7 +1625,7 @@ func compressBlockOptimal(
 
 	// 4. Backward Path Trace & PRZM Token Emission for the remaining segment
 	if segStart < bSize {
-		emitPathPRZM(src, bStart, segStart, bSize, uSize, pad, dpPad, rep0, rep1, rep2, minMatchBase, hasStride, stride)
+		emitPathPRZM(src, bStart, segStart, bSize, uSize, pad, dpPad, rep0, rep1, rep2, rep3, minMatchBase, hasStride, stride)
 	}
 
 	// 5. Rate-Distortion Evaluation: Hierarchical SLP Grammar DAG Bisection
@@ -1603,6 +1648,7 @@ func compressBlockOptimal(
 					*rep0 = r0Start
 					*rep1 = r1Start
 					*rep2 = r2Start
+					*rep3 = r3Start
 
 					pad.cmdBuf = append(pad.cmdBuf, OpGrammarBlock)
 					pad.cmdBuf = append(pad.cmdBuf, varBuf[:nVar]...)

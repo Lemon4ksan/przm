@@ -3716,13 +3716,15 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
         offs_len = (size_t)dec_n;
     }
 
-    /* Initialize 3 CPU repeat offset registers */
+    /* Initialize 4 CPU repeat offset registers */
     int rep0 = 1;
     int rep1 = 4;
     int rep2 = 8;
+    int rep3 = 16;
     if ((flags & PRZM_FLAG_STRIDE) != 0 && stride > 1) {
         rep1 = stride;
         rep2 = 2 * stride;
+        rep3 = 3 * stride;
     }
 
     size_t cmd_ptr = 0;
@@ -3788,6 +3790,12 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
                 rep2 = rep1;
                 rep1 = rep0;
                 rep0 = d;
+            } else if (k == 3) {
+                d = rep3;
+                rep3 = rep2;
+                rep2 = rep1;
+                rep1 = rep0;
+                rep0 = d;
             } else {
                 return PRZM_ERR_CORRUPTED_FRAME;
             }
@@ -3823,6 +3831,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             int err = fast_read_varint(offs, offs_len, &off_ptr, &d);
             if (err != PRZM_OK || d <= 0) return PRZM_ERR_CORRUPTED_FRAME;
 
+            rep3 = rep2;
             rep2 = rep1;
             rep1 = rep0;
             rep0 = d;
@@ -3870,6 +3879,12 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
                 rep2 = rep1;
                 rep1 = rep0;
                 rep0 = d;
+            } else if (k == 3) {
+                d = rep3;
+                rep3 = rep2;
+                rep2 = rep1;
+                rep1 = rep0;
+                rep0 = d;
             } else {
                 return PRZM_ERR_CORRUPTED_FRAME;
             }
@@ -3907,6 +3922,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
                 d = 32;
             }
 
+            rep3 = rep2;
             rep2 = rep1;
             rep1 = rep0;
             rep0 = d;
@@ -3971,6 +3987,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
                 break;
             }
 
+            rep3 = rep2;
             rep2 = rep1;
             rep1 = rep0;
             rep0 = d;
@@ -3999,6 +4016,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             }
 
             int d = m * stride;
+            rep3 = rep2;
             rep2 = rep1;
             rep1 = rep0;
             rep0 = d;
@@ -4034,6 +4052,12 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
                 rep0 = d;
             } else if (k == 2) {
                 d = rep2;
+                rep2 = rep1;
+                rep1 = rep0;
+                rep0 = d;
+            } else if (k == 3) {
+                d = rep3;
+                rep3 = rep2;
                 rep2 = rep1;
                 rep1 = rep0;
                 rep0 = d;
@@ -4094,6 +4118,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             int err = fast_read_varint(offs, offs_len, &off_ptr, &d);
             if (err != PRZM_OK || d <= 0) return PRZM_ERR_CORRUPTED_FRAME;
 
+            rep3 = rep2;
             rep2 = rep1;
             rep1 = rep0;
             rep0 = d;

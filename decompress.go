@@ -475,14 +475,16 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 		lits = src[sec4Offset:]
 	}
 
-	// Initialize 3 CPU repeat offset registers
+	// Initialize 4 CPU repeat offset registers
 	stride := max(int(hdr.Stride), 1)
 	rep0 := 1
 	rep1 := 4
 	rep2 := 8
+	rep3 := 16
 	if (hdr.Flags&FlagStride) != 0 && hdr.Stride > 1 {
 		rep1 = stride
 		rep2 = 2 * stride
+		rep3 = 3 * stride
 	}
 
 	minMatchBase := 4
@@ -520,6 +522,7 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 		rep0:         rep0,
 		rep1:         rep1,
 		rep2:         rep2,
+		rep3:         rep3,
 		stride:       stride,
 		minMatchBase: minMatchBase,
 		rawDict:      rawDict,

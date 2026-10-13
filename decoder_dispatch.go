@@ -262,6 +262,7 @@ type frameDecoder struct {
 	rep0         int
 	rep1         int
 	rep2         int
+	rep3         int
 	stride       int
 	minMatchBase int
 
@@ -290,6 +291,7 @@ func (d *frameDecoder) decode() error {
 	rep0 := d.rep0
 	rep1 := d.rep1
 	rep2 := d.rep2
+	rep3 := d.rep3
 	minMatchBase := d.minMatchBase
 	outBufLen := len(outBuf)
 
@@ -326,6 +328,12 @@ func (d *frameDecoder) decode() error {
 				rep0 = dist
 			case 2:
 				dist = rep2
+				rep2 = rep1
+				rep1 = rep0
+				rep0 = dist
+			case 3:
+				dist = rep3
+				rep3 = rep2
 				rep2 = rep1
 				rep1 = rep0
 				rep0 = dist
@@ -383,6 +391,7 @@ func (d *frameDecoder) decode() error {
 			}
 			offPtr = newOffPtr
 
+			rep3 = rep2
 			rep2 = rep1
 			rep1 = rep0
 			rep0 = dist
@@ -432,6 +441,7 @@ func (d *frameDecoder) decode() error {
 				dist = 32
 			}
 
+			rep3 = rep2
 			rep2 = rep1
 			rep1 = rep0
 			rep0 = dist
@@ -508,6 +518,7 @@ func (d *frameDecoder) decode() error {
 				}
 			}
 
+			rep3 = rep2
 			rep2 = rep1
 			rep1 = rep0
 			rep0 = dist
@@ -536,6 +547,7 @@ func (d *frameDecoder) decode() error {
 		d.rep0 = rep0
 		d.rep1 = rep1
 		d.rep2 = rep2
+		d.rep3 = rep3
 
 		var err error
 		switch {
@@ -583,6 +595,7 @@ func (d *frameDecoder) decode() error {
 		rep0 = d.rep0
 		rep1 = d.rep1
 		rep2 = d.rep2
+		rep3 = d.rep3
 	}
 
 	d.dstPos = dstPos
@@ -592,6 +605,7 @@ func (d *frameDecoder) decode() error {
 	d.rep0 = rep0
 	d.rep1 = rep1
 	d.rep2 = rep2
+	d.rep3 = rep3
 
 	if d.dstPos < d.allocSize {
 		return fmt.Errorf("%w: incomplete decoding: got %d of %d bytes", ErrCorruptedFrame, d.dstPos, d.allocSize)
@@ -649,6 +663,12 @@ func (d *frameDecoder) decodeLongRepeat(op byte) error {
 		d.rep2 = d.rep1
 		d.rep1 = d.rep0
 		d.rep0 = dist
+	case 3:
+		dist = d.rep3
+		d.rep3 = d.rep2
+		d.rep2 = d.rep1
+		d.rep1 = d.rep0
+		d.rep0 = dist
 	default:
 		return fmt.Errorf("%w: invalid long repeat index %d", ErrCorruptedFrame, k)
 	}
@@ -688,6 +708,7 @@ func (d *frameDecoder) decodeStrideMatch(op byte) error {
 	}
 
 	dist := m * d.stride
+	d.rep3 = d.rep2
 	d.rep2 = d.rep1
 	d.rep1 = d.rep0
 	d.rep0 = dist
@@ -792,6 +813,12 @@ func (d *frameDecoder) decodeDeltaMaskLocality(op byte) error {
 		d.rep2 = d.rep1
 		d.rep1 = d.rep0
 		d.rep0 = dist
+	case 3:
+		dist = d.rep3
+		d.rep3 = d.rep2
+		d.rep2 = d.rep1
+		d.rep1 = d.rep0
+		d.rep0 = dist
 	default:
 		return fmt.Errorf("%w: invalid delta locality index %d", ErrCorruptedFrame, k)
 	}
@@ -830,6 +857,7 @@ func (d *frameDecoder) decodeDeltaMaskExplicit() error {
 	}
 	d.offPtr = newOffPtr
 
+	d.rep3 = d.rep2
 	d.rep2 = d.rep1
 	d.rep1 = d.rep0
 	d.rep0 = dist

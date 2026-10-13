@@ -48,6 +48,7 @@ type greedyBlockEncoder struct {
 	rep0          *int
 	rep1          *int
 	rep2          *int
+	rep3          *int
 	flags         *uint8
 }
 
@@ -68,7 +69,7 @@ func newGreedyBlockEncoder(
 	sp1M *HenselScratchpad1M,
 	sp8M *HenselScratchpad8M,
 	spL6 *HenselScratchpadL6,
-	rep0, rep1, rep2 *int,
+	rep0, rep1, rep2, rep3 *int,
 	flags *uint8,
 ) *greedyBlockEncoder {
 	return &greedyBlockEncoder{
@@ -91,6 +92,7 @@ func newGreedyBlockEncoder(
 		rep0:          rep0,
 		rep1:          rep1,
 		rep2:          rep2,
+		rep3:          rep3,
 		flags:         flags,
 	}
 }
@@ -232,6 +234,8 @@ func (e *greedyBlockEncoder) evalCandidate(pos, distance, maxLen int) matchCandi
 		ringK = 1
 	} else if *e.rep2 == distance {
 		ringK = 2
+	} else if *e.rep3 == distance {
+		ringK = 3
 	}
 
 	if ringK >= 0 {
@@ -253,7 +257,7 @@ func (e *greedyBlockEncoder) evalCandidate(pos, distance, maxLen int) matchCandi
 				repBonus = 1
 			}
 		}
-		if ringK <= 2 && mLen <= 3+e.minMatchBase {
+		if ringK <= 3 && mLen <= 3+e.minMatchBase {
 			return matchCandidate{
 				mType:    1,
 				length:   mLen,
@@ -415,6 +419,8 @@ func (e *greedyBlockEncoder) checkDelta(pos, blockEnd, distance, ringK int, best
 			ringK = 1
 		} else if *e.rep2 == distance {
 			ringK = 2
+		} else if *e.rep3 == distance {
+			ringK = 3
 		}
 	}
 
@@ -635,6 +641,16 @@ func (e *greedyBlockEncoder) findBest(pos, blockEnd int) matchCandidate {
 		if cand := e.evalCandidate(
 			pos,
 			*e.rep2,
+			maxBlockLen,
+		); cand.score > best.score || (cand.length >= best.length-1 && cand.length >= e.minMatch && best.mType >= 4) ||
+			(cand.length >= best.length && cand.length >= e.minMatch) {
+			best = cand
+		}
+	}
+	if *e.rep3 > 0 && *e.rep3 != candidateDistance0 && *e.rep3 != *e.rep2 && *e.rep3 != *e.rep1 && *e.rep3 != *e.rep0 {
+		if cand := e.evalCandidate(
+			pos,
+			*e.rep3,
 			maxBlockLen,
 		); cand.score > best.score || (cand.length >= best.length-1 && cand.length >= e.minMatch && best.mType >= 4) ||
 			(cand.length >= best.length && cand.length >= e.minMatch) {
@@ -876,6 +892,11 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 					*e.rep2 = *e.rep1
 					*e.rep1 = *e.rep0
 					*e.rep0 = best.distance
+				case 3:
+					*e.rep3 = *e.rep2
+					*e.rep2 = *e.rep1
+					*e.rep1 = *e.rep0
+					*e.rep0 = best.distance
 				}
 
 			case 2: // Stride
@@ -890,6 +911,7 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 				if literalLength > 0 {
 					e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
 				}
+				*e.rep3 = *e.rep2
 				*e.rep2 = *e.rep1
 				*e.rep1 = *e.rep0
 				*e.rep0 = best.distance
@@ -924,6 +946,11 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 					*e.rep2 = *e.rep1
 					*e.rep1 = *e.rep0
 					*e.rep0 = best.distance
+				case 3:
+					*e.rep3 = *e.rep2
+					*e.rep2 = *e.rep1
+					*e.rep1 = *e.rep0
+					*e.rep0 = best.distance
 				}
 
 			case 4: // Fused Extended Match / Fused Bracket / Diff Lattice
@@ -940,6 +967,7 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 					if literalLength > 0 {
 						e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
 					}
+					*e.rep3 = *e.rep2
 					*e.rep2 = *e.rep1
 					*e.rep1 = *e.rep0
 					*e.rep0 = best.distance
@@ -964,6 +992,7 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 					if literalLength > 0 {
 						e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
 					}
+					*e.rep3 = *e.rep2
 					*e.rep2 = *e.rep1
 					*e.rep1 = *e.rep0
 					*e.rep0 = best.distance
@@ -988,6 +1017,7 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 						e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
 					}
 					e.writeOffset(best.distance)
+					*e.rep3 = *e.rep2
 					*e.rep2 = *e.rep1
 					*e.rep1 = *e.rep0
 					*e.rep0 = best.distance
@@ -1020,6 +1050,7 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 					}
 					e.pad.literalBuf = append(e.pad.literalBuf, best.diffXORs[m])
 				}
+				*e.rep3 = *e.rep2
 				*e.rep2 = *e.rep1
 				*e.rep1 = *e.rep0
 				*e.rep0 = best.distance
@@ -1057,6 +1088,11 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 					*e.rep1 = *e.rep0
 					*e.rep0 = best.distance
 				case 2:
+					*e.rep2 = *e.rep1
+					*e.rep1 = *e.rep0
+					*e.rep0 = best.distance
+				case 3:
+					*e.rep3 = *e.rep2
 					*e.rep2 = *e.rep1
 					*e.rep1 = *e.rep0
 					*e.rep0 = best.distance

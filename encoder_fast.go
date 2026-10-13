@@ -22,6 +22,7 @@ type fastBlockEncoder struct {
 	rep0       *int
 	rep1       *int
 	rep2       *int
+	rep3       *int
 }
 
 func newFastBlockEncoder(
@@ -32,7 +33,7 @@ func newFastBlockEncoder(
 	hasStride bool,
 	stride int,
 	pad *scratchpad,
-	rep0, rep1, rep2 *int,
+	rep0, rep1, rep2, rep3 *int,
 ) *fastBlockEncoder {
 	return &fastBlockEncoder{
 		src:        src,
@@ -45,6 +46,7 @@ func newFastBlockEncoder(
 		rep0:       rep0,
 		rep1:       rep1,
 		rep2:       rep2,
+		rep3:       rep3,
 	}
 }
 
@@ -169,6 +171,7 @@ func (e *fastBlockEncoder) compressBlock(blockStart, blockSize int) {
 				if literalLength > 0 {
 					e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
 				}
+				*e.rep3 = *e.rep2
 				*e.rep2 = *e.rep1
 				*e.rep1 = *e.rep0
 				*e.rep0 = bestDistance
@@ -193,6 +196,7 @@ func (e *fastBlockEncoder) compressBlock(blockStart, blockSize int) {
 				if literalLength > 0 {
 					e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
 				}
+				*e.rep3 = *e.rep2
 				*e.rep2 = *e.rep1
 				*e.rep1 = *e.rep0
 				*e.rep0 = bestDistance
@@ -219,6 +223,7 @@ func (e *fastBlockEncoder) compressBlock(blockStart, blockSize int) {
 
 				e.writeOffset(bestDistance)
 
+				*e.rep3 = *e.rep2
 				*e.rep2 = *e.rep1
 				*e.rep1 = *e.rep0
 				*e.rep0 = bestDistance

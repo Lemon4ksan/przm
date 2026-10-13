@@ -512,21 +512,23 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		flags |= FlagExtOffset
 	}
 
-	// Initialize 3 CPU repeat offset registers
+	// Initialize 4 CPU repeat offset registers
 	rep0 := 1
 	rep1 := 4
 	rep2 := 8
+	rep3 := 16
 	if hasStride && stride > 1 {
 		rep1 = stride
 		rep2 = 2 * stride
+		rep3 = 3 * stride
 	}
 
-	fastEncoder := newFastBlockEncoder(src, uSize, windowSize, minMatch, hasStride, stride, pad, &rep0, &rep1, &rep2)
+	fastEncoder := newFastBlockEncoder(src, uSize, windowSize, minMatch, hasStride, stride, pad, &rep0, &rep1, &rep2, &rep3)
 	greedyEncoder := newGreedyBlockEncoder(
 		src, uSize, level, windowSize, windowLog,
 		minMatch, minMatchBase, compactDict, dictLen,
 		hasStride, stride, activeMatcher, pad,
-		sp1M, sp8M, spL6, &rep0, &rep1, &rep2, &flags,
+		sp1M, sp8M, spL6, &rep0, &rep1, &rep2, &rep3, &flags,
 	)
 
 	greedyEncoder.populateDictionaryHashes()
@@ -546,6 +548,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		r0Start := rep0
 		r1Start := rep1
 		r2Start := rep2
+		r3Start := rep3
 
 		compressFastOrGreedy(bStart, bSize)
 
@@ -567,6 +570,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						rep0 = r0Start
 						rep1 = r1Start
 						rep2 = r2Start
+						rep3 = r3Start
 
 						pad.cmdBuf = append(pad.cmdBuf, OpGrammarBlock)
 						pad.cmdBuf = append(pad.cmdBuf, varBuf[:nVar]...)
@@ -602,6 +606,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					&rep0,
 					&rep1,
 					&rep2,
+					&rep3,
 					sp1M,
 					sp8M,
 					minMatchBase,
@@ -671,6 +676,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						&rep0,
 						&rep1,
 						&rep2,
+						&rep3,
 						sp1M,
 						sp8M,
 						minMatchBase,
@@ -699,6 +705,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						&rep0,
 						&rep1,
 						&rep2,
+						&rep3,
 						sp1M,
 						sp8M,
 						minMatchBase,
@@ -729,6 +736,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						&rep0,
 						&rep1,
 						&rep2,
+						&rep3,
 						sp1M,
 						sp8M,
 						minMatchBase,
@@ -771,6 +779,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					&rep0,
 					&rep1,
 					&rep2,
+					&rep3,
 					sp1M,
 					sp8M,
 					minMatchBase,
