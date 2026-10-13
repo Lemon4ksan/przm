@@ -387,7 +387,20 @@ func packContextOrder1VANS(lits []byte) ([]byte, bool) {
 	return enc, true
 }
 
-// packLiteralSection evaluates V-ANS, Sheaf-VANS, Context-Sheaf-VANS, Order-1 Context-VANS and Nibble-Planes
+// packContextOrder2VANS encodes literals using Order-2 Context-conditioned V-ANS.
+// Returns the packed bytes, or (nil, false) if not compressible or invalid.
+func packContextOrder2VANS(lits []byte) ([]byte, bool) {
+	if len(lits) < 32 {
+		return nil, false
+	}
+	enc, err := ContextVANSEncodeOrder2(lits)
+	if err != nil || len(enc) >= len(lits) {
+		return nil, false
+	}
+	return enc, true
+}
+
+// packLiteralSection evaluates V-ANS, Sheaf-VANS, Context-Sheaf-VANS, Order-1 Context-VANS, Order-2 Context-VANS and Nibble-Planes
 // on literalBuf to find the representation with the lowest entropy and smallest footprint.
 func packLiteralSection(
 	lits []byte,
@@ -406,6 +419,7 @@ func packLiteralSection(
 	if !opts.StandardStreamOnly && level >= 2 {
 		sheafOut, sheafOk := packSheafVANS(lits, pad)
 		ctxSheafOut, ctxSheafOk := packContextSheafVANS(lits, pad)
+		ctxOrder2Out, ctxOrder2Ok := packContextOrder2VANS(lits)
 		ctxOrder1Out, ctxOrder1Ok := packContextOrder1VANS(lits)
 		stdOut, stdErr := VANSEncode4x(lits)
 		threshold := len(lits)
@@ -434,8 +448,14 @@ func packLiteralSection(
 				bestLen = len(ctxSheafOut)
 				vansBeatsRaw = true
 			}
+			if ctxOrder2Ok && len(ctxOrder2Out) < bestLen {
+				vansOut = ctxOrder2Out
+				bestLen = len(ctxOrder2Out)
+				vansBeatsRaw = true
+			}
 			if ctxOrder1Ok && len(ctxOrder1Out) < bestLen {
 				vansOut = ctxOrder1Out
+				bestLen = len(ctxOrder1Out)
 				vansBeatsRaw = true
 			}
 		}

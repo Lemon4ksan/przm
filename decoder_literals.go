@@ -159,6 +159,22 @@ func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 			InterleaveContextSheaf4Mode(dst, f0, f1, f2, f3, origLen, mode)
 			return dst, nil
 		}
+		if (flags & vansFlagCtxOrder2) != 0 {
+			if len(src) < 24 {
+				return nil, fmt.Errorf("%w: truncated context order-2 vans header", ErrCorruptedFrame)
+			}
+			origLen := int(binary.LittleEndian.Uint32(src[4:8]))
+			if origLen < 0 || origLen > MaxBlockSize {
+				return nil, fmt.Errorf("%w: invalid context order-2 origLen %d", ErrCorruptedFrame, origLen)
+			}
+			if origLen == 0 {
+				return pad.litBuf[:0], nil
+			}
+			if cap(pad.litBuf) < origLen+64 {
+				pad.litBuf = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
+			}
+			return ContextVANSDecodeOrder2To(pad.litBuf[:origLen], src)
+		}
 		if (flags & vansFlagSheaf) != 0 {
 			if len(src) < 24 {
 				return nil, fmt.Errorf("%w: truncated sheaf vans literal header", ErrCorruptedFrame)

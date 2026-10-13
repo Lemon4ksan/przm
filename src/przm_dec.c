@@ -1007,6 +1007,31 @@ static void przm_init_static_context_models(void) {
     przm_static_context_models_initialized = 1;
 }
 
+#include "przm_order2_tables.h"
+
+static VANSModel przm_static_context_models_order2[64];
+static int przm_static_context_models_order2_initialized = 0;
+
+static void przm_init_static_context_models_order2(void) {
+    if (przm_static_context_models_order2_initialized) return;
+
+    for (int c = 0; c < 64; c++) {
+        uint32_t cdf = 0;
+        for (int s = 0; s < 256; s++) {
+            uint16_t f = przm_static_context_freq_order2[c][s];
+            przm_static_context_models_order2[c].freq[s] = f;
+            przm_static_context_models_order2[c].cdf[s] = (uint16_t)cdf;
+            for (uint32_t j = 0; j < f; j++) {
+                przm_static_context_models_order2[c].lookup[cdf + j] = (uint8_t)s;
+            }
+            cdf += f;
+        }
+        przm_static_context_models_order2[c].cdf[256] = (uint16_t)cdf;
+    }
+
+    przm_static_context_models_order2_initialized = 1;
+}
+
 static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_t orig_len) {
     if (src_len < 8) return PRZM_ERR_CORRUPTED_FRAME;
     if (src[0] != PRZM_MAGIC_VANS_0 || src[1] != PRZM_MAGIC_VANS_1 || src[2] != PRZM_VERSION_1) {
@@ -1014,6 +1039,71 @@ static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_
     }
 
     uint8_t flags = src[3];
+    if ((flags & PRZM_VANS_FLAG_CTX_SHEAF) == 0 && (flags & PRZM_VANS_FLAG_CTX_ORDER2) != 0) {
+        if (src_len < 24) return PRZM_ERR_CORRUPTED_FRAME;
+        uint32_t header_orig = read_u32_le(src + 4);
+        if (header_orig != (uint32_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        if (orig_len == 0) return PRZM_OK;
+
+        przm_init_static_context_models_order2();
+
+        uint32_t x[4];
+        x[0] = read_u32_le(src + 8);
+        x[1] = read_u32_le(src + 12);
+        x[2] = read_u32_le(src + 16);
+        x[3] = read_u32_le(src + 20);
+
+        size_t stream_ptr = 24;
+        uint8_t prev2 = 0;
+        uint8_t prev1 = 0;
+
+        size_t i = 0;
+        size_t limit = (orig_len >= 4) ? orig_len - 3 : 0;
+        for (; i < limit; i += 4) {
+            #define DECODE_CTX2_LANE(lane, offset) do { \
+                uint8_t ctx = (przm_sheaf_context_lut4[prev2] << 4) | przm_sheaf_context_lut16[prev1]; \
+                const VANSModel* m = &przm_static_context_models_order2[ctx]; \
+                uint32_t slot = x[lane] & (VANS_M - 1); \
+                uint8_t s = m->lookup[slot]; \
+                dst[i + (offset)] = s; \
+                prev2 = prev1; \
+                prev1 = s; \
+                uint32_t f = m->freq[s]; \
+                uint32_t c = m->cdf[s]; \
+                x[lane] = f * (x[lane] >> 12) + (slot - c); \
+                while (x[lane] < VANS_L) { \
+                    if (stream_ptr >= src_len) return PRZM_ERR_CORRUPTED_FRAME; \
+                    x[lane] = (x[lane] << 8) | (uint32_t)src[stream_ptr++]; \
+                } \
+            } while (0)
+
+            DECODE_CTX2_LANE(0, 0);
+            DECODE_CTX2_LANE(1, 1);
+            DECODE_CTX2_LANE(2, 2);
+            DECODE_CTX2_LANE(3, 3);
+            #undef DECODE_CTX2_LANE
+        }
+        for (; i < orig_len; i++) {
+            int lane = (int)(i & 3);
+            uint8_t ctx = (przm_sheaf_context_lut4[prev2] << 4) | przm_sheaf_context_lut16[prev1];
+            const VANSModel* m = &przm_static_context_models_order2[ctx];
+            uint32_t slot = x[lane] & (VANS_M - 1);
+            uint8_t s = m->lookup[slot];
+            dst[i] = s;
+            prev2 = prev1;
+            prev1 = s;
+            uint32_t f = m->freq[s];
+            uint32_t c = m->cdf[s];
+            x[lane] = f * (x[lane] >> 12) + (slot - c);
+            while (x[lane] < VANS_L) {
+                if (stream_ptr >= src_len) return PRZM_ERR_CORRUPTED_FRAME;
+                x[lane] = (x[lane] << 8) | (uint32_t)src[stream_ptr++];
+            }
+        }
+
+        return PRZM_OK;
+    }
     if ((flags & PRZM_VANS_FLAG_CTX_ORDER1) != 0) {
         if (src_len < 24) return PRZM_ERR_CORRUPTED_FRAME;
         uint32_t header_orig = read_u32_le(src + 4);

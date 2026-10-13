@@ -22,7 +22,8 @@ const (
 	vansFlag4X        uint8 = 0x01 // 4-way interleaved SIMD-friendly streams
 	vansFlagSheaf     uint8 = 0x02 // Legacy Étale Sheaf Vector C stream splitting applied to literals
 	vansFlagCtxSheaf  uint8 = 0x04 // 2D Context Sheaf Markovian splitting (4 fibers, 0 bitmask)
-	vansFlagCtxOrder1 uint8 = 0x08 // Order-1/2 Context-conditioned ANS (Direct Context Sheaf)
+	vansFlagCtxOrder1 uint8 = 0x08 // Order-1 Context-conditioned ANS (Direct Context Sheaf)
+	vansFlagCtxOrder2 uint8 = 0x10 // Order-2 Context-conditioned ANS (64-state Context Sheaf)
 
 	CtxModeStructural uint8 = 0x00 // Mode 0: Refined 4-Class Étale Sheaf (Delim, WS, Ident, Num)
 	CtxModeJSONDense  uint8 = 0x01 // Mode 1: JSON/Log Syntax-Dense Foliation
@@ -454,6 +455,9 @@ func VANSDecode4xTo(dst, src []byte, model *VANSModel) ([]byte, error) {
 	if (flags & vansFlag4X) == 0 {
 		return nil, fmt.Errorf("%w: unsupported V-ANS mode", ErrVANSCorrupted)
 	}
+	if (flags & vansFlagCtxSheaf) == 0 && (flags & vansFlagCtxOrder2) != 0 {
+		return ContextVANSDecodeOrder2To(dst, src)
+	}
 	if (flags & vansFlagCtxOrder1) != 0 {
 		return ContextVANSDecode4xTo(dst, src)
 	}
@@ -834,3 +838,162 @@ func ContextVANSDecode4x(src []byte) ([]byte, error) {
 	dst := make([]byte, origLen)
 	return ContextVANSDecode4xTo(dst, src)
 }
+
+// ContextVANSEncodeOrder2 encodes raw bytes using a 4-way interleaved Vector-State ANS coder
+// conditioned on preceding 2 bytes Order-2 context classes using the 64-context Sheaf model.
+func ContextVANSEncodeOrder2(src []byte) ([]byte, error) {
+	n := len(src)
+	if n == 0 {
+		return []byte{}, nil
+	}
+
+	var x [4]uint32
+	for i := range 4 {
+		x[i] = vansL
+	}
+
+	var bitstream []byte
+
+	// Encode backwards
+	for i := n - 1; i >= 0; i-- {
+		lane := i & 3
+		s := src[i]
+		p1 := byte(0)
+		p2 := byte(0)
+		if i > 0 {
+			p1 = src[i-1]
+		}
+		if i > 1 {
+			p2 = src[i-2]
+		}
+		ctx := (int(SheafContextOrder2Table4[p2]) << 4) | int(SheafContextOrder2Table16[p1])
+		m := &SheafStaticModelsOrder2[ctx]
+		f := uint32(m.Freq[s])
+		cdf := uint32(m.CDF[s])
+
+		// Renormalization
+		xMax := (uint32(4096) * f) - 1
+		for x[lane] > xMax {
+			bitstream = append(bitstream, byte(x[lane]))
+			x[lane] >>= 8
+		}
+
+		// State transition
+		x[lane] = (x[lane]/f)*vansM + cdf + (x[lane] % f)
+	}
+
+	// Header: Magic(2B) | Version(1B) | Flags(1B) | OrigLen(4B) | States(16B)
+	headerSize := 24
+	totalSize := headerSize + len(bitstream)
+
+	out := make([]byte, 0, totalSize)
+	out = append(out, vansMagic0, vansMagic1, vansVer1, vansFlag4X|vansFlagCtxOrder2)
+	var lenBuf [4]byte
+	binary.LittleEndian.PutUint32(lenBuf[:], uint32(n))
+	out = append(out, lenBuf[:]...)
+
+	// Put 4 final states
+	for i := range 4 {
+		var stBuf [4]byte
+		binary.LittleEndian.PutUint32(stBuf[:], x[i])
+		out = append(out, stBuf[:]...)
+	}
+
+	// Append reversed bitstream so decompressor reads forward
+	for _, b := range slices.Backward(bitstream) {
+		out = append(out, b)
+	}
+
+	return out, nil
+}
+
+// ContextVANSDecodeOrder2To decodes a 4-way interleaved Order-2 Context-conditioned VANS stream into dst.
+// Guarantees strictly 0 dynamic heap allocations if cap(dst) >= origLen.
+func ContextVANSDecodeOrder2To(dst, src []byte) ([]byte, error) {
+	if len(src) == 0 {
+		return dst[:0], nil
+	}
+	if len(src) < 24 {
+		return nil, ErrVANSCorrupted
+	}
+
+	if src[0] != vansMagic0 || src[1] != vansMagic1 || src[2] != vansVer1 {
+		return nil, fmt.Errorf("%w: invalid V-ANS signature", ErrVANSCorrupted)
+	}
+
+	flags := src[3]
+	if (flags & vansFlagCtxSheaf) != 0 || (flags & vansFlagCtxOrder2) == 0 {
+		return nil, fmt.Errorf("%w: unsupported V-ANS mode", ErrVANSCorrupted)
+	}
+
+	origLen := int(binary.LittleEndian.Uint32(src[4:8]))
+	if origLen < 0 || origLen > MaxBlockSize {
+		return nil, fmt.Errorf("%w: invalid V-ANS origLen %d", ErrVANSCorrupted, origLen)
+	}
+	if origLen == 0 {
+		return dst[:0], nil
+	}
+
+	var x [4]uint32
+	ptr := 8
+	for i := range 4 {
+		x[i] = binary.LittleEndian.Uint32(src[ptr : ptr+4])
+		ptr += 4
+	}
+
+	if cap(dst) < origLen {
+		return nil, fmt.Errorf("%w: dst capacity %d < origLen %d", ErrBufferTooSmall, cap(dst), origLen)
+	}
+	dst = dst[:origLen]
+
+	streamPtr := ptr
+	srcLen := len(src)
+	prev2, prev1 := byte(0), byte(0)
+
+	for i := 0; i < origLen; i++ {
+		lane := i & 3
+		ctx := (int(SheafContextOrder2Table4[prev2]) << 4) | int(SheafContextOrder2Table16[prev1])
+		m := &SheafStaticModelsOrder2[ctx]
+
+		slot := x[lane] & (vansM - 1)
+		s := byte(m.DecodeTable[slot] & 0xFF)
+		dst[i] = s
+		prev2 = prev1
+		prev1 = s
+
+		f := uint32(m.Freq[s])
+		cdf := uint32(m.CDF[s])
+
+		x[lane] = f*(x[lane]>>12) + (slot - cdf)
+
+		for x[lane] < vansL {
+			if streamPtr >= srcLen {
+				return nil, ErrVANSCorrupted
+			}
+			x[lane] = (x[lane] << 8) | uint32(src[streamPtr])
+			streamPtr++
+		}
+	}
+
+	return dst, nil
+}
+
+// ContextVANSDecodeOrder2 decodes a 4-way interleaved Order-2 Context-conditioned VANS stream back to original bytes.
+func ContextVANSDecodeOrder2(src []byte) ([]byte, error) {
+	if len(src) == 0 {
+		return []byte{}, nil
+	}
+	if len(src) < 24 {
+		return nil, ErrVANSCorrupted
+	}
+	origLen := int(binary.LittleEndian.Uint32(src[4:8]))
+	if origLen < 0 || origLen > MaxBlockSize {
+		return nil, fmt.Errorf("%w: invalid V-ANS origLen %d", ErrVANSCorrupted, origLen)
+	}
+	if origLen == 0 {
+		return []byte{}, nil
+	}
+	dst := make([]byte, origLen)
+	return ContextVANSDecodeOrder2To(dst, src)
+}
+

@@ -1208,6 +1208,16 @@ func PackStream(src []byte, prefMode uint8) ([]byte, error) {
 			best = out
 		}
 	}
+	if vCtx2, err := ContextVANSEncodeOrder2(src); err == nil {
+		vSize := 5 + len(vCtx2)
+		if vSize < len(best) {
+			out := make([]byte, vSize)
+			out[0] = ModeVANS4X
+			binary.LittleEndian.PutUint32(out[1:5], uint32(n))
+			copy(out[5:], vCtx2)
+			best = out
+		}
+	}
 	if n >= 512 {
 		if rec, err := EncodeRecursiveLZ(src); err == nil && len(rec) < len(best) {
 			best = rec
