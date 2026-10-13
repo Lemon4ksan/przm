@@ -508,7 +508,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	minMatchBase := minMatch
 	compactDict := opts.CompactDict && dictLen > 0
 
-	if uSize > 65535 || windowLog > WindowLog64K {
+	if uSize > 65535 {
 		flags |= FlagExtOffset
 	}
 
@@ -586,6 +586,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			dpPad := dpScratchPool.Get()
 			defer dpScratchPool.Put(dpPad)
 			clear(dpPad.table3[:])
+			clear(dpPad.headSec[:])
 			clear(dpPad.macro8[:])
 			clear(dpPad.dagProd[:])
 			clear(dpPad.dagProd32[:])
@@ -629,6 +630,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			dpPad = dpScratchPool.Get()
 			defer dpScratchPool.Put(dpPad)
 			clear(dpPad.table3[:])
+			clear(dpPad.headSec[:])
 			clear(dpPad.macro8[:])
 			clear(dpPad.dagProd[:])
 			clear(dpPad.dagProd32[:])
@@ -761,6 +763,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 			dpPad := dpScratchPool.Get()
 			defer dpScratchPool.Put(dpPad)
 			clear(dpPad.table3[:])
+			clear(dpPad.headSec[:])
 			clear(dpPad.macro8[:])
 			clear(dpPad.dagProd[:])
 			clear(dpPad.dagProd32[:])
@@ -822,7 +825,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		}
 	}
 
-	if uSize > 65535 || len(cmdSection) > 65535 || len(offSection) > 65535 || windowLog > WindowLog64K {
+	if uSize > 65535 || len(cmdSection) > 65535 || len(offSection) > 65535 {
 		flags |= FlagExtOffset
 	}
 

@@ -1013,13 +1013,13 @@ static void przm_init_static_context_models(void) {
 
 #include "przm_order2_tables.h"
 
-static VANSModel przm_static_context_models_order2[64];
+static VANSModel przm_static_context_models_order2[256];
 static int przm_static_context_models_order2_initialized = 0;
 
 static void przm_init_static_context_models_order2(void) {
     if (przm_static_context_models_order2_initialized) return;
 
-    for (int c = 0; c < 64; c++) {
+    for (int c = 0; c < 256; c++) {
         uint32_t cdf = 0;
         for (int s = 0; s < 256; s++) {
             uint16_t f = przm_static_context_freq_order2[c][s];
@@ -1106,38 +1106,41 @@ static inline uint8_t przm_ctx_meta(uint8_t prev) {
     return 7;
 }
 
-static VANSModel przm_static_var_models8[8];
-static int przm_static_var_models8_initialized = 0;
+static VANSModel przm_static_var_models[256];
+static int przm_static_var_models_initialized = 0;
 
-static void przm_init_static_var_models8(void) {
-    if (przm_static_var_models8_initialized) return;
+static void przm_init_static_var_models(void) {
+    if (przm_static_var_models_initialized) return;
 
-    for (int c = 0; c < 8; c++) {
+    for (int c = 0; c < 256; c++) {
         uint32_t cdf = 0;
         for (int s = 0; s < 256; s++) {
-            uint16_t f = przm_static_var_freq8[c][s];
-            przm_static_var_models8[c].freq[s] = f;
-            przm_static_var_models8[c].cdf[s] = (uint16_t)cdf;
+            uint16_t f = przm_static_var_freq256[c][s];
+            przm_static_var_models[c].freq[s] = f;
+            przm_static_var_models[c].cdf[s] = (uint16_t)cdf;
             for (uint32_t j = 0; j < f; j++) {
-                przm_static_var_models8[c].lookup[cdf + j] = (uint8_t)s;
+                przm_static_var_models[c].lookup[cdf + j] = (uint8_t)s;
             }
             cdf += f;
         }
-        przm_static_var_models8[c].cdf[256] = (uint16_t)cdf;
+        przm_static_var_models[c].cdf[256] = (uint16_t)cdf;
     }
 
-    przm_static_var_models8_initialized = 1;
+    przm_static_var_models_initialized = 1;
 }
 
-static inline uint8_t przm_ctx_var(uint8_t prev) {
-    if (prev == 0) return 0;
-    if (prev <= 2) return 1;
-    if (prev <= 4) return 2;
-    if (prev < 8) return 3;
-    if (prev < 16) return 4;
-    if (prev < 64) return 5;
-    if (prev < 128) return 6;
-    return 7;
+static inline uint8_t przm_ctx_var(uint8_t prev1, uint8_t prev2) {
+    if (prev1 >= 128) {
+        return prev1;
+    }
+    if (prev2 >= 128) {
+        uint8_t c1 = (prev1 > 7) ? 7 : prev1;
+        uint8_t c2 = (prev2 >> 4) & 7;
+        return (uint8_t)((c1 << 3) | c2);
+    }
+    uint8_t c1 = (prev1 == 0) ? 0 : (prev1 <= 2) ? 1 : (prev1 <= 4) ? 2 : (prev1 < 8) ? 3 : (prev1 < 16) ? 4 : (prev1 < 32) ? 5 : (prev1 < 64) ? 6 : 7;
+    uint8_t c2 = (prev2 == 0) ? 0 : (prev2 <= 2) ? 1 : (prev2 <= 5) ? 2 : (prev2 < 10) ? 3 : (prev2 < 20) ? 4 : (prev2 < 40) ? 5 : (prev2 < 80) ? 6 : 7;
+    return (uint8_t)(64 | ((c1 << 3) | c2));
 }
 
 #include "przm_dist_tables.h"
@@ -1299,7 +1302,7 @@ static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_
         if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
         if (orig_len == 0) return PRZM_OK;
 
-        przm_init_static_var_models8();
+        przm_init_static_var_models();
 
         uint32_t x[4];
         x[0] = read_u32_le(src + 8);
@@ -1308,16 +1311,18 @@ static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_
         x[3] = read_u32_le(src + 20);
 
         size_t stream_ptr = 24;
-        uint8_t prev = 0;
+        uint8_t prev1 = 0;
+        uint8_t prev2 = 0;
 
         for (size_t i = 0; i < orig_len; i++) {
             size_t lane = i & 3;
-            uint8_t ctx = przm_ctx_var(prev);
-            const VANSModel* m = &przm_static_var_models8[ctx];
+            uint8_t ctx = przm_ctx_var(prev1, prev2);
+            const VANSModel* m = &przm_static_var_models[ctx];
             uint32_t slot = x[lane] & (VANS_M - 1);
             uint8_t s = m->lookup[slot];
             dst[i] = s;
-            prev = s;
+            prev2 = prev1;
+            prev1 = s;
 
             uint32_t f = m->freq[s];
             uint32_t c = m->cdf[s];
@@ -1353,7 +1358,7 @@ static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_
         size_t limit = (orig_len >= 4) ? orig_len - 3 : 0;
         for (; i < limit; i += 4) {
             #define DECODE_CTX2_LANE(lane, offset) do { \
-                uint8_t ctx = (przm_sheaf_context_lut4[prev2] << 4) | przm_sheaf_context_lut16[prev1]; \
+                uint8_t ctx = (przm_sheaf_context_lut16[prev2] << 4) | przm_sheaf_context_lut16[prev1]; \
                 const VANSModel* m = &przm_static_context_models_order2[ctx]; \
                 uint32_t slot = x[lane] & (VANS_M - 1); \
                 uint8_t s = m->lookup[slot]; \
@@ -1377,7 +1382,7 @@ static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_
         }
         for (; i < orig_len; i++) {
             int lane = (int)(i & 3);
-            uint8_t ctx = (przm_sheaf_context_lut4[prev2] << 4) | przm_sheaf_context_lut16[prev1];
+            uint8_t ctx = (przm_sheaf_context_lut16[prev2] << 4) | przm_sheaf_context_lut16[prev1];
             const VANSModel* m = &przm_static_context_models_order2[ctx];
             uint32_t slot = x[lane] & (VANS_M - 1);
             uint8_t s = m->lookup[slot];

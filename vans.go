@@ -878,7 +878,7 @@ func ContextVANSEncodeOrder2(src []byte) ([]byte, error) {
 		if i > 1 {
 			p2 = src[i-2]
 		}
-		ctx := (int(SheafContextOrder2Table4[p2]) << 4) | int(SheafContextOrder2Table16[p1])
+		ctx := (int(SheafContextOrder2Table16[p2]) << 4) | int(SheafContextOrder2Table16[p1])
 		m := &SheafStaticModelsOrder2[ctx]
 		f := uint32(m.Freq[s])
 		cdf := uint32(m.CDF[s])
@@ -964,7 +964,7 @@ func ContextVANSDecodeOrder2To(dst, src []byte) ([]byte, error) {
 
 	for i := 0; i < origLen; i++ {
 		lane := i & 3
-		ctx := (int(SheafContextOrder2Table4[prev2]) << 4) | int(SheafContextOrder2Table16[prev1])
+		ctx := (int(SheafContextOrder2Table16[prev2]) << 4) | int(SheafContextOrder2Table16[prev1])
 		m := &SheafStaticModelsOrder2[ctx]
 
 		slot := x[lane] & (vansM - 1)
@@ -1285,12 +1285,16 @@ func ContextVANSEncodeVar8(src []byte) ([]byte, error) {
 	for i := n - 1; i >= 0; i-- {
 		lane := i & 3
 		s := src[i]
-		p := byte(0)
+		p1 := byte(0)
+		p2 := byte(0)
 		if i > 0 {
-			p = src[i-1]
+			p1 = src[i-1]
 		}
-		ctx := ctxVar(p)
-		m := &VarStaticModels8[ctx]
+		if i > 1 {
+			p2 = src[i-2]
+		}
+		ctx := ctxVar(p1, p2)
+		m := &VarStaticModels256[ctx]
 		f := uint32(m.Freq[s])
 		cdf := uint32(m.CDF[s])
 
@@ -1367,17 +1371,19 @@ func ContextVANSDecodeVar8To(dst, src []byte) ([]byte, error) {
 
 	streamPtr := ptr
 	srcLen := len(src)
-	prev := byte(0)
+	prev1 := byte(0)
+	prev2 := byte(0)
 
 	for i := 0; i < origLen; i++ {
 		lane := i & 3
-		ctx := ctxVar(prev)
-		m := &VarStaticModels8[ctx]
+		ctx := ctxVar(prev1, prev2)
+		m := &VarStaticModels256[ctx]
 
 		slot := x[lane] & (vansM - 1)
 		s := byte(m.DecodeTable[slot] & 0xFF)
 		dst[i] = s
-		prev = s
+		prev2 = prev1
+		prev1 = s
 
 		f := uint32(m.Freq[s])
 		cdf := uint32(m.CDF[s])
