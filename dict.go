@@ -22,15 +22,23 @@ type dictEntry struct {
 	cost    uint8
 }
 
+type tokenPairMatch struct {
+	tok1    uint8
+	tok2    uint8
+	pairLen int
+}
+
 type dictMatcher struct {
-	id      uint32
-	tokens  [][]byte
-	entries []dictEntry
-	head    [65536]int32
-	chain   []int32
-	head3   [65536]int32
-	chain3  []int32
-	head2   [65536]int16
+	id        uint32
+	tokens    [][]byte
+	entries   []dictEntry
+	head      [65536]int32
+	chain     []int32
+	head3     [65536]int32
+	chain3    []int32
+	head2     [65536]int16
+	baseHead2 [65536]int16
+	baseNext  [256]int16
 }
 
 func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
@@ -44,6 +52,12 @@ func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
 	}
 	for i := range m.head2 {
 		m.head2[i] = -1
+	}
+	for i := range m.baseHead2 {
+		m.baseHead2[i] = -1
+	}
+	for i := range m.baseNext {
+		m.baseNext[i] = -1
 	}
 
 	for i, s := range rawTokens {
@@ -91,6 +105,11 @@ func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
 			cost = 1
 		}
 		addEntry(b, uint16(i), 0, cost, false)
+		if len(b) >= 2 && i < 256 {
+			u16 := uint16(b[0]) | (uint16(b[1]) << 8)
+			m.baseNext[i] = m.baseHead2[u16]
+			m.baseHead2[u16] = int16(i)
+		}
 	}
 
 	// 2. Static Word Transforms (only for tokens where len >= 2 and <= 32)
@@ -370,6 +389,76 @@ func (m *dictMatcher) match(
 	}
 
 	return bestIdx, bestTransOp, bestLen, bestCost, bestScore, pairTok2, isRFC
+}
+
+// matchBaseTokens finds base tokens matching at pos in src (up to 8).
+func (m *dictMatcher) matchBaseTokens(src []byte, pos int, tokIndices *[8]uint8) int {
+	uSize := len(src)
+	if pos+2 > uSize {
+		return 0
+	}
+	u16 := uint16(src[pos]) | (uint16(src[pos+1]) << 8)
+	tokID := m.baseHead2[u16]
+	if tokID < 0 {
+		return 0
+	}
+	count := 0
+	rem := uSize - pos
+	for tokID >= 0 {
+		b := m.tokens[tokID]
+		l := len(b)
+		if l <= rem && bytes.Equal(src[pos:pos+l], b) {
+			tokIndices[count] = uint8(tokID)
+			count++
+			if count >= 8 {
+				break
+			}
+		}
+		tokID = m.baseNext[tokID]
+	}
+	return count
+}
+
+// matchTokenPairs finds all compound token pairs (tok1 + tok2) matching at pos in src (up to 8).
+func (m *dictMatcher) matchTokenPairs(src []byte, pos int, pairs *[8]tokenPairMatch) int {
+	uSize := len(src)
+	if pos+4 > uSize {
+		return 0
+	}
+	u16 := uint16(src[pos]) | (uint16(src[pos+1]) << 8)
+	tok1ID := m.baseHead2[u16]
+	if tok1ID < 0 {
+		return 0
+	}
+	count := 0
+	for tok1ID >= 0 {
+		b1 := m.tokens[tok1ID]
+		l1 := len(b1)
+		if pos+l1+2 <= uSize && bytes.Equal(src[pos:pos+l1], b1) {
+			pos2 := pos + l1
+			rem2 := uSize - pos2
+			u16_2 := uint16(src[pos2]) | (uint16(src[pos2+1]) << 8)
+			tok2ID := m.baseHead2[u16_2]
+			for tok2ID >= 0 {
+				b2 := m.tokens[tok2ID]
+				l2 := len(b2)
+				if l2 <= rem2 && bytes.Equal(src[pos2:pos2+l2], b2) {
+					pairs[count] = tokenPairMatch{
+						tok1:    uint8(tok1ID),
+						tok2:    uint8(tok2ID),
+						pairLen: l1 + l2,
+					}
+					count++
+					if count >= 8 {
+						return count
+					}
+				}
+				tok2ID = m.baseNext[tok2ID]
+			}
+		}
+		tok1ID = m.baseNext[tok1ID]
+	}
+	return count
 }
 
 // PRZMDMagic defines the 32-bit container magic for external dictionaries ('PRZD').
@@ -853,25 +942,25 @@ var webTokensRaw = []string{
 	"### Performance Bounds", // [229]
 	"Under maximum saturation, each broker node sustains 12.8 million input/output operations per second (IOPS)", // [230]
 	" with memory footprint bounded by O(log N) where N represents active TCP/QUIC stream sessions.",             // [231]
-	".99,\"in_stock\":true,\"tags\":[\"cloud\",\"saas\",\"premium\"]},{\"item_id\":\"it_",                        // [232]
-	".99,\"in_stock\":true,\"tags\":[\"cloud\",\"saas\",\"premium\"]},",                                          // [233]
-	"{\"item_id\":\"it_",                                   // [234]
-	"\",\"sku\":\"SKU-",                                    // [235]
-	"-PRO\",\"price\":",                                    // [236]
-	",\"price\":",                                          // [237]
-	"{\"scope\":\"read:all\",\"expires_at\":",              // [238]
-	"{\"scope\":\"write:deployments\",\"expires_at\":",     // [239]
-	"{\"scope\":\"admin:billing\",\"expires_at\":",         // [240]
-	",\"profile\":{\"avatar\":\"https://cdn.corp/avatars/", // [241]
-	",\"organization\":\"Acme Systems International LLC\",\"tier\":\"enterprise_plus\",\"mfa_enabled\":true,\"last_login_ip\":\"192.168.1.105\"}},",                                                          // [242]
-	",\"organization\":\"Acme Systems International LLC\",\"tier\":\"enterprise_plus\",\"mfa_enabled\":true,\"last_login_ip\":\"",                                                                            // [243]
-	"\"username\":\"alex_developer\",\"email\":\"alex@engineering.corp\",\"roles\":[\"admin\",\"billing_manager\"]",                                                                                          // [244]
-	"{\"status\":\"ok\",\"code\":200,\"server\":\"edge-router-04\",\"region\":\"us-east-1\",\"timestamp\":\"2026-10-11T01:15:30.124Z\",\"data\":{\"session_id\":\"sess_98f4a1c0d2\",\"user\":{\"id\":84192,", // [245]
-	"{\"status\":\"ok\",\"code\":200,\"server\":\"edge-router-04\",\"region\":\"us-east-1\",\"timestamp\":\"",                                                                                                // [246]
-	"\",\"data\":{\"session_id\":\"sess_", // [247]
-	"\",\"user\":{\"id\":",                // [248]
-	"\"expires_at\":1798761600}",          // [249]
-	"\"expires_at\":1798761600",           // [250]
+	"<div ",             // [232]
+	"style=\"",          // [233]
+	"<span ",            // [234]
+	"background-",       // [235]
+	"margin-",           // [236]
+	"border-",           // [237]
+	"return ",           // [238]
+	"false;",            // [239]
+	"true;",             // [240]
+	" 0;",               // [241]
+	"const ",            // [242]
+	"uint8_t",           // [243]
+	"uint32_t",          // [244]
+	"int32_t",           // [245]
+	"int64_t",           // [246]
+	"memcpy(",           // [247]
+	"return PRZM_ERR_",  // [248]
+	"CORRUPTED_FRAME;",  // [249]
+	"compression",       // [250]
 	"return PRZM_ERR_CORRUPTED_FRAME;",    // [251]
 	"uint8_t* ",                           // [252]
 	"read_u32_le(",                        // [253]

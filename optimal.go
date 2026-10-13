@@ -153,7 +153,10 @@ func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int, hasStride bool, str
 	}
 	if repCode == -5 {
 		// Sub-Word Token Pair: 3 bytes opcode (0xFF <tok1> <tok2>), 0 offset bytes
-		return 20
+		if mLen >= 16 {
+			return 22
+		}
+		return 25
 	}
 	if repCode == -6 {
 		// Compact Raw Dict: 1 byte opcode (0xE9) + 1 byte token + offCost
@@ -895,7 +898,54 @@ func compressBlockOptimal(
 
 		// Dictionary Token Matching
 		if activeMatcher != nil {
-			tokIdx, transOp, tokLen, _, score, pairTok2, isRFC := activeMatcher.match(src, pos)
+			// 1. Single Base Dictionary Tokens
+			var baseToks [8]uint8
+			maxSingleLen := 0
+			nBase := activeMatcher.matchBaseTokens(src, pos, &baseToks)
+			for bIdx := 0; bIdx < nBase && candCount < 60; bIdx++ {
+				tID := baseToks[bIdx]
+				tLen := len(activeMatcher.tokens[tID])
+				if tLen > maxSingleLen {
+					maxSingleLen = tLen
+				}
+				if tID < 8 {
+					candidates[candCount] = dpCandidate{
+						dist:    0,
+						length:  int32(tLen),
+						repCode: -2, // ShortDict
+						extra:   int32(tID),
+					}
+					candCount++
+				} else if tLen >= 3 {
+					candidates[candCount] = dpCandidate{
+						dist:    0,
+						length:  int32(tLen),
+						repCode: -3, // DictToken
+						extra:   int32(tID),
+					}
+					candCount++
+				}
+			}
+
+			// 2. Compound Token Pairs (0xFF <tok1> <tok2>) evaluated directly in forward DP
+			var pairMatches [8]tokenPairMatch
+			nPairs := activeMatcher.matchTokenPairs(src, pos, &pairMatches)
+			for pIdx := 0; pIdx < nPairs && candCount < 60; pIdx++ {
+				pm := &pairMatches[pIdx]
+				if pm.pairLen < 5 || pm.pairLen <= maxSingleLen {
+					continue
+				}
+				candidates[candCount] = dpCandidate{
+					dist:    0,
+					length:  int32(pm.pairLen),
+					repCode: -5, // Sub-Word Token Pair
+					extra:   int32(pm.tok1) | (int32(pm.tok2) << 8),
+				}
+				candCount++
+			}
+
+			// 3. Static word transforms & RFC single matches via activeMatcher.match
+			tokIdx, transOp, tokLen, _, score, _, isRFC := activeMatcher.match(src, pos)
 			if score >= 1 && tokLen >= 2 && candCount < 60 {
 				if isRFC {
 					var b0, b1 uint8
@@ -919,31 +969,7 @@ func compressBlockOptimal(
 						extra:   int32(b0) | (int32(b1) << 8),
 					}
 					candCount++
-				} else if tokIdx < 8 && transOp == 0 {
-					candidates[candCount] = dpCandidate{
-						dist:    0,
-						length:  int32(tokLen),
-						repCode: -2,
-						extra:   int32(tokIdx),
-					}
-					candCount++
-				} else if transOp == 0 {
-					candidates[candCount] = dpCandidate{
-						dist:    0,
-						length:  int32(tokLen),
-						repCode: -3,
-						extra:   int32(tokIdx),
-					}
-					candCount++
-				} else if transOp == OpcodePrefixTransPair && pairTok2 >= 0 {
-					candidates[candCount] = dpCandidate{
-						dist:    0,
-						length:  int32(tokLen),
-						repCode: -5,
-						extra:   int32(tokIdx) | (int32(pairTok2) << 8),
-					}
-					candCount++
-				} else if transOp != 0 {
+				} else if transOp != 0 && transOp != OpcodePrefixTransPair {
 					candidates[candCount] = dpCandidate{
 						dist:    0,
 						length:  int32(tokLen),
