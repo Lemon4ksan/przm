@@ -1,0 +1,15 @@
+# import config
+packagefile bytes=C:\Users\senya\AppData\Local\go-build\b3\b3c8933b5af35a885f84447f65191f6aff2af0091adb2bd7064a6792888b022d-d
+packagefile encoding/binary=C:\Users\senya\AppData\Local\go-build\c4\c445144f405504d6e18c5aede043daf7ffed9855c8eba7bdf1295ee4a2c7a7c7-d
+packagefile encoding/csv=C:\Users\senya\AppData\Local\go-build\57\5708de2f7aa2c6b7090bdda613d9991be2e4a6e2e1ccf404edcfa278b5956ca5-d
+packagefile fmt=C:\Users\senya\AppData\Local\go-build\9f\9fde0dced106095e048baa7db2f24f8b793d65abf994f01406b10716e77cf77c-d
+packagefile github.com/lemon4ksan/foundation/bufkit=C:\Users\senya\AppData\Local\go-build\71\71a40e4feac95fedef5ac066bda9c1aa1d53f791134e3c6c4e7d5f12e68c9e15-d
+packagefile github.com/lemon4ksan/przm=d:\CodingProjects\przm\.gotmp\go-build1639484771\b130\_pkg_.a
+packagefile github.com/lemon4ksan/przm/bench=d:\CodingProjects\przm\.gotmp\go-build1639484771\b151\_pkg_.a
+packagefile github.com/lemon4ksan/przm/gpu=d:\CodingProjects\przm\.gotmp\go-build1639484771\b127\_pkg_.a
+packagefile io=C:\Users\senya\AppData\Local\go-build\f0\f0057434d796106b4ec753df715456be463a8566518108c0c228f599148e4f7a-d
+packagefile os=C:\Users\senya\AppData\Local\go-build\93\933c55e2d66af1755f47809758e26787b7fd58d9bc23e945125ffc91326f920e-d
+packagefile os/exec=C:\Users\senya\AppData\Local\go-build\3f\3f5d4ab74ae9644425fc001121384b7c7eea9f2e23e9c55a96f78bd2c02a5040-d
+packagefile path/filepath=C:\Users\senya\AppData\Local\go-build\40\40d0cc5fffb8b9cb4d78255d00d8ac93a7e14813d473bf0d41368ee18af84e35-d
+packagefile strconv=C:\Users\senya\AppData\Local\go-build\43\430db116c32fcd671f389c7237913162fe417e9163ed662a1113a32f718429d6-d
+packagefile testing=C:\Users\senya\AppData\Local\go-build\53\53903dcc8c21dcf0886293c4813f6c6cd03e32df5a0383854454777bcc6c0500-d

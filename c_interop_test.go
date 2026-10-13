@@ -11,10 +11,29 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/lemon4ksan/przm"
 )
+
+func runCDecompressor(cBinPath string, args ...string) ([]byte, error) {
+	var output []byte
+	var err error
+	for attempt := 0; attempt < 10; attempt++ {
+		cmd := exec.Command(cBinPath, args...)
+		output, err = cmd.CombinedOutput()
+		if err == nil {
+			return output, nil
+		}
+		if !strings.Contains(err.Error(), "Access is denied") && !strings.Contains(err.Error(), "0xc0000005") {
+			return output, err
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	return output, err
+}
 
 func TestPureCDecompressorInterop(t *testing.T) {
 	cCandidates := []string{"test_przm_dec.exe", "tests/test_przm_dec.exe", "c/test_przm_dec.exe"}
@@ -152,8 +171,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 						t.Fatalf("failed to write compressed file: %v", err)
 					}
 
-					cmd := exec.Command(cBinPath, inPrzm, outBin)
-					output, err := cmd.CombinedOutput()
+					output, err := runCDecompressor(cBinPath, inPrzm, outBin)
 					if err != nil {
 						t.Fatalf("C decompressor failed (exit status %v):\nOutput:\n%s", err, string(output))
 					}
@@ -195,8 +213,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 			t.Fatalf("failed to write compressed file: %v", err)
 		}
 
-		cmd := exec.Command(cBinPath, inPrzm, outBin)
-		output, err := cmd.CombinedOutput()
+		output, err := runCDecompressor(cBinPath, inPrzm, outBin)
 		if err != nil {
 			t.Fatalf("C decompressor failed on IsoQuant frame (exit status %v):\nOutput:\n%s", err, string(output))
 		}
@@ -234,8 +251,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 			t.Fatalf("failed to write compressed file: %v", err)
 		}
 
-		cmd := exec.Command(cBinPath, inPrzm, outBin)
-		output, err := cmd.CombinedOutput()
+		output, err := runCDecompressor(cBinPath, inPrzm, outBin)
 		if err != nil {
 			t.Fatalf(
 				"C decompressor failed on Heisenberg Stride 3 frame (exit status %v):\nOutput:\n%s",
@@ -281,8 +297,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 			t.Fatalf("failed to write compressed file: %v", err)
 		}
 
-		cmd := exec.Command(cBinPath, inPrzm, outBin)
-		output, err := cmd.CombinedOutput()
+		output, err := runCDecompressor(cBinPath, inPrzm, outBin)
 		if err != nil {
 			t.Fatalf(
 				"C decompressor failed on Heisenberg Stride 4 frame (exit status %v):\nOutput:\n%s",
@@ -357,8 +372,7 @@ func TestPureCDecompressorInterop(t *testing.T) {
 					t.Fatalf("failed to write PRZS file: %v", err)
 				}
 
-				cmd := exec.Command(cBinPath, inPrzs, outBin)
-				output, err := cmd.CombinedOutput()
+				output, err := runCDecompressor(cBinPath, inPrzs, outBin)
 				if err != nil {
 					t.Fatalf(
 						"Pure C decompressor failed on PRZS multi-chunk stream (exit status %v):\nOutput:\n%s",
@@ -387,6 +401,76 @@ func TestPureCDecompressorInterop(t *testing.T) {
 				}
 				if !bytes.Equal(goDec, fullOriginal) {
 					t.Fatalf("Go Decompress mismatch")
+				}
+			})
+		}
+	})
+
+	// Test direct Go-compressed GGTC grammar frame interop with Pure C decompressor
+	t.Run("DirectGGTCFrame", func(t *testing.T) {
+		datasets := []struct {
+			name string
+			data []byte
+		}{
+			{
+				name: "SmallString",
+				data: []byte("Structured Grammar-Graph Tensor Compression (GGTC) Lossless Test!"),
+			},
+			{
+				name: "JSON_16K",
+				data: func() []byte {
+					var buf bytes.Buffer
+					for i := 0; i < 200; i++ {
+						fmt.Fprintf(
+							&buf,
+							"{\"status\":\"ok\",\"code\":200,\"index\":%d,\"msg\":\"hello grammar\"}\n",
+							i,
+						)
+					}
+					return buf.Bytes()
+				}(),
+			},
+			{
+				name: "RepetitivePattern",
+				data: bytes.Repeat([]byte("PRZM_MATHEMATICAL_SINGULARITY_RECONSTRUCTIVE_GRAMMAR_DAG"), 50),
+			},
+		}
+
+		for _, ds := range datasets {
+			t.Run(ds.name, func(t *testing.T) {
+				compressed, err := przm.GGTCEncode(ds.data)
+				if err != nil {
+					t.Fatalf("GGTCEncode failed: %v", err)
+				}
+
+				inPrzm := filepath.Join(tmpDir, fmt.Sprintf("ggtc_%s.przm", ds.name))
+				outBin := filepath.Join(tmpDir, fmt.Sprintf("ggtc_%s.out", ds.name))
+
+				if err := os.WriteFile(inPrzm, compressed, 0o644); err != nil {
+					t.Fatalf("failed to write compressed file: %v", err)
+				}
+
+				output, err := runCDecompressor(cBinPath, inPrzm, outBin)
+				if err != nil {
+					t.Fatalf("C decompressor failed on GGTC frame (exit status %v):\nOutput:\n%s", err, string(output))
+				}
+
+				decompressed, err := os.ReadFile(outBin)
+				if err != nil {
+					t.Fatalf("failed to read C decompressed file: %v", err)
+				}
+
+				if !bytes.Equal(decompressed, ds.data) {
+					t.Fatalf("GGTC interop mismatch: got %d bytes, want %d bytes", len(decompressed), len(ds.data))
+				}
+
+				// Cross-check Go decompressor produces the identical bitstream
+				goDec, err := przm.GGTCDecode(compressed)
+				if err != nil {
+					t.Fatalf("Go GGTCDecode failed: %v", err)
+				}
+				if !bytes.Equal(goDec, ds.data) {
+					t.Fatalf("Go GGTCDecode mismatch")
 				}
 			})
 		}

@@ -8,7 +8,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 	"sync"
+
+	"github.com/lemon4ksan/foundation/bufkit"
+	"github.com/lemon4ksan/foundation/generic"
 )
 
 // Mode identifiers for Entropy-Pack
@@ -18,6 +22,9 @@ const (
 	ModeHuffmanCompact   uint8 = 2 // Single-stream Table-Driven Canonical Huffman with 32B Active-Mask (<65B header)
 	ModeHuffmanCompact4X uint8 = 3 // 4-stream interleaved Table-Driven Canonical Huffman with 32B Active-Mask
 	ModeRecursiveLZ      uint8 = 4 // Recursive PRZM LZ77 frame (for structured, highly-repetitive command streams)
+	ModeVANS4X           uint8 = 5 // 4-way interleaved Vector-State ANS coder
+	ModeDistancePrefix   uint8 = 6 // Log2 Distance Prefix Codebook (Entropy-coded DistanceCode + Raw ExtraBits)
+	ModeSplitVarint      uint8 = 7 // De-interleaved LEB128 Varint Stream (LSB channel + MSB continuation channel)
 )
 
 var ErrCorruptedStream = errors.New("entropy_pack: corrupted stream")
@@ -197,6 +204,38 @@ func (r *HuffBitReader) Consume(nbBits int) {
 	if r.bitsRemaining < 0 {
 		r.underflow = true
 	}
+}
+
+// WriteBits writes an arbitrary up-to-24-bit value into the bitstream MSB-first.
+func (w *HuffBitWriter) WriteBits(val uint32, nb uint8) {
+	if nb == 0 {
+		return
+	}
+	if nb <= 16 {
+		w.Write(uint16(val), nb)
+	} else {
+		rem := nb - 16
+		w.Write(uint16(val>>rem), 16)
+		w.Write(uint16(val&((1<<rem)-1)), rem)
+	}
+}
+
+// ReadBits reads an arbitrary up-to-24-bit value from the bitstream MSB-first.
+func (r *HuffBitReader) ReadBits(nb uint8) uint32 {
+	if nb == 0 {
+		return 0
+	}
+	if nb <= 16 {
+		val := uint32(r.Peek(int(nb)))
+		r.Consume(int(nb))
+		return val
+	}
+	rem := nb - 16
+	high := uint32(r.Peek(16))
+	r.Consume(16)
+	low := uint32(r.Peek(int(rem)))
+	r.Consume(int(rem))
+	return (high << rem) | low
 }
 
 // -----------------------------------------------------------------------------
@@ -1010,6 +1049,12 @@ func EncodeRecursiveLZ(src []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if comp5, err5 := CompressWithOptions(src, CompressOptions{
+		Level:              5,
+		StandardStreamOnly: true,
+	}); err5 == nil && len(comp5) < len(comp) {
+		comp = comp5
+	}
 	if len(comp)+5 >= len(src) {
 		return nil, ErrCorruptedStream
 	}
@@ -1020,8 +1065,95 @@ func EncodeRecursiveLZ(src []byte) ([]byte, error) {
 	return out, nil
 }
 
+// PackStreamLeaf compresses a sub-stream (leaf stream) using Huffman or V-ANS without recursive splitting.
+func PackStreamLeaf(src []byte) ([]byte, error) {
+	n := len(src)
+	if n < 32 {
+		out := make([]byte, 5+n)
+		out[0] = ModeFlat
+		binary.LittleEndian.PutUint32(out[1:5], uint32(n))
+		copy(out[5:], src)
+		return out, nil
+	}
+
+	best := make([]byte, 5+n)
+	best[0] = ModeFlat
+	binary.LittleEndian.PutUint32(best[1:5], uint32(n))
+	copy(best[5:], src)
+
+	if c, err := EncodeHuffmanCompact(src); err == nil && len(c) < len(best) {
+		best = c
+	}
+	if c4, err := EncodeHuffmanCompact4X(src); err == nil && len(c4) < len(best) {
+		best = c4
+	}
+	if m1, err := EncodeHuffman4X(src); err == nil && len(m1) < len(best) {
+		best = m1
+	}
+	if v, err := VANSEncode4x(src); err == nil {
+		vSize := 5 + len(v)
+		if vSize < len(best) {
+			out := make([]byte, vSize)
+			out[0] = ModeVANS4X
+			binary.LittleEndian.PutUint32(out[1:5], uint32(n))
+			copy(out[5:], v)
+			best = out
+		}
+	}
+	return best, nil
+}
+
+// EncodeSplitVarint de-interleaves an LEB128 varint offset stream into LSB and MSB continuation channels.
+func EncodeSplitVarint(src []byte) ([]byte, error) {
+	n := len(src)
+	lsb := make([]byte, 0, n)
+	msb := make([]byte, 0, n/2)
+	ptr := 0
+	for ptr < n {
+		b0 := src[ptr]
+		ptr++
+		lsb = append(lsb, b0)
+		for (b0 & 0x80) != 0 {
+			if ptr >= n {
+				return nil, ErrCorruptedStream
+			}
+			bn := src[ptr]
+			ptr++
+			msb = append(msb, bn)
+			if (bn & 0x80) == 0 {
+				break
+			}
+		}
+	}
+	if len(msb) == 0 {
+		return nil, ErrCorruptedStream
+	}
+
+	cLsb, err := PackStreamLeaf(lsb)
+	if err != nil {
+		return nil, err
+	}
+	cMsb, err := PackStreamLeaf(msb)
+	if err != nil {
+		return nil, err
+	}
+
+	total := 9 + len(cLsb) + len(cMsb)
+	if total >= n {
+		return nil, ErrCorruptedStream
+	}
+
+	out := make([]byte, total)
+	out[0] = ModeSplitVarint
+	binary.LittleEndian.PutUint32(out[1:5], uint32(n))
+	binary.LittleEndian.PutUint32(out[5:9], uint32(len(cLsb)))
+	copy(out[9:9+len(cLsb)], cLsb)
+	copy(out[9+len(cLsb):], cMsb)
+	return out, nil
+}
+
 // PackStream compresses a byte stream (Section 2 or Section 3).
-// It evaluates Compact, Compact4X, standard 4X Huffman, and Recursive LZ formats and
+// It evaluates Compact, Compact4X, standard 4X Huffman, V-ANS 4X, Split-Varint, and Recursive LZ formats and
 // selects whichever yields the minimum packed size, falling back to ModeFlat
 // if compression does not beat raw size.
 func PackStream(src []byte, prefMode uint8) ([]byte, error) {
@@ -1056,9 +1188,34 @@ func PackStream(src []byte, prefMode uint8) ([]byte, error) {
 	if m1, err := EncodeHuffman4X(src); err == nil && len(m1) < len(best) {
 		best = m1
 	}
+	if v, err := VANSEncode4x(src); err == nil {
+		vSize := 5 + len(v)
+		if vSize < len(best) {
+			out := make([]byte, vSize)
+			out[0] = ModeVANS4X
+			binary.LittleEndian.PutUint32(out[1:5], uint32(n))
+			copy(out[5:], v)
+			best = out
+		}
+	}
+	if vCtx, err := ContextVANSEncode4x(src); err == nil {
+		vSize := 5 + len(vCtx)
+		if vSize < len(best) {
+			out := make([]byte, vSize)
+			out[0] = ModeVANS4X
+			binary.LittleEndian.PutUint32(out[1:5], uint32(n))
+			copy(out[5:], vCtx)
+			best = out
+		}
+	}
 	if n >= 512 {
 		if rec, err := EncodeRecursiveLZ(src); err == nil && len(rec) < len(best) {
 			best = rec
+		}
+	}
+	if n >= 64 {
+		if sp, err := EncodeSplitVarint(src); err == nil && len(sp) < len(best) {
+			best = sp
 		}
 	}
 
@@ -1098,9 +1255,352 @@ func UnpackStream(dst, src []byte, scratchTable *CanonicalHuffmanTable) (int, er
 		if err != nil {
 			return 0, fmt.Errorf("%w: recursive lz decode failed: %w", ErrCorruptedStream, err)
 		}
+		if len(decomp) > 0 && len(dst) > 0 && &decomp[0] != &dst[0] {
+			copy(dst, decomp)
+		}
 		return len(decomp), nil
+
+	case ModeVANS4X:
+		var model VANSModel
+		decomp, err := VANSDecode4xTo(dst[:origLen], src[5:], &model)
+		if err != nil {
+			return 0, fmt.Errorf("%w: vans decode failed: %w", ErrCorruptedStream, err)
+		}
+		return len(decomp), nil
+
+	case ModeSplitVarint:
+		if len(src) < 9 {
+			return 0, ErrCorruptedStream
+		}
+		cLsbLen := int(binary.LittleEndian.Uint32(src[5:9]))
+		if 9+cLsbLen > len(src) {
+			return 0, ErrCorruptedStream
+		}
+		cLsb := src[9 : 9+cLsbLen]
+		cMsb := src[9+cLsbLen:]
+		if len(cLsb) < 5 || len(cMsb) < 5 {
+			return 0, ErrCorruptedStream
+		}
+
+		lsbOrigLen := int(binary.LittleEndian.Uint32(cLsb[1:5]))
+		msbOrigLen := int(binary.LittleEndian.Uint32(cMsb[1:5]))
+		if lsbOrigLen+msbOrigLen != origLen || lsbOrigLen < 0 || msbOrigLen < 0 {
+			return 0, ErrCorruptedStream
+		}
+
+		lsbBuf := make([]byte, lsbOrigLen)
+		msbBuf := make([]byte, msbOrigLen)
+		if _, err := UnpackStream(lsbBuf, cLsb, scratchTable); err != nil {
+			return 0, err
+		}
+		if _, err := UnpackStream(msbBuf, cMsb, scratchTable); err != nil {
+			return 0, err
+		}
+
+		lsbPtr := 0
+		msbPtr := 0
+		dstPtr := 0
+		for lsbPtr < lsbOrigLen && dstPtr < origLen {
+			b0 := lsbBuf[lsbPtr]
+			lsbPtr++
+			dst[dstPtr] = b0
+			dstPtr++
+			for (b0 & 0x80) != 0 {
+				if msbPtr >= msbOrigLen || dstPtr >= origLen {
+					return 0, ErrCorruptedStream
+				}
+				bn := msbBuf[msbPtr]
+				msbPtr++
+				dst[dstPtr] = bn
+				dstPtr++
+				if (bn & 0x80) == 0 {
+					break
+				}
+			}
+		}
+		if dstPtr != origLen || lsbPtr != lsbOrigLen || msbPtr != msbOrigLen {
+			return 0, ErrCorruptedStream
+		}
+		return origLen, nil
+
+	case ModeDistancePrefix:
+		scratchBuf := distCodeScratchPool.Get()
+		defer distCodeScratchPool.Put(scratchBuf)
+		return DecodeDistancePrefix(dst[:origLen], src, scratchTable, *scratchBuf)
 
 	default:
 		return 0, fmt.Errorf("%w: unknown mode %d", ErrCorruptedStream, mode)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Log2 Distance Prefix Codebook (Entropy-Coded Band + Raw ExtraBits)
+// -----------------------------------------------------------------------------
+
+// DistCodeEntry maps a distance code (0..31) to its base offset and extra bits count.
+type DistCodeEntry struct {
+	Base      uint32
+	ExtraBits uint8
+}
+
+var DistTable = [32]DistCodeEntry{
+	{1, 0}, {2, 0}, {3, 0}, {4, 0},
+	{5, 1}, {7, 1}, {9, 2}, {13, 2},
+	{17, 3}, {25, 3}, {33, 4}, {49, 4},
+	{65, 5}, {97, 5}, {129, 6}, {193, 6},
+	{257, 7}, {385, 7}, {513, 8}, {769, 8},
+	{1025, 9}, {1537, 9}, {2049, 10}, {3073, 10},
+	{4097, 11}, {6145, 11}, {8193, 12}, {12289, 12},
+	{16385, 13}, {24577, 13}, {32769, 15}, {65537, 24},
+}
+
+var distCodeLUT [257]uint8
+
+func init() {
+	for d := 1; d <= 256; d++ {
+		c, _, _ := distanceToCodeSlow(d)
+		distCodeLUT[d] = c
+	}
+}
+
+func distanceToCodeSlow(d int) (code uint8, extra uint32, nb uint8) {
+	if d <= 4 {
+		return uint8(d - 1), 0, 0
+	}
+	if d <= 32768 {
+		ud := uint32(d - 1)
+		nb = uint8(bits.Len32(ud) - 2)
+		half := uint8((ud >> nb) & 1)
+		code = (nb << 1) + 2 + half
+		base := (uint32(2|half) << nb) + 1
+		return code, uint32(d) - base, nb
+	}
+	if d <= 65536 {
+		return 30, uint32(d) - 32769, 15
+	}
+	return 31, uint32(d) - 65537, 24
+}
+
+// DistanceToCode maps a match distance (1..16777216) to (DistanceCode, ExtraBits, ExtraBitsCount).
+func DistanceToCode(d int) (code uint8, extra uint32, nb uint8) {
+	if d <= 256 {
+		if d <= 0 {
+			return 0, 0, 0
+		}
+		c := distCodeLUT[d]
+		entry := DistTable[c]
+		return c, uint32(d) - entry.Base, entry.ExtraBits
+	}
+	if d <= 32768 {
+		ud := uint32(d - 1)
+		nb = uint8(bits.Len32(ud) - 2)
+		half := uint8((ud >> nb) & 1)
+		code = (nb << 1) + 2 + half
+		base := (uint32(2|half) << nb) + 1
+		return code, uint32(d) - base, nb
+	}
+	if d <= 65536 {
+		return 30, uint32(d) - 32769, 15
+	}
+	return 31, uint32(d) - 65537, 24
+}
+
+// CodeToDistance reconstructs distance d from distance code and extra bits value.
+func CodeToDistance(code uint8, extra uint32) int {
+	if code >= 32 {
+		return 0
+	}
+	return int(DistTable[code].Base + extra)
+}
+
+var distCodeScratchPool = generic.NewPool(func() *[]byte {
+	b := bufkit.AlignedBytes(MaxBlockSize+64, bufkit.CacheLineSize)
+	return &b
+})
+
+// EncodeDistancePrefix encodes LEB128 varints of match distances using Log2 Distance Prefix Codebook.
+func EncodeDistancePrefix(varints []byte) ([]byte, error) {
+	origVarintLen := len(varints)
+	if origVarintLen == 0 {
+		return nil, ErrCorruptedStream
+	}
+
+	matchCount := 0
+	for i := 0; i < origVarintLen; i++ {
+		if (varints[i] & 0x80) == 0 {
+			matchCount++
+		}
+	}
+	if matchCount == 0 {
+		return nil, ErrCorruptedStream
+	}
+
+	codes := make([]byte, matchCount)
+	extraValues := make([]uint32, matchCount)
+	extraBitsCount := make([]uint8, matchCount)
+
+	ptr := 0
+	idx := 0
+	totalExtraBits := 0
+	for ptr < origVarintLen && idx < matchCount {
+		d, nextPtr, err := fastReadVarint(varints, ptr)
+		if err != nil {
+			return nil, err
+		}
+		ptr = nextPtr
+		c, extra, nb := DistanceToCode(d)
+		codes[idx] = c
+		extraValues[idx] = extra
+		extraBitsCount[idx] = nb
+		totalExtraBits += int(nb)
+		idx++
+	}
+
+	packedCodes, err := EncodeHuffmanCompact(codes)
+	if err != nil {
+		return nil, err
+	}
+
+	extraBytesCap := (totalExtraBits + 7) / 8
+	var writer HuffBitWriter
+	writer.Reset(make([]byte, extraBytesCap+8))
+	for i := 0; i < matchCount; i++ {
+		nb := extraBitsCount[i]
+		if nb > 0 {
+			writer.WriteBits(extraValues[i], nb)
+		}
+	}
+	extraBitsBuf := writer.Flush()
+
+	codeStreamLen := len(packedCodes)
+	totalLen := 13 + codeStreamLen + len(extraBitsBuf)
+	out := make([]byte, totalLen)
+	out[0] = ModeDistancePrefix
+	binary.LittleEndian.PutUint32(out[1:5], uint32(origVarintLen))
+	binary.LittleEndian.PutUint32(out[5:9], uint32(matchCount))
+	binary.LittleEndian.PutUint32(out[9:13], uint32(codeStreamLen))
+	copy(out[13:13+codeStreamLen], packedCodes)
+	copy(out[13+codeStreamLen:], extraBitsBuf)
+
+	return out, nil
+}
+
+// DecodeDistancePrefix decodes a ModeDistancePrefix stream into dst with zero heap allocations.
+func DecodeDistancePrefix(dst []byte, src []byte, scratchTable *CanonicalHuffmanTable, scratchCodes []byte) (int, error) {
+	if len(src) < 13 {
+		return 0, ErrCorruptedStream
+	}
+	if src[0] != ModeDistancePrefix {
+		return 0, ErrCorruptedStream
+	}
+	origVarintLen := int(binary.LittleEndian.Uint32(src[1:5]))
+	matchCount := int(binary.LittleEndian.Uint32(src[5:9]))
+	codeStreamLen := int(binary.LittleEndian.Uint32(src[9:13]))
+
+	if origVarintLen > len(dst) {
+		return 0, ErrBufferTooSmall
+	}
+	if 13+codeStreamLen > len(src) {
+		return 0, ErrCorruptedStream
+	}
+
+	if len(scratchCodes) < matchCount {
+		return 0, ErrBufferTooSmall
+	}
+	codes := scratchCodes[:matchCount]
+	nCodes, err := DecodeHuffmanCompact(codes, src[13:13+codeStreamLen], scratchTable)
+	if err != nil || nCodes != matchCount {
+		return 0, ErrCorruptedStream
+	}
+
+	var reader HuffBitReader
+	reader.Init(src[13+codeStreamLen:])
+
+	dstPos := 0
+	for i := 0; i < matchCount; i++ {
+		code := codes[i]
+		if code >= 32 {
+			return 0, ErrCorruptedStream
+		}
+		entry := DistTable[code]
+		nb := entry.ExtraBits
+		var extra uint32
+		if nb > 0 {
+			extra = reader.ReadBits(nb)
+		}
+		d := int(entry.Base + extra)
+
+		if d < 0x80 {
+			if dstPos >= origVarintLen {
+				return 0, ErrCorruptedStream
+			}
+			dst[dstPos] = byte(d)
+			dstPos++
+		} else if d < 0x4000 {
+			if dstPos+2 > origVarintLen {
+				return 0, ErrCorruptedStream
+			}
+			dst[dstPos] = byte(d | 0x80)
+			dst[dstPos+1] = byte(d >> 7)
+			dstPos += 2
+		} else if d < 0x200000 {
+			if dstPos+3 > origVarintLen {
+				return 0, ErrCorruptedStream
+			}
+			dst[dstPos] = byte(d | 0x80)
+			dst[dstPos+1] = byte((d >> 7) | 0x80)
+			dst[dstPos+2] = byte(d >> 14)
+			dstPos += 3
+		} else if d < 0x10000000 {
+			if dstPos+4 > origVarintLen {
+				return 0, ErrCorruptedStream
+			}
+			dst[dstPos] = byte(d | 0x80)
+			dst[dstPos+1] = byte((d >> 7) | 0x80)
+			dst[dstPos+2] = byte((d >> 14) | 0x80)
+			dst[dstPos+3] = byte(d >> 21)
+			dstPos += 4
+		} else {
+			if dstPos+5 > origVarintLen {
+				return 0, ErrCorruptedStream
+			}
+			dst[dstPos] = byte(d | 0x80)
+			dst[dstPos+1] = byte((d >> 7) | 0x80)
+			dst[dstPos+2] = byte((d >> 14) | 0x80)
+			dst[dstPos+3] = byte((d >> 21) | 0x80)
+			dst[dstPos+4] = byte(d >> 28)
+			dstPos += 5
+		}
+	}
+
+	if reader.underflow || dstPos != origVarintLen {
+		return 0, ErrCorruptedStream
+	}
+	return dstPos, nil
+}
+
+// PackOffsetStream encodes Section 3 match offsets.
+// Evaluates ModeDistancePrefix against standard PackStream and selects the smallest.
+func PackOffsetStream(src []byte, prefMode uint8) ([]byte, error) {
+	if len(src) == 0 {
+		return []byte{ModeFlat, 0, 0, 0, 0}, nil
+	}
+	var best []byte
+	if prefMode != ModeFlat && len(src) >= 16 {
+		if dp, err := EncodeDistancePrefix(src); err == nil {
+			best = dp
+		}
+	}
+	std, err := PackStream(src, prefMode)
+	if err != nil {
+		if best != nil {
+			return best, nil
+		}
+		return nil, err
+	}
+	if best == nil || len(std) < len(best) {
+		return std, nil
+	}
+	return best, nil
+}
+

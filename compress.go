@@ -168,7 +168,7 @@ func resolveConcurrencyOptions(opts CompressOptions) (threads, chunkSize int) {
 	}
 	chunkSize = opts.ChunkSize
 	if chunkSize <= 0 {
-		if opts.GPUAcceleration {
+		if opts.GPUAcceleration || opts.Level >= 6 || opts.ArchivalMode {
 			chunkSize = 8 * 1024 * 1024
 		} else {
 			chunkSize = DefaultChunkSize
@@ -331,14 +331,12 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	windowLog := opts.WindowLog
 	if windowLog == 0 {
 		totalSpan := uSize + dictLen
-		if level >= 6 {
-			windowLog = WindowLog8M
-		} else if totalSpan <= 64*1024 {
+		if totalSpan <= 64*1024 {
 			windowLog = WindowLog64K
-		} else if totalSpan > 1024*1024 || level >= 3 {
-			windowLog = WindowLog8M
-		} else {
+		} else if totalSpan <= 1024*1024 && level < 6 {
 			windowLog = WindowLog1M
+		} else {
+			windowLog = WindowLog8M
 		}
 	}
 	if windowLog < WindowLog64K {
@@ -359,6 +357,9 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		spL6 = PoolHenselL6.Get()
 		defer PoolHenselL6.Put(spL6)
 		spL6.Reset()
+		sp8M = PoolHensel8M.Get()
+		defer PoolHensel8M.Put(sp8M)
+		sp8M.Reset()
 	} else if level >= 3 {
 		switch windowLog {
 		case WindowLog8M:
@@ -500,7 +501,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	}
 
 	minMatch := 4
-	if opts.MinMatch == 3 || (level >= 6 && opts.MinMatch != 4) {
+	if opts.MinMatch == 3 {
 		minMatch = 3
 		flags |= FlagMinMatch3
 	}
@@ -520,7 +521,7 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		rep2 = 2 * stride
 	}
 
-	fastEncoder := newFastBlockEncoder(src, uSize, windowSize, minMatch, pad, &rep0, &rep1, &rep2)
+	fastEncoder := newFastBlockEncoder(src, uSize, windowSize, minMatch, hasStride, stride, pad, &rep0, &rep1, &rep2)
 	greedyEncoder := newGreedyBlockEncoder(
 		src, uSize, level, windowSize, windowLog,
 		minMatch, minMatchBase, compactDict, dictLen,
@@ -536,6 +537,44 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		compressFastOrGreedy = fastEncoder.compressBlock
 	} else {
 		compressFastOrGreedy = greedyEncoder.compressBlock
+	}
+
+	compressBlockGreedyOrSLP := func(bStart, bSize int) {
+		cmdStart := len(pad.cmdBuf)
+		offStart := len(pad.offsetBuf)
+		litStart := len(pad.literalBuf)
+		r0Start := rep0
+		r1Start := rep1
+		r2Start := rep2
+
+		compressFastOrGreedy(bStart, bSize)
+
+		if dictLen == 0 && bSize >= 64 && level >= 3 {
+			cmdDelta := len(pad.cmdBuf) - cmdStart
+			offDelta := len(pad.offsetBuf) - offStart
+			litDelta := len(pad.literalBuf) - litStart
+			lzCost := cmdDelta + offDelta + litDelta
+
+			if lzCost > 32 {
+				if pwsData, err := PWSEncode(src[bStart : bStart+bSize]); err == nil && len(pwsData) > 0 {
+					var varBuf [8]byte
+					nVar := binary.PutUvarint(varBuf[:], uint64(len(pwsData)))
+					pwsCost := 1 + nVar + len(pwsData)
+					if pwsCost < lzCost {
+						pad.cmdBuf = pad.cmdBuf[:cmdStart]
+						pad.offsetBuf = pad.offsetBuf[:offStart]
+						pad.literalBuf = pad.literalBuf[:litStart]
+						rep0 = r0Start
+						rep1 = r1Start
+						rep2 = r2Start
+
+						pad.cmdBuf = append(pad.cmdBuf, OpGrammarBlock)
+						pad.cmdBuf = append(pad.cmdBuf, varBuf[:nVar]...)
+						pad.cmdBuf = append(pad.cmdBuf, pwsData...)
+					}
+				}
+			}
+		}
 	}
 
 	if dictLen > 0 {
@@ -566,6 +605,8 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					activeMatcher,
 					dictLen,
 					compactDict,
+					hasStride,
+					stride,
 				)
 				bStart += bSize
 			}
@@ -584,6 +625,21 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		bStart := 0
 		blockIdx := uint32(0)
 		for bStart < uSize {
+			if level >= 5 {
+				rLen := DetectRLE(src, bStart)
+				alignedRLen := (rLen / DedupBlockSize) * DedupBlockSize
+				if alignedRLen >= DedupBlockSize {
+					pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixRLE)
+					var vBuf [8]byte
+					n := binary.PutUvarint(vBuf[:], uint64(alignedRLen))
+					pad.cmdBuf = append(pad.cmdBuf, vBuf[:n]...)
+					pad.literalBuf = append(pad.literalBuf, src[bStart])
+					bStart += alignedRLen
+					blockIdx += uint32(alignedRLen / DedupBlockSize)
+					continue
+				}
+			}
+
 			bSize := min(uSize-bStart, DedupBlockSize)
 			if bSize == DedupBlockSize && blockIdx > 0 {
 				h := Hash64KBlock(src[bStart : bStart+DedupBlockSize])
@@ -615,9 +671,11 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						activeMatcher,
 						dictLen,
 						compactDict,
+						hasStride,
+						stride,
 					)
 				} else {
-					compressFastOrGreedy(bStart, bSize)
+					compressBlockGreedyOrSLP(bStart, bSize)
 				}
 				pad.dedup.Insert(h, blockIdx)
 			} else if bSize == DedupBlockSize && blockIdx == 0 {
@@ -641,9 +699,11 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						activeMatcher,
 						dictLen,
 						compactDict,
+						hasStride,
+						stride,
 					)
 				} else {
-					compressFastOrGreedy(bStart, bSize)
+					compressBlockGreedyOrSLP(bStart, bSize)
 				}
 				h := Hash64KBlock(src[bStart : bStart+DedupBlockSize])
 				pad.dedup.Insert(h, 0)
@@ -669,9 +729,11 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 						activeMatcher,
 						dictLen,
 						compactDict,
+						hasStride,
+						stride,
 					)
 				} else {
-					compressFastOrGreedy(bStart, bSize)
+					compressBlockGreedyOrSLP(bStart, bSize)
 				}
 			}
 			bStart += bSize
@@ -706,11 +768,13 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 					activeMatcher,
 					dictLen,
 					compactDict,
+					hasStride,
+					stride,
 				)
 				bStart += bSize
 			}
 		} else {
-			compressFastOrGreedy(0, uSize)
+			compressBlockGreedyOrSLP(0, uSize)
 		}
 	}
 
@@ -730,9 +794,12 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	offSection, err := PackStream(pad.offsetBuf, cmdMode)
-	if err != nil {
-		return nil, err
+	var offSection []byte
+	if len(pad.offsetBuf) > 0 {
+		offSection, err = PackOffsetStream(pad.offsetBuf, cmdMode)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if uSize > 65535 || len(cmdSection) > 65535 || len(offSection) > 65535 || windowLog > WindowLog64K {

@@ -16,6 +16,8 @@ type fastBlockEncoder struct {
 	uSize      int
 	windowSize int
 	minMatch   int
+	hasStride  bool
+	stride     int
 	pad        *scratchpad
 	rep0       *int
 	rep1       *int
@@ -27,6 +29,8 @@ func newFastBlockEncoder(
 	uSize int,
 	windowSize int,
 	minMatch int,
+	hasStride bool,
+	stride int,
 	pad *scratchpad,
 	rep0, rep1, rep2 *int,
 ) *fastBlockEncoder {
@@ -35,6 +39,8 @@ func newFastBlockEncoder(
 		uSize:      uSize,
 		windowSize: windowSize,
 		minMatch:   minMatch,
+		hasStride:  hasStride,
+		stride:     stride,
 		pad:        pad,
 		rep0:       rep0,
 		rep1:       rep1,
@@ -150,31 +156,73 @@ func (e *fastBlockEncoder) compressBlock(blockStart, blockSize int) {
 
 		if matchLength >= e.minMatch {
 			literalLength := pos - literalStart
-			if literalLength > 3 {
-				e.flushLiterals(e.src[literalStart : pos-3])
-				literalStart = pos - 3
-				literalLength = 3
-			}
-			baseLen := matchLength - 4
-			if baseLen > 14 {
-				baseLen = 15
-			}
-			op := OpcodeFlagFusedExt | uint8(literalLength<<4) | uint8(baseLen)
-			e.pad.cmdBuf = append(e.pad.cmdBuf, op)
-			if baseLen == 15 {
-				var varBuf [8]byte
-				n := binary.PutUvarint(varBuf[:], uint64(matchLength-19))
-				e.pad.cmdBuf = append(e.pad.cmdBuf, varBuf[:n]...)
-			}
-			if literalLength > 0 {
-				e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
-			}
+			if isBracketDist(bestDistance) && matchLength-4 <= 15 {
+				bracket := bracketIndex(bestDistance)
+				if literalLength > 15 {
+					e.flushLiterals(e.src[literalStart : pos-15])
+					literalStart = pos - 15
+					literalLength = 15
+				}
+				op := OpcodePrefixFusedBracket + uint8(bracket)
+				token := uint8((literalLength << 4) | (matchLength - 4))
+				e.pad.cmdBuf = append(e.pad.cmdBuf, op, token)
+				if literalLength > 0 {
+					e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
+				}
+				*e.rep2 = *e.rep1
+				*e.rep1 = *e.rep0
+				*e.rep0 = bestDistance
+			} else if (!e.hasStride || e.stride <= 1) && bestDistance <= 256 {
+				if literalLength > 6 {
+					e.flushLiterals(e.src[literalStart : pos-6])
+					literalStart = pos - 6
+					literalLength = 6
+				}
+				baseLen := matchLength - 4
+				if baseLen > 6 {
+					baseLen = 7
+				}
+				desc := uint8((3 << 6) | (literalLength << 3) | baseLen)
+				deltaByte := uint8(bestDistance - 1)
+				e.pad.cmdBuf = append(e.pad.cmdBuf, OpcodePrefixDiffLattice, desc, deltaByte)
+				if baseLen == 7 {
+					var varBuf [8]byte
+					n := binary.PutUvarint(varBuf[:], uint64(matchLength-11))
+					e.pad.cmdBuf = append(e.pad.cmdBuf, varBuf[:n]...)
+				}
+				if literalLength > 0 {
+					e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
+				}
+				*e.rep2 = *e.rep1
+				*e.rep1 = *e.rep0
+				*e.rep0 = bestDistance
+			} else {
+				if literalLength > 3 {
+					e.flushLiterals(e.src[literalStart : pos-3])
+					literalStart = pos - 3
+					literalLength = 3
+				}
+				baseLen := matchLength - 4
+				if baseLen > 14 {
+					baseLen = 15
+				}
+				op := OpcodeFlagFusedExt | uint8(literalLength<<4) | uint8(baseLen)
+				e.pad.cmdBuf = append(e.pad.cmdBuf, op)
+				if baseLen == 15 {
+					var varBuf [8]byte
+					n := binary.PutUvarint(varBuf[:], uint64(matchLength-19))
+					e.pad.cmdBuf = append(e.pad.cmdBuf, varBuf[:n]...)
+				}
+				if literalLength > 0 {
+					e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
+				}
 
-			e.writeOffset(bestDistance)
+				e.writeOffset(bestDistance)
 
-			*e.rep2 = *e.rep1
-			*e.rep1 = *e.rep0
-			*e.rep0 = bestDistance
+				*e.rep2 = *e.rep1
+				*e.rep1 = *e.rep0
+				*e.rep0 = bestDistance
+			}
 
 			pos += matchLength
 			literalStart = pos

@@ -66,6 +66,16 @@ func TestGGTC_Roundtrip(t *testing.T) {
 			if !bytes.Equal(dec, ec) {
 				t.Fatalf("mismatch: got %d bytes, want %d bytes", len(dec), len(ec))
 			}
+
+			// Also verify GGTCDecodeInto
+			buf := make([]byte, len(ec)+16)
+			n, err := przm.GGTCDecodeInto(buf, enc)
+			if err != nil {
+				t.Fatalf("decodeInto failed: %v", err)
+			}
+			if !bytes.Equal(buf[:n], ec) {
+				t.Fatalf("decodeInto mismatch: got %d bytes, want %d bytes", n, len(ec))
+			}
 		})
 	}
 
@@ -183,6 +193,18 @@ func BenchmarkGGTC_Throughput(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			_, err := przm.GGTCDecode(encTab)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("ZeroStack_DecodeInto_ZeroAlloc_JSON_64K", func(b *testing.B) {
+		buf := make([]byte, len(data)+16)
+		b.SetBytes(int64(len(data)))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := przm.GGTCDecodeInto(buf, enc)
 			if err != nil {
 				b.Fatal(err)
 			}

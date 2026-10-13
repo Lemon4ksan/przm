@@ -156,7 +156,9 @@ func packSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 	return workBuf[:totalPayload], true
 }
 
-// packContextSheafVANS encodes residual literals using 2D Context Sheaf splitting and V-ANS.
+// packContextSheafVANS encodes residual literals using Étale Context Sheaf splitting and V-ANS.
+// It evaluates candidate context foliation modes (Mode 0: Refined 4-Class, Mode 1: JSON Dense,
+// Mode 2: 2-Phase Causal, Mode 3: Order-2 Bigram) with raw fiber fallback to find the optimal foliation.
 // Returns the packed bytes, or (nil, false) if not compressible or invalid.
 func packContextSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 	n := len(lits)
@@ -170,73 +172,172 @@ func packContextSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 			pad.sheafFBuf[c] = bufkit.AlignedBytes(reqCap, bufkit.CacheLineSize)[:0]
 		}
 	}
+
+	modesToTry := []uint8{CtxModeStructural, CtxModeJSONDense, CtxMode2Phase, CtxModeOrder2}
+	bestLen := n
+	bestMode := uint8(0)
+	hasBest := false
+
+	for _, mode := range modesToTry {
+		f0 := pad.sheafFBuf[0][:0]
+		f1 := pad.sheafFBuf[1][:0]
+		f2 := pad.sheafFBuf[2][:0]
+		f3 := pad.sheafFBuf[3][:0]
+
+		if mode == CtxModeOrder2 {
+			prev2, prev1 := byte(0), byte(0)
+			for _, b := range lits {
+				c := SheafContextOrder2(prev2, prev1)
+				switch c {
+				case 0:
+					f0 = append(f0, b)
+				case 1:
+					f1 = append(f1, b)
+				case 2:
+					f2 = append(f2, b)
+				default:
+					f3 = append(f3, b)
+				}
+				prev2 = prev1
+				prev1 = b
+			}
+		} else {
+			lut := &SheafContextTable
+			if mode == CtxModeJSONDense {
+				lut = &SheafContextTableM1
+			} else if mode == CtxMode2Phase {
+				lut = &SheafContextTableM2
+			}
+			prev := byte(0)
+			for _, b := range lits {
+				c := lut[prev]
+				switch c {
+				case 0:
+					f0 = append(f0, b)
+				case 1:
+					f1 = append(f1, b)
+				case 2:
+					f2 = append(f2, b)
+				default:
+					f3 = append(f3, b)
+				}
+				prev = b
+			}
+		}
+
+		// Require non-trivial splitting
+		activeFibers := 0
+		if len(f0) > 0 {
+			activeFibers++
+		}
+		if len(f1) > 0 {
+			activeFibers++
+		}
+		if len(f2) > 0 {
+			activeFibers++
+		}
+		if len(f3) > 0 {
+			activeFibers++
+		}
+		if activeFibers < 2 {
+			continue
+		}
+
+		curPayload := 40
+		fibers := [4][]byte{f0, f1, f2, f3}
+		for c := 0; c < 4; c++ {
+			flen := len(fibers[c])
+			if flen == 0 {
+				continue
+			}
+			if flen >= 16 {
+				e, err := VANSEncode4x(fibers[c])
+				if err == nil && len(e) < flen {
+					curPayload += len(e)
+					continue
+				}
+			}
+			curPayload += flen
+		}
+
+		if curPayload < bestLen {
+			bestLen = curPayload
+			bestMode = mode
+			hasBest = true
+		}
+	}
+
+	if !hasBest || bestLen >= n {
+		return nil, false
+	}
+
+	// Re-partition once for the winning mode to ensure intact fiber buffers
 	f0 := pad.sheafFBuf[0][:0]
 	f1 := pad.sheafFBuf[1][:0]
 	f2 := pad.sheafFBuf[2][:0]
 	f3 := pad.sheafFBuf[3][:0]
 
-	prev := byte(0)
-	for _, b := range lits {
-		c := SheafContextTable[prev]
-		switch c {
-		case 0:
-			f0 = append(f0, b)
-		case 1:
-			f1 = append(f1, b)
-		case 2:
-			f2 = append(f2, b)
-		default:
-			f3 = append(f3, b)
+	if bestMode == CtxModeOrder2 {
+		prev2, prev1 := byte(0), byte(0)
+		for _, b := range lits {
+			c := SheafContextOrder2(prev2, prev1)
+			switch c {
+			case 0:
+				f0 = append(f0, b)
+			case 1:
+				f1 = append(f1, b)
+			case 2:
+				f2 = append(f2, b)
+			default:
+				f3 = append(f3, b)
+			}
+			prev2 = prev1
+			prev1 = b
 		}
-		prev = b
-	}
-
-	// Require at least two non-trivial fibers to justify context splitting
-	nonEmpty := 0
-	if len(f0) >= 8 {
-		nonEmpty++
-	}
-	if len(f1) >= 8 {
-		nonEmpty++
-	}
-	if len(f2) >= 8 {
-		nonEmpty++
-	}
-	if len(f3) >= 8 {
-		nonEmpty++
-	}
-	if nonEmpty < 2 {
-		return nil, false
-	}
-
-	var enc0, enc1, enc2, enc3 []byte
-	var err error
-	if len(f0) > 0 {
-		enc0, err = VANSEncode4x(f0)
-		if err != nil {
-			return nil, false
+	} else {
+		lut := &SheafContextTable
+		if bestMode == CtxModeJSONDense {
+			lut = &SheafContextTableM1
+		} else if bestMode == CtxMode2Phase {
+			lut = &SheafContextTableM2
 		}
-	}
-	if len(f1) > 0 {
-		enc1, err = VANSEncode4x(f1)
-		if err != nil {
-			return nil, false
-		}
-	}
-	if len(f2) > 0 {
-		enc2, err = VANSEncode4x(f2)
-		if err != nil {
-			return nil, false
-		}
-	}
-	if len(f3) > 0 {
-		enc3, err = VANSEncode4x(f3)
-		if err != nil {
-			return nil, false
+		prev := byte(0)
+		for _, b := range lits {
+			c := lut[prev]
+			switch c {
+			case 0:
+				f0 = append(f0, b)
+			case 1:
+				f1 = append(f1, b)
+			case 2:
+				f2 = append(f2, b)
+			default:
+				f3 = append(f3, b)
+			}
+			prev = b
 		}
 	}
 
-	totalPayload := 40 + len(enc0) + len(enc1) + len(enc2) + len(enc3)
+	fibers := [4][]byte{f0, f1, f2, f3}
+	var enc [4][]byte
+	totalPayload := 40
+	for c := 0; c < 4; c++ {
+		flen := len(fibers[c])
+		if flen == 0 {
+			continue
+		}
+		if flen >= 16 {
+			e, err := VANSEncode4x(fibers[c])
+			if err == nil && len(e) < flen {
+				enc[c] = e
+				totalPayload += len(e)
+				continue
+			}
+		}
+		enc[c] = fibers[c]
+		totalPayload += flen
+	}
+
 	if totalPayload >= n {
 		return nil, false
 	}
@@ -249,7 +350,7 @@ func packContextSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 	workBuf[0] = vansMagic0
 	workBuf[1] = vansMagic1
 	workBuf[2] = vansVer1
-	workBuf[3] = vansFlag4X | vansFlagCtxSheaf
+	workBuf[3] = vansFlag4X | vansFlagCtxSheaf | (bestMode << CtxModeShift)
 
 	binary.LittleEndian.PutUint32(workBuf[4:8], uint32(n))
 	binary.LittleEndian.PutUint32(workBuf[8:12], uint32(len(f0)))
@@ -257,32 +358,36 @@ func packContextSheafVANS(lits []byte, pad *scratchpad) ([]byte, bool) {
 	binary.LittleEndian.PutUint32(workBuf[16:20], uint32(len(f2)))
 	binary.LittleEndian.PutUint32(workBuf[20:24], uint32(len(f3)))
 
-	binary.LittleEndian.PutUint32(workBuf[24:28], uint32(len(enc0)))
-	binary.LittleEndian.PutUint32(workBuf[28:32], uint32(len(enc1)))
-	binary.LittleEndian.PutUint32(workBuf[32:36], uint32(len(enc2)))
-	binary.LittleEndian.PutUint32(workBuf[36:40], uint32(len(enc3)))
+	binary.LittleEndian.PutUint32(workBuf[24:28], uint32(len(enc[0])))
+	binary.LittleEndian.PutUint32(workBuf[28:32], uint32(len(enc[1])))
+	binary.LittleEndian.PutUint32(workBuf[32:36], uint32(len(enc[2])))
+	binary.LittleEndian.PutUint32(workBuf[36:40], uint32(len(enc[3])))
 
 	off := 40
-	if len(enc0) > 0 {
-		copy(workBuf[off:], enc0)
-		off += len(enc0)
-	}
-	if len(enc1) > 0 {
-		copy(workBuf[off:], enc1)
-		off += len(enc1)
-	}
-	if len(enc2) > 0 {
-		copy(workBuf[off:], enc2)
-		off += len(enc2)
-	}
-	if len(enc3) > 0 {
-		copy(workBuf[off:], enc3)
+	for c := 0; c < 4; c++ {
+		if len(enc[c]) > 0 {
+			copy(workBuf[off:], enc[c])
+			off += len(enc[c])
+		}
 	}
 
 	return workBuf[:totalPayload], true
 }
 
-// packLiteralSection evaluates V-ANS, Sheaf-VANS, Context-Sheaf-VANS and Nibble-Planes
+// packContextOrder1VANS encodes literals using Order-1 Context-conditioned V-ANS.
+// Returns the packed bytes, or (nil, false) if not compressible or invalid.
+func packContextOrder1VANS(lits []byte) ([]byte, bool) {
+	if len(lits) < 32 {
+		return nil, false
+	}
+	enc, err := ContextVANSEncode4x(lits)
+	if err != nil || len(enc) >= len(lits) {
+		return nil, false
+	}
+	return enc, true
+}
+
+// packLiteralSection evaluates V-ANS, Sheaf-VANS, Context-Sheaf-VANS, Order-1 Context-VANS and Nibble-Planes
 // on literalBuf to find the representation with the lowest entropy and smallest footprint.
 func packLiteralSection(
 	lits []byte,
@@ -301,6 +406,7 @@ func packLiteralSection(
 	if !opts.StandardStreamOnly && level >= 2 {
 		sheafOut, sheafOk := packSheafVANS(lits, pad)
 		ctxSheafOut, ctxSheafOk := packContextSheafVANS(lits, pad)
+		ctxOrder1Out, ctxOrder1Ok := packContextOrder1VANS(lits)
 		stdOut, stdErr := VANSEncode4x(lits)
 		threshold := len(lits)
 		if level < 4 && !opts.ArchivalMode {
@@ -325,6 +431,11 @@ func packLiteralSection(
 			}
 			if ctxSheafOk && len(ctxSheafOut) < bestLen {
 				vansOut = ctxSheafOut
+				bestLen = len(ctxSheafOut)
+				vansBeatsRaw = true
+			}
+			if ctxOrder1Ok && len(ctxOrder1Out) < bestLen {
+				vansOut = ctxOrder1Out
 				vansBeatsRaw = true
 			}
 		}

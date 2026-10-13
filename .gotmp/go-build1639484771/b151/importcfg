@@ -1,0 +1,6 @@
+# import config
+packagefile bytes=C:\Users\senya\AppData\Local\go-build\b3\b3c8933b5af35a885f84447f65191f6aff2af0091adb2bd7064a6792888b022d-d
+packagefile crypto/rand=C:\Users\senya\AppData\Local\go-build\a0\a0cfb208046b66499dfaa6b1a6c0d6d063e958bf063be10e634aa3fb7ba65193-d
+packagefile encoding/binary=C:\Users\senya\AppData\Local\go-build\c4\c445144f405504d6e18c5aede043daf7ffed9855c8eba7bdf1295ee4a2c7a7c7-d
+packagefile fmt=C:\Users\senya\AppData\Local\go-build\9f\9fde0dced106095e048baa7db2f24f8b793d65abf994f01406b10716e77cf77c-d
+packagefile math=C:\Users\senya\AppData\Local\go-build\33\3390d5dfd4cc3f9ec7f040e70f64fef98a98445a36643f3f63ef823d00110adc-d

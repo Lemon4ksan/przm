@@ -382,7 +382,7 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 				return nil, fmt.Errorf("%w: truncated flat command stream", ErrCorruptedFrame)
 			}
 			cmds = src[sec2Offset+5 : sec2Offset+5+sec2OrigLen]
-		case ModeHuffman4X, ModeHuffmanCompact, ModeHuffmanCompact4X, ModeRecursiveLZ:
+		case ModeHuffman4X, ModeHuffmanCompact, ModeHuffmanCompact4X, ModeRecursiveLZ, ModeVANS4X, ModeSplitVarint:
 			if pad == nil {
 				pad = decScratchPool.Get()
 				defer decScratchPool.Put(pad)
@@ -414,7 +414,7 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 				return nil, fmt.Errorf("%w: truncated flat offset stream", ErrCorruptedFrame)
 			}
 			offs = src[sec3Offset+5 : sec3Offset+5+sec3OrigLen]
-		} else if sec3Mode == ModeHuffman4X || sec3Mode == ModeHuffmanCompact || sec3Mode == ModeHuffmanCompact4X || sec3Mode == ModeRecursiveLZ {
+		} else if sec3Mode == ModeHuffman4X || sec3Mode == ModeHuffmanCompact || sec3Mode == ModeHuffmanCompact4X || sec3Mode == ModeRecursiveLZ || sec3Mode == ModeVANS4X || sec3Mode == ModeSplitVarint {
 			if pad == nil {
 				pad = decScratchPool.Get()
 				defer decScratchPool.Put(pad)
@@ -426,6 +426,24 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 				pad.offBuf[:sec3OrigLen],
 				src[sec3Offset:sec3Offset+hdr.OffsetStreamSize],
 				&pad.table,
+			)
+			if err != nil {
+				return nil, err
+			}
+			offs = pad.offBuf[:n]
+		} else if sec3Mode == ModeDistancePrefix {
+			if pad == nil {
+				pad = decScratchPool.Get()
+				defer decScratchPool.Put(pad)
+			}
+			if cap(pad.offBuf) < sec3OrigLen+64 {
+				pad.offBuf = bufkit.AlignedBytes(sec3OrigLen+64, bufkit.CacheLineSize)
+			}
+			n, err := DecodeDistancePrefix(
+				pad.offBuf[:sec3OrigLen],
+				src[sec3Offset:sec3Offset+hdr.OffsetStreamSize],
+				&pad.table,
+				pad.scanlineBuf,
 			)
 			if err != nil {
 				return nil, err

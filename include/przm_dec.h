@@ -64,7 +64,10 @@ typedef int przm_status_t;
 /* Opcode assignments */
 #define PRZM_OP_MARGOLUS          0x0F
 #define PRZM_OP_MOBIUS            0x11
+#define PRZM_OP_FUSED_BRACKET_BASE 0xC4              /* 0xC4 .. 0xCD: Direct fused brackets for d in {1..8, 16, 32} */
+#define PRZM_OP_DIFF_LATTICE       0xCE              /* 0xCE: Diff Lattice / Direct 1-byte immediate offset (1 <= d <= 256) */
 #define PRZM_OP_COPY_BLOCK        0xFD               /* Aligned 64 KiB block replication (Milestone 5) */
+#define PRZM_OP_GRAMMAR_BLOCK     0xFE               /* Straight-Line Program / Grammar DAG Bisected Block */
 
 /* Fast Möbius Transform modes and flags */
 #define PRZM_FMT_MODE_RAW         0x00
@@ -122,6 +125,15 @@ typedef struct {
 #define PRZM_VANS_FLAG_4X         0x01
 #define PRZM_VANS_FLAG_SHEAF      0x02
 #define PRZM_VANS_FLAG_CTX_SHEAF  0x04
+#define PRZM_VANS_FLAG_CTX_ORDER1 0x08
+
+/* Context Sheaf Foliation Modes (PRZM-SPEC-0.5 Étale Sheaf Foliation) */
+#define PRZM_CTX_MODE_STRUCTURAL  0x00 /* Mode 0: Refined 4-Class Étale Sheaf */
+#define PRZM_CTX_MODE_JSON_DENSE  0x01 /* Mode 1: JSON/Log Syntax-Dense Foliation */
+#define PRZM_CTX_MODE_2PHASE      0x02 /* Mode 2: 2-Phase Causal Syntax/Content Foliation */
+#define PRZM_CTX_MODE_ORDER2      0x03 /* Mode 3: Order-2 Bigram Foliation */
+#define PRZM_CTX_MODE_MASK        0xF0
+#define PRZM_CTX_MODE_SHIFT       4
 
 /* Standard Frame Flags */
 #define PRZM_FLAG_STRIDE          0x01
@@ -131,7 +143,7 @@ typedef struct {
 #define PRZM_FLAG_DICT_REF        0x10
 #define PRZM_FLAG_NORM            0x20 /* Bit 5: Base64/Hex Normalization applied (when FlagBCJ == 0) */
 #define PRZM_FLAG_BCJ_SPLIT       0x20 /* Bit 5: x86 BCJ displacement splitting applied (when FlagBCJ != 0) */
-#define PRZM_FLAG_BCJ             0x40
+#define PRZM_FLAG_MIN_MATCH_3     0x40 /* Bit 6: MinMatch=3 mode (baseLen + 3) */
 #define PRZM_FLAG_NIBBLE          0x80
 
 /* Normalization Modes (Section 1 byte 2) */
@@ -162,6 +174,9 @@ typedef struct {
 #define PRZM_ENTROPY_MODE_HUFFMAN_COMPACT    2
 #define PRZM_ENTROPY_MODE_HUFFMAN_COMPACT_4X 3
 #define PRZM_ENTROPY_MODE_RECURSIVE_LZ       4
+#define PRZM_ENTROPY_MODE_VANS_4X            5
+#define PRZM_ENTROPY_MODE_DISTANCE_PREFIX    6
+#define PRZM_ENTROPY_MODE_SPLIT_VARINT       7
 
 /* WindowLog levels (PRZM-SPEC-0.5 Milestone 2 Window Scaling) */
 #define PRZM_WINDOW_LOG_64K           16
@@ -295,6 +310,21 @@ int przm_heisenberg_unfoliate_inplace(uint8_t* dst, size_t len, uint8_t stride);
  * @return Number of uncompressed bytes, or negative PRZM_ERR_* code.
  */
 int64_t przm_cellular_sheaf_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap);
+
+/**
+ * przm_ggtc_decompress
+ *
+ * Decompresses a Grammar-Graph Tensor Compression (GGTC) frame with
+ * zero-stack SIMD wave expansion, strictly zero heap memory allocations (0 malloc/free calls),
+ * and bit-exact lossless reconstruction matching PRZM-SPEC-0.5.
+ *
+ * @param src Pointer to compressed GGTC frame.
+ * @param src_len Byte length of compressed frame.
+ * @param dst Pre-allocated destination buffer (>= orig_len + PRZM_SAFETY_PADDING).
+ * @param dst_cap Total capacity of dst.
+ * @return Number of uncompressed bytes, or negative PRZM_ERR_* code.
+ */
+int64_t przm_ggtc_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap);
 
 /**
  * Normalization expansion functions.

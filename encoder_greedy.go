@@ -316,13 +316,22 @@ func (e *greedyBlockEncoder) evalCandidate(pos, distance, maxLen int) matchCandi
 			minExpLen = e.minMatchBase + 1
 		}
 	}
-	if mLen < minExpLen {
+	if distance > 256 && mLen < minExpLen {
 		return matchCandidate{}
 	}
-
-	cost := 1 + offCost
-	if mLen > 14+e.minMatchBase {
-		cost += uvarintLen(uint64(mLen - (15 + e.minMatchBase)))
+	var cost int
+	if isBracketDist(distance) && mLen <= 15+e.minMatchBase {
+		cost = 2
+	} else if (!e.hasStride || e.stride <= 1) && distance <= 256 {
+		cost = 3
+		if mLen > 6+e.minMatchBase {
+			cost += uvarintLen(uint64(mLen - (7 + e.minMatchBase)))
+		}
+	} else {
+		cost = 1 + offCost
+		if mLen > 14+e.minMatchBase {
+			cost += uvarintLen(uint64(mLen - (15 + e.minMatchBase)))
+		}
 	}
 	score := mLen - (cost + distPenalty)
 	if score < 0 {
@@ -917,30 +926,72 @@ func (e *greedyBlockEncoder) compressBlock(blockStart, blockSize int) {
 					*e.rep0 = best.distance
 				}
 
-			case 4: // Fused Extended Match
-				if literalLength > 3 {
-					e.flushLiterals(e.src[literalStart : pos-3])
-					literalStart = pos - 3
-					literalLength = 3
+			case 4: // Fused Extended Match / Fused Bracket / Diff Lattice
+				if isBracketDist(best.distance) && best.length-e.minMatchBase <= 15 {
+					bracket := bracketIndex(best.distance)
+					if literalLength > 15 {
+						e.flushLiterals(e.src[literalStart : pos-15])
+						literalStart = pos - 15
+						literalLength = 15
+					}
+					op := OpcodePrefixFusedBracket + uint8(bracket)
+					token := uint8((literalLength << 4) | (best.length - e.minMatchBase))
+					e.pad.cmdBuf = append(e.pad.cmdBuf, op, token)
+					if literalLength > 0 {
+						e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
+					}
+					*e.rep2 = *e.rep1
+					*e.rep1 = *e.rep0
+					*e.rep0 = best.distance
+				} else if (!e.hasStride || e.stride <= 1) && best.distance <= 256 {
+					if literalLength > 6 {
+						e.flushLiterals(e.src[literalStart : pos-6])
+						literalStart = pos - 6
+						literalLength = 6
+					}
+					baseLen := best.length - e.minMatchBase
+					if baseLen > 6 {
+						baseLen = 7
+					}
+					desc := uint8((3 << 6) | (literalLength << 3) | baseLen)
+					deltaByte := uint8(best.distance - 1)
+					e.pad.cmdBuf = append(e.pad.cmdBuf, OpcodePrefixDiffLattice, desc, deltaByte)
+					if baseLen == 7 {
+						var varBuf [8]byte
+						n := binary.PutUvarint(varBuf[:], uint64(best.length-(7+e.minMatchBase)))
+						e.pad.cmdBuf = append(e.pad.cmdBuf, varBuf[:n]...)
+					}
+					if literalLength > 0 {
+						e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
+					}
+					*e.rep2 = *e.rep1
+					*e.rep1 = *e.rep0
+					*e.rep0 = best.distance
+				} else {
+					if literalLength > 3 {
+						e.flushLiterals(e.src[literalStart : pos-3])
+						literalStart = pos - 3
+						literalLength = 3
+					}
+					baseLen := best.length - e.minMatchBase
+					if baseLen > 14 {
+						baseLen = 15
+					}
+					op := OpcodeFlagFusedExt | uint8(literalLength<<4) | uint8(baseLen)
+					e.pad.cmdBuf = append(e.pad.cmdBuf, op)
+					if baseLen == 15 {
+						var varBuf [8]byte
+						n := binary.PutUvarint(varBuf[:], uint64(best.length-(15+e.minMatchBase)))
+						e.pad.cmdBuf = append(e.pad.cmdBuf, varBuf[:n]...)
+					}
+					if literalLength > 0 {
+						e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
+					}
+					e.writeOffset(best.distance)
+					*e.rep2 = *e.rep1
+					*e.rep1 = *e.rep0
+					*e.rep0 = best.distance
 				}
-				baseLen := best.length - e.minMatchBase
-				if baseLen > 14 {
-					baseLen = 15
-				}
-				op := OpcodeFlagFusedExt | uint8(literalLength<<4) | uint8(baseLen)
-				e.pad.cmdBuf = append(e.pad.cmdBuf, op)
-				if baseLen == 15 {
-					var varBuf [8]byte
-					n := binary.PutUvarint(varBuf[:], uint64(best.length-(15+e.minMatchBase)))
-					e.pad.cmdBuf = append(e.pad.cmdBuf, varBuf[:n]...)
-				}
-				if literalLength > 0 {
-					e.pad.literalBuf = append(e.pad.literalBuf, e.src[literalStart:pos]...)
-				}
-				e.writeOffset(best.distance)
-				*e.rep2 = *e.rep1
-				*e.rep1 = *e.rep0
-				*e.rep0 = best.distance
 
 			case 5: // DeltaMaskExplicit
 				if literalLength > 0 {

@@ -47,6 +47,22 @@ func validateSheafMask(mask []byte, origLen, sLen int) bool {
 func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 	if len(src) >= 8 && src[0] == vansMagic0 && src[1] == vansMagic1 && src[2] == vansVer1 {
 		flags := src[3]
+		if (flags & vansFlagCtxOrder1) != 0 {
+			if len(src) < 24 {
+				return nil, fmt.Errorf("%w: truncated context order-1 vans header", ErrCorruptedFrame)
+			}
+			origLen := int(binary.LittleEndian.Uint32(src[4:8]))
+			if origLen < 0 || origLen > MaxBlockSize {
+				return nil, fmt.Errorf("%w: invalid context order-1 origLen %d", ErrCorruptedFrame, origLen)
+			}
+			if origLen == 0 {
+				return pad.litBuf[:0], nil
+			}
+			if cap(pad.litBuf) < origLen+64 {
+				pad.litBuf = bufkit.AlignedBytes(origLen+64, bufkit.CacheLineSize)
+			}
+			return ContextVANSDecode4xTo(pad.litBuf[:origLen], src)
+		}
 		if (flags & vansFlagCtxSheaf) != 0 {
 			if len(src) < 40 {
 				return nil, fmt.Errorf("%w: truncated context sheaf vans header", ErrCorruptedFrame)
@@ -90,8 +106,12 @@ func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 				if encLen0 == 0 {
 					return nil, ErrCorruptedFrame
 				}
-				if _, err := VANSDecode4xTo(f0, src[off:off+encLen0], &pad.vansModels[0]); err != nil {
-					return nil, fmt.Errorf("%w: decoding fiber 0: %w", ErrCorruptedFrame, err)
+				if encLen0 == fLen0 {
+					copy(f0, src[off:off+encLen0])
+				} else {
+					if _, err := VANSDecode4xTo(f0, src[off:off+encLen0], &pad.vansModels[0]); err != nil {
+						return nil, fmt.Errorf("%w: decoding fiber 0: %w", ErrCorruptedFrame, err)
+					}
 				}
 				off += encLen0
 			}
@@ -99,8 +119,12 @@ func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 				if encLen1 == 0 {
 					return nil, ErrCorruptedFrame
 				}
-				if _, err := VANSDecode4xTo(f1, src[off:off+encLen1], &pad.vansModels[1]); err != nil {
-					return nil, fmt.Errorf("%w: decoding fiber 1: %w", ErrCorruptedFrame, err)
+				if encLen1 == fLen1 {
+					copy(f1, src[off:off+encLen1])
+				} else {
+					if _, err := VANSDecode4xTo(f1, src[off:off+encLen1], &pad.vansModels[1]); err != nil {
+						return nil, fmt.Errorf("%w: decoding fiber 1: %w", ErrCorruptedFrame, err)
+					}
 				}
 				off += encLen1
 			}
@@ -108,8 +132,12 @@ func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 				if encLen2 == 0 {
 					return nil, ErrCorruptedFrame
 				}
-				if _, err := VANSDecode4xTo(f2, src[off:off+encLen2], &pad.vansModels[2]); err != nil {
-					return nil, fmt.Errorf("%w: decoding fiber 2: %w", ErrCorruptedFrame, err)
+				if encLen2 == fLen2 {
+					copy(f2, src[off:off+encLen2])
+				} else {
+					if _, err := VANSDecode4xTo(f2, src[off:off+encLen2], &pad.vansModels[2]); err != nil {
+						return nil, fmt.Errorf("%w: decoding fiber 2: %w", ErrCorruptedFrame, err)
+					}
 				}
 				off += encLen2
 			}
@@ -117,13 +145,18 @@ func unpackLiterals(src []byte, pad *decompressScratchpad) ([]byte, error) {
 				if encLen3 == 0 {
 					return nil, ErrCorruptedFrame
 				}
-				if _, err := VANSDecode4xTo(f3, src[off:off+encLen3], &pad.vansModels[3]); err != nil {
-					return nil, fmt.Errorf("%w: decoding fiber 3: %w", ErrCorruptedFrame, err)
+				if encLen3 == fLen3 {
+					copy(f3, src[off:off+encLen3])
+				} else {
+					if _, err := VANSDecode4xTo(f3, src[off:off+encLen3], &pad.vansModels[3]); err != nil {
+						return nil, fmt.Errorf("%w: decoding fiber 3: %w", ErrCorruptedFrame, err)
+					}
 				}
 			}
 
 			dst := pad.litBuf[:origLen]
-			InterleaveContextSheaf4(dst, f0, f1, f2, f3, origLen)
+			mode := (flags >> CtxModeShift) & 0x0F
+			InterleaveContextSheaf4Mode(dst, f0, f1, f2, f3, origLen, mode)
 			return dst, nil
 		}
 		if (flags & vansFlagSheaf) != 0 {

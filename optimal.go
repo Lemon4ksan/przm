@@ -6,6 +6,8 @@ package przm
 
 import (
 	"encoding/binary"
+	"math"
+	"math/bits"
 
 	"github.com/lemon4ksan/foundation/generic"
 )
@@ -48,16 +50,19 @@ type dpCandidate struct {
 // dpScratchpad encapsulates memory reused across block DP parses.
 // Optimized to stay strictly in L1 cache during forward DAG relaxation.
 type dpScratchpad struct {
-	window [1024]dpState             // 16 KB Hot Window
-	table3 [32768]int32              // 128 KB Hash Table
-	trace  [BlockSize64K + 1]dpTrace // 768 KB Sequential Trace
-	path   []int32
-	curGen uint32
+	window       [1024]dpState             // 16 KB Hot Window
+	table3       [32768]int32              // 128 KB Hash Table
+	trace        [BlockSize64K + 1]dpTrace // 768 KB Sequential Trace
+	litCostTable [256]int32                // 1 KB Shannon Entropy Bit-Cost Table
+	path         []int32
+	path2        []int32
+	curGen       uint32
 }
 
 var dpScratchPool = generic.NewPool(func() *dpScratchpad {
 	return &dpScratchpad{
-		path: make([]int32, 0, BlockSize64K+1),
+		path:  make([]int32, 0, BlockSize64K+1),
+		path2: make([]int32, 0, BlockSize64K+1),
 	}
 })
 
@@ -79,83 +84,128 @@ func getVarintBracket(d int) int {
 	return 3
 }
 
+// buildShannonLitCostTable computes the empirical zero-order Shannon entropy bit-cost table
+// for all 256 byte values within the 64 KiB block in fixed-point units (16 units = 1 byte = 8 bits).
+func buildShannonLitCostTable(src []byte, bStart, bSize int, table *[256]int32) {
+	if bSize <= 0 {
+		return
+	}
+	var freq [256]uint32
+	end := bStart + bSize
+	for p := bStart; p < end; p++ {
+		freq[src[p]]++
+	}
+
+	invSize := 1.0 / float64(bSize)
+	for c := 0; c < 256; c++ {
+		f := freq[c]
+		if f == 0 {
+			table[c] = 26 // ~13 bits (penalty for unseen symbol)
+		} else {
+			p := float64(f) * invSize
+			// Fixed-point scale: 16 units = 1 byte = 8 bits (2 units per bit)
+			cost := int32(-math.Log2(p)*2.0 + 0.5)
+			if cost < 2 {
+				cost = 2 // min 1 bit
+			} else if cost > 26 {
+				cost = 26
+			}
+			table[c] = cost
+		}
+	}
+}
+
+// calcDistPrefixCostPRZM returns the approximate bit-cost (scaled by 16) for extra bits of offset d
+// under the Log2 Distance Prefix codebook.
+func calcDistPrefixCostPRZM(d int) int32 {
+	if d <= 4 {
+		return 0 // 0 extra bits
+	}
+	if d <= 32768 {
+		ud := uint32(d - 1)
+		k := bits.Len32(ud)
+		nb := k - 2
+		return int32(2 * nb) // nb extra bits (each bit = 2 units)
+	}
+	if d <= 65536 {
+		return 30 // 15 extra bits = 30 units
+	}
+	return 48 // 24 extra bits = 48 units
+}
+
 // calcOffCostPRZM returns the number of bytes required to serialize offset d in Section 3.
 func calcOffCostPRZM(d int) int {
 	return getVarintBracket(d) + 1
 }
 
-// calcEdgeCostPRZM calculates the fixed-point bit-cost (scaled by 16) for a match edge.
+// calcEdgeCostPRZM calculates the calibrated fixed-point bit-cost (scaled by 16 = 8 bits) for a match edge.
 // Repeat matches incur 0 offset serialization bytes in Section 3.
-func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int) int32 {
+func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int, hasStride bool, stride int) int32 {
 	if repCode == -2 {
-		// ShortDict token: 1 byte opcode (0xD8..0xDF), 0 offset bytes
-		return 16
+		// ShortDict token: 1 byte opcode (0xD8..0xDF), 0 offset bytes (~6 bits)
+		return 12
 	}
 	if repCode == -3 {
-		// DictToken: 2 bytes opcode (0xF2 <tokID>), 0 offset bytes
-		return 32
+		// DictToken: 2 bytes opcode (0xF2 <tokID>), 0 offset bytes (~10 bits)
+		return 20
 	}
 	if repCode == -4 {
 		// Word Transform: 2 bytes opcode (transOp <tokID>), 0 offset bytes
-		return 32
+		return 20
 	}
 	if repCode == -5 {
 		// Sub-4-byte Token Pair: 3 bytes opcode (0xFF <tok1> <tok2>), 0 offset bytes
-		return 48
+		return 30
 	}
 	if repCode == -6 {
 		// Compact Raw Dict: 1 byte opcode (0xE9) + 1 byte token + offCost
-		offBytes := int32(calcOffCostPRZM(dist))
-		return (2 + offBytes) * 16
+		offCost := calcDistPrefixCostPRZM(dist)
+		return 32 + offCost
 	}
 	var cost int32
 	if repCode >= 0 {
 		// Repeat match: 0 offset bytes in Section 3
 		if mLen <= 3+minMatchBase {
-			cost = 16 // 1 byte Fused Repeat token
+			cost = 10 // 1 byte Fused Repeat token (~5 bits)
 		} else if mLen <= 14+minMatchBase {
-			cost = 32 // 2 bytes Long Repeat (opcode + token)
+			cost = 20 // 2 bytes Long Repeat (opcode + token) (~10 bits)
 		} else if mLen <= 14+minMatchBase+127 {
-			cost = 48 // 3 bytes Long Repeat
+			cost = 30 // 3 bytes Long Repeat
 		} else {
-			cost = 64 // 4 bytes Long Repeat
+			cost = 40 // 4 bytes Long Repeat
 		}
 		// Register conservation bonus for rep0 / rep1:
 		if repCode == 0 {
-			cost -= 14 // Strong bonus: rep0 is free and conserved
+			cost -= 6 // Strong bonus: rep0 is free and conserved
 		} else if repCode == 1 {
-			cost -= 8 // Strong bonus
+			cost -= 3 // Promotion bonus
 		} else {
-			cost += 2
+			cost -= 1
+		}
+		if cost < 3 {
+			cost = 3
+		}
+	} else if isBracketDist(dist) && mLen <= 15+minMatchBase {
+		// Fused Bracket: 2 bytes in Section 1, 0 offset bytes in Section 3
+		cost = 32
+	} else if (!hasStride || stride <= 1) && dist <= 256 {
+		// Diff Lattice (Immediate 1-byte Offset): 3 bytes in Section 1, 0 offset bytes in Section 3
+		if mLen <= 6+minMatchBase {
+			cost = 48
+		} else if mLen <= 6+minMatchBase+127 {
+			cost = 64
+		} else {
+			cost = 80
 		}
 	} else {
-		// Explicit match: opcode bytes in Section 2 + offset bytes in Section 3
-		offBytes := int32(calcOffCostPRZM(dist))
-		if mLen <= 14+minMatchBase {
-			cost = (1 + offBytes) * 16
-		} else if mLen <= 14+minMatchBase+127 {
-			cost = (2 + offBytes) * 16
-		} else {
-			cost = (3 + offBytes) * 16
+		// Explicit match: opcode bytes in Section 1 + distance code (1B) + extra bits (2 units/bit)
+		var baseCost int32 = 32
+		if mLen > 14+minMatchBase+127 {
+			baseCost = 64
+		} else if mLen > 14+minMatchBase {
+			baseCost = 48
 		}
-		// Small distance preference penalty:
-		if dist >= 65536 {
-			cost += 8
-		} else if dist >= 16384 {
-			cost += 6
-		} else if dist >= 1024 {
-			cost += 4
-		} else if dist >= 128 {
-			cost += 2
-		}
-	}
-	if mLen >= 16 {
-		bonus := int32(mLen / 4)
-		if cost > bonus+4 {
-			cost -= bonus
-		} else {
-			cost = 4
-		}
+		cost = baseCost + calcDistPrefixCostPRZM(dist)
 	}
 	return cost
 }
@@ -166,37 +216,61 @@ var subLenLUT = [19][8]uint8{
 	5:  {3, 4, 5},
 	6:  {3, 4, 5, 6},
 	7:  {4, 5, 6, 7},
-	8:  {4, 5, 6, 8},
-	9:  {4, 5, 6, 8, 9},
-	10: {4, 5, 6, 8, 10},
-	11: {4, 5, 6, 8, 11},
-	12: {4, 5, 6, 8, 12},
-	13: {4, 5, 6, 8, 12, 13},
-	14: {4, 5, 6, 8, 12, 14},
-	15: {4, 5, 6, 8, 12, 15},
-	16: {4, 5, 6, 8, 12, 16},
-	17: {4, 5, 6, 8, 12, 16, 17},
-	18: {4, 5, 6, 8, 12, 16, 18},
+	8:  {4, 5, 6, 7, 8},
+	9:  {4, 6, 7, 8, 9},
+	10: {4, 6, 7, 8, 9, 10},
+	11: {4, 6, 7, 8, 10, 11},
+	12: {4, 6, 7, 8, 10, 11, 12},
+	13: {4, 6, 7, 8, 10, 12, 13},
+	14: {4, 6, 7, 8, 11, 13, 14},
+	15: {4, 6, 7, 8, 12, 14, 15},
+	16: {4, 6, 7, 8, 12, 15, 16},
+	17: {4, 6, 7, 8, 12, 16, 17},
+	18: {4, 6, 7, 8, 12, 16, 17, 18},
 }
 
 var subLenCounts = [19]uint8{
-	3: 1, 4: 1, 5: 3, 6: 4, 7: 4, 8: 4, 9: 5, 10: 5, 11: 5, 12: 5,
-	13: 6, 14: 6, 15: 6, 16: 6, 17: 7, 18: 7,
+	3: 1, 4: 1, 5: 3, 6: 4, 7: 4, 8: 5, 9: 5, 10: 6, 11: 6, 12: 7,
+	13: 7, 14: 7, 15: 7, 16: 7, 17: 7, 18: 8,
 }
 
 // generateSubLengths writes sub-lengths S(L) into out without dynamic slice appends.
-// Returns the number of sub-lengths written (at most 8).
+// Returns the number of sub-lengths written (at most 10).
 func generateSubLengths(L, minMatchBase int, out *[maxSubLenCandidates]int) int {
 	if L < minMatchBase {
 		return 0
 	}
 	if L > 18 {
+		cnt := 0
 		if minMatchBase == 3 {
-			*out = [maxSubLenCandidates]int{3, 4, 6, 8, 12, 16, 18, L}
-		} else {
-			*out = [maxSubLenCandidates]int{4, 5, 6, 8, 12, 16, 18, L}
+			out[cnt] = 3
+			cnt++
 		}
-		return 8
+		out[cnt] = 4
+		cnt++
+		out[cnt] = 6
+		cnt++
+		out[cnt] = 7
+		cnt++
+		out[cnt] = 8
+		cnt++
+		out[cnt] = 12
+		cnt++
+		out[cnt] = 16
+		cnt++
+		out[cnt] = 18
+		cnt++
+		if L-2 > 18 {
+			out[cnt] = L - 2
+			cnt++
+		}
+		if L-1 > 18 {
+			out[cnt] = L - 1
+			cnt++
+		}
+		out[cnt] = L
+		cnt++
+		return cnt
 	}
 	n := int(subLenCounts[L])
 	cnt := 0
@@ -279,6 +353,129 @@ func insertHashPRZM(
 	}
 }
 
+var isDelimLUT = [256]bool{
+	' ': true, '\t': true, '\n': true, '\r': true,
+	';': true, ',': true, '(': true, ')': true,
+	'{': true, '}': true, '[': true, ']': true,
+	':': true, '.': true, '<': true, '>': true,
+	'=': true, '+': true, '-': true, '*': true,
+	'/': true, '%': true, '&': true, '|': true,
+	'^': true, '~': true, '!': true, '?': true,
+	'"': true, '\'': true, '`': true, '\\': true,
+	0: true, 0xFF: true,
+}
+
+func henselMultiBracketProbe(
+	src []byte,
+	pos, uSize, maxDepth, windowSize, windowLog, maxL int,
+	pad *scratchpad,
+	sp1M *HenselScratchpad1M,
+	sp8M *HenselScratchpad8M,
+	updateBracket func(int, int),
+) {
+	if pos+4 > uSize {
+		return
+	}
+	w4 := binary.LittleEndian.Uint32(src[pos : pos+4])
+	var head []int32
+	var prev []int32
+	var fp32 []uint32
+	var headMask, windowMask int
+	h := w4 * HenselHashPrime
+
+	switch windowLog {
+	case WindowLog8M:
+		if sp8M == nil {
+			return
+		}
+		head = sp8M.head[:]
+		prev = sp8M.prev[:]
+		fp32 = sp8M.fp32[:]
+		headMask = HashMask8M
+		windowMask = WindowMask8M
+		h >>= 12
+	case WindowLog1M:
+		if sp1M == nil {
+			return
+		}
+		head = sp1M.head[:]
+		prev = sp1M.prev[:]
+		fp32 = sp1M.fp32[:]
+		headMask = HashMask1M
+		windowMask = WindowMask1M
+		h >>= 14
+	default:
+		head = pad.hensel.head[:]
+		prev = pad.hensel.prev[:]
+		fp32 = pad.hensel.fp32[:]
+		headMask = HenselHashMask
+		windowMask = HenselWindowMask
+		h >>= 16
+	}
+
+	cand := int(head[int(h)&headMask]) - 1
+	if cand < 0 {
+		return
+	}
+
+	has8 := pos+8 <= uSize
+	var targetFP32 uint32
+	if has8 {
+		targetFP32 = binary.LittleEndian.Uint32(src[pos+4 : pos+8])
+	}
+
+	depth := 0
+	for cand >= 0 && depth < maxDepth {
+		candSlot := cand & windowMask
+		if cand >= pos {
+			nextCand := int(prev[candSlot]) - 1
+			if nextCand >= cand || nextCand < 0 {
+				break
+			}
+			cand = nextCand
+			continue
+		}
+
+		d := pos - cand
+		if d >= windowSize || d <= 0 {
+			break
+		}
+
+		hasDiff := false
+		var maxLift int
+		if has8 {
+			diff := fp32[candSlot] ^ targetFP32
+			if diff != 0 {
+				maxLift = 4 + (bits.TrailingZeros32(diff) >> 3)
+				hasDiff = true
+			}
+		}
+
+		if binary.LittleEndian.Uint32(src[cand:cand+4]) == w4 {
+			if hasDiff {
+				if maxLift >= 4 {
+					updateBracket(d, maxLift)
+				}
+			} else {
+				mLen := HenselLCPPos(src, pos, cand, maxL)
+				if mLen >= 4 {
+					updateBracket(d, mLen)
+					if d < 128 && mLen >= 258 {
+						break
+					}
+				}
+			}
+		}
+
+		nextCand := int(prev[candSlot]) - 1
+		if nextCand >= cand || nextCand < 0 {
+			break
+		}
+		cand = nextCand
+		depth++
+	}
+}
+
 // emitPathPRZM traces back from segEnd to segStart, reverses the path, and emits PRZM tokens.
 func emitPathPRZM(
 	src []byte,
@@ -290,6 +487,8 @@ func emitPathPRZM(
 	dpPad *dpScratchpad,
 	rep0, rep1, rep2 *int,
 	minMatchBase int,
+	hasStride bool,
+	stride int,
 ) {
 	if segEnd <= segStart {
 		return
@@ -311,6 +510,34 @@ func emitPathPRZM(
 	for left, right := 0, len(path)-1; left < right; left, right = left+1, right-1 {
 		path[left], path[right] = path[right], path[left]
 	}
+
+	// Command Run Folding: Coalesce consecutive contiguous matches that share the same effective distance
+	coalesced := dpPad.path2[:0]
+	coalesceFrom := int32(segStart)
+	for i := 0; i < len(path); i++ {
+		to := path[i]
+		repCode := int(dpPad.trace[to].repCode)
+
+		if len(coalesced) > 0 && repCode == 0 {
+			prevTo := coalesced[len(coalesced)-1]
+			prevRep := int(dpPad.trace[prevTo].repCode)
+			prevDist := int(dpPad.trace[prevTo].dist)
+
+			if (prevRep >= 0 || prevDist > 0) && prevTo == coalesceFrom {
+				prevFrom := dpPad.trace[prevTo].from
+				dpPad.trace[to].from = prevFrom
+				dpPad.trace[to].dist = int32(prevDist)
+				dpPad.trace[to].repCode = int8(prevRep)
+				coalesced[len(coalesced)-1] = to
+				coalesceFrom = to
+				continue
+			}
+		}
+
+		coalesced = append(coalesced, to)
+		coalesceFrom = to
+	}
+	path = coalesced
 
 	litStart := -1
 	litLen := 0
@@ -420,6 +647,48 @@ func emitPathPRZM(
 				*rep1 = *rep0
 				*rep0 = mDist
 			}
+		} else if isBracketDist(mDist) && mLen-minMatchBase <= 15 {
+			bracket := bracketIndex(mDist)
+			if litLen > 15 {
+				flushLen := litLen - 15
+				flushLiteralsPRZM(&pad.cmdBuf, &pad.literalBuf, src[litStart:litStart+flushLen])
+				litStart += flushLen
+				litLen = 15
+			}
+			op := OpcodePrefixFusedBracket + uint8(bracket)
+			token := uint8((litLen << 4) | (mLen - minMatchBase))
+			pad.cmdBuf = append(pad.cmdBuf, op, token)
+			if litLen > 0 {
+				pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
+			}
+			*rep2 = *rep1
+			*rep1 = *rep0
+			*rep0 = mDist
+		} else if (!hasStride || stride <= 1) && mDist <= 256 {
+			if litLen > 6 {
+				flushLen := litLen - 6
+				flushLiteralsPRZM(&pad.cmdBuf, &pad.literalBuf, src[litStart:litStart+flushLen])
+				litStart += flushLen
+				litLen = 6
+			}
+			baseLen := mLen - minMatchBase
+			if baseLen > 6 {
+				baseLen = 7
+			}
+			desc := uint8((3 << 6) | (litLen << 3) | baseLen)
+			deltaByte := uint8(mDist - 1)
+			pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixDiffLattice, desc, deltaByte)
+			if baseLen == 7 {
+				var varBuf [8]byte
+				n := binary.PutUvarint(varBuf[:], uint64(mLen-(7+minMatchBase)))
+				pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
+			}
+			if litLen > 0 {
+				pad.literalBuf = append(pad.literalBuf, src[litStart:pos]...)
+			}
+			*rep2 = *rep1
+			*rep1 = *rep0
+			*rep0 = mDist
 		} else {
 			// Fused Extended Match
 			if litLen > 3 {
@@ -475,6 +744,8 @@ func compressBlockOptimal(
 	activeMatcher *dictMatcher,
 	dictLen int,
 	compactDict bool,
+	hasStride bool,
+	stride int,
 ) {
 	if bSize <= 0 {
 		return
@@ -482,6 +753,13 @@ func compressBlockOptimal(
 	if bSize > BlockSize64K {
 		return
 	}
+
+	cmdStart := len(pad.cmdBuf)
+	offStart := len(pad.offsetBuf)
+	litStart := len(pad.literalBuf)
+	r0Start := *rep0
+	r1Start := *rep1
+	r2Start := *rep2
 
 	dpPad.curGen++
 	if dpPad.curGen == 0 {
@@ -511,9 +789,7 @@ func compressBlockOptimal(
 	var subLenBuf [maxSubLenCandidates]int
 	segStart := 0
 
-	sampleEnd := min(bStart+1024, bStart+bSize)
-	ent := CalculateShannonEntropy(src[bStart:sampleEnd])
-	litUnitCost := int32(max(6, min(14, int(ent*2.0+0.5))))
+	buildShannonLitCostTable(src, bStart, bSize, &dpPad.litCostTable)
 
 	for i := 0; i < bSize; i++ {
 		pos := bStart + i
@@ -527,8 +803,8 @@ func compressBlockOptimal(
 		// Clear the node that is about to enter the far end of the lookahead window
 		dpPad.window[(i+1023)&1023].cost = 1 << 30
 
-		// 1. Literal transition i -> i+1 (cost += litUnitCost, dynamically scaled by block entropy)
-		litCost := curCost + litUnitCost
+		// 1. Literal transition i -> i+1 (dynamically scaled by symbol's Shannon entropy bit-cost)
+		litCost := curCost + dpPad.litCostTable[src[pos]]
 		targetLitIdx := (i + 1) & 1023
 		targetLit := &dpPad.window[targetLitIdx]
 		if litCost < targetLit.cost {
@@ -564,7 +840,7 @@ func compressBlockOptimal(
 			}
 			score := l
 			if repCode >= 0 {
-				score += 3 // bias towards repeat matches
+				score += 8 // bias towards repeat matches
 			}
 			if score > bestLongScore {
 				bestLongScore = score
@@ -654,9 +930,8 @@ func compressBlockOptimal(
 			}
 		}
 
-		// Explicit match candidates sorted into 4 varint brackets
-		var bracketBest [4]dpCandidate
-		var bracketClose [4]dpCandidate
+		// Explicit match candidates sorted into 8 distance brackets
+		var bracketBest [8]dpCandidate
 		updateBracket := func(d, l int) {
 			l = min(l, maxL)
 			if d <= 0 || d > windowSize || d == r0 || d == r1 || d == r2 || l < minMatchBase {
@@ -680,21 +955,33 @@ func compressBlockOptimal(
 			minExp := minMatchBase
 			if d >= 16384 {
 				minExp = minMatchBase + 3
+			} else if d >= 2048 {
+				minExp = minMatchBase + 2
 			} else if d >= 128 {
 				minExp = minMatchBase + 1
 			}
 			if l < minExp {
 				return
 			}
-			b := getVarintBracket(d)
+			b := 0
+			if d >= 131072 {
+				b = 7
+			} else if d >= 32768 {
+				b = 6
+			} else if d >= 8192 {
+				b = 5
+			} else if d >= 2048 {
+				b = 4
+			} else if d >= 512 {
+				b = 3
+			} else if d >= 128 {
+				b = 2
+			} else if d >= 32 {
+				b = 1
+			}
 			lClamped := min(l, dpMaxL)
 			if lClamped > int(bracketBest[b].length) {
 				bracketBest[b] = dpCandidate{dist: int32(d), length: int32(lClamped), repCode: -1}
-			}
-			if lClamped >= 4 && (bracketClose[b].length == 0 || d < int(bracketClose[b].dist)) {
-				if int(bracketBest[b].length) <= 6 || lClamped >= int(bracketBest[b].length)-2 {
-					bracketClose[b] = dpCandidate{dist: int32(d), length: int32(lClamped), repCode: -1}
-				}
 			}
 		}
 
@@ -766,47 +1053,29 @@ func compressBlockOptimal(
 				}
 			}
 
-			// Hensel Ultrametric Match Finding
-			curMaxLen := max(
-				int(bracketBest[0].length),
-				int(bracketBest[1].length),
-				int(bracketBest[2].length),
-				int(bracketBest[3].length),
+			// Entropy-Gated Decision Boundary Hensel Probing
+			isBoundary := isDelimLUT[src[pos]] ||
+				(pos > 0 && isDelimLUT[src[pos-1]]) ||
+				dpPad.trace[i].dist != 0
+
+			maxHenselDepth := 8
+			if isBoundary {
+				maxHenselDepth = 32
+				if level >= 5 {
+					maxHenselDepth = 48
+				}
+			}
+
+			henselMultiBracketProbe(
+				src, pos, uSize, maxHenselDepth, windowSize, windowLog, dpMaxL,
+				pad, sp1M, sp8M, updateBracket,
 			)
-			for c := range candCount {
-				if int(candidates[c].length) > curMaxLen {
-					curMaxLen = int(candidates[c].length)
-				}
-			}
-			searchMinLen := max(minMatchBase, curMaxLen+1)
-			if searchMinLen <= dpMaxL && searchMinLen <= 258 {
-				maxDepth := 16
-				if level >= 4 {
-					maxDepth = 32
-				}
-				var hDist, hLen int
-				switch windowLog {
-				case WindowLog8M:
-					if sp8M != nil {
-						hDist, hLen = HenselFindMatch8M(src, pos, uSize, maxDepth, searchMinLen, sp8M)
-					}
-				case WindowLog1M:
-					if sp1M != nil {
-						hDist, hLen = HenselFindMatch1M(src, pos, uSize, maxDepth, searchMinLen, sp1M)
-					}
-				default:
-					hDist, hLen = HenselFindMatch(src, pos, uSize, maxDepth, searchMinLen, &pad.hensel)
-				}
-				if hDist > 0 && hLen >= minMatchBase {
-					updateBracket(hDist, hLen)
-				}
-			}
 		}
 
 		// Check if Long Match Shortcut triggers
 		if bestLongScore >= 64 {
 			// 1. Emit optimal path up to current position i
-			emitPathPRZM(src, bStart, segStart, i, uSize, pad, dpPad, rep0, rep1, rep2, minMatchBase)
+			emitPathPRZM(src, bStart, segStart, i, uSize, pad, dpPad, rep0, rep1, rep2, minMatchBase, hasStride, stride)
 
 			// 2. Emit the long match directly
 			mLen := int(bestLong.length)
@@ -849,6 +1118,30 @@ func compressBlockOptimal(
 					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
 				}
 				writeOffsetPRZM(&pad.offsetBuf, mDist)
+			} else if isBracketDist(mDist) && mLen-minMatchBase <= 15 {
+				bracket := bracketIndex(mDist)
+				op := OpcodePrefixFusedBracket + uint8(bracket)
+				token := uint8(mLen - minMatchBase)
+				pad.cmdBuf = append(pad.cmdBuf, op, token)
+				*rep2 = *rep1
+				*rep1 = *rep0
+				*rep0 = mDist
+			} else if (!hasStride || stride <= 1) && mDist <= 256 {
+				baseLen := mLen - minMatchBase
+				if baseLen > 6 {
+					baseLen = 7
+				}
+				desc := uint8((3 << 6) | baseLen) // litLen = 0
+				deltaByte := uint8(mDist - 1)
+				pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixDiffLattice, desc, deltaByte)
+				if baseLen == 7 {
+					var varBuf [8]byte
+					n := binary.PutUvarint(varBuf[:], uint64(mLen-(7+minMatchBase)))
+					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
+				}
+				*rep2 = *rep1
+				*rep1 = *rep0
+				*rep0 = mDist
 			} else {
 				baseLen := mLen - minMatchBase
 				if baseLen > 14 {
@@ -899,16 +1192,11 @@ func compressBlockOptimal(
 			continue
 		}
 
-		for b := range 4 {
-			if bracketBest[b].length >= int32(minMatchBase) {
+		for b := range 8 {
+			if bracketBest[b].length >= int32(minMatchBase) && candCount < 30 {
 				candidates[candCount] = bracketBest[b]
 				candCount++
 			}
-			// if bracketClose[b].length >= int32(minMatchBase) && bracketClose[b].dist != bracketBest[b].dist &&
-			// 	candCount < 30 {
-			// 	candidates[candCount] = bracketClose[b]
-			// 	candCount++
-			// }
 		}
 
 		// 3. Forward Relaxation over sub-lengths S(L)
@@ -923,7 +1211,7 @@ func compressBlockOptimal(
 				// Dictionary Token or Compact Raw Dict
 				subLen := candL
 				next := i + subLen
-				edgeCost := calcEdgeCostPRZM(subLen, int(cand.dist), int(cand.repCode), minMatchBase)
+				edgeCost := calcEdgeCostPRZM(subLen, int(cand.dist), int(cand.repCode), minMatchBase, hasStride, stride)
 				newCost := curCost + edgeCost
 
 				targetIdx := next & 1023
@@ -951,8 +1239,23 @@ func compressBlockOptimal(
 			nSubLens := generateSubLengths(candL, minMatchBase, &subLenBuf)
 			for sIdx := range nSubLens {
 				subLen := subLenBuf[sIdx]
+				if cand.repCode < 0 {
+					minSubReq := minMatchBase
+					if cand.dist >= 16384 {
+						if minSubReq < 5 {
+							minSubReq = 5
+						}
+					} else if cand.dist >= 128 {
+						if minSubReq < 4 {
+							minSubReq = 4
+						}
+					}
+					if subLen < minSubReq {
+						continue
+					}
+				}
 				next := i + subLen
-				edgeCost := calcEdgeCostPRZM(subLen, int(cand.dist), int(cand.repCode), minMatchBase)
+				edgeCost := calcEdgeCostPRZM(subLen, int(cand.dist), int(cand.repCode), minMatchBase, hasStride, stride)
 				newCost := curCost + edgeCost
 
 				targetIdx := next & 1023
@@ -995,6 +1298,35 @@ func compressBlockOptimal(
 
 	// 4. Backward Path Trace & PRZM Token Emission for the remaining segment
 	if segStart < bSize {
-		emitPathPRZM(src, bStart, segStart, bSize, uSize, pad, dpPad, rep0, rep1, rep2, minMatchBase)
+		emitPathPRZM(src, bStart, segStart, bSize, uSize, pad, dpPad, rep0, rep1, rep2, minMatchBase, hasStride, stride)
+	}
+
+	// 5. Rate-Distortion Evaluation: Hierarchical SLP Grammar DAG Bisection
+	// Reconstruct match segments via topological rule expansion without emitting Section 3 distance varints.
+	if dictLen == 0 && bSize >= 64 {
+		cmdDelta := len(pad.cmdBuf) - cmdStart
+		offDelta := len(pad.offsetBuf) - offStart
+		litDelta := len(pad.literalBuf) - litStart
+		lzCost := cmdDelta + offDelta + litDelta
+
+		if lzCost > 32 {
+			if pwsData, err := PWSEncode(src[bStart : bStart+bSize]); err == nil && len(pwsData) > 0 {
+				var varBuf [8]byte
+				nVar := binary.PutUvarint(varBuf[:], uint64(len(pwsData)))
+				pwsCost := 1 + nVar + len(pwsData)
+				if pwsCost < lzCost {
+					pad.cmdBuf = pad.cmdBuf[:cmdStart]
+					pad.offsetBuf = pad.offsetBuf[:offStart]
+					pad.literalBuf = pad.literalBuf[:litStart]
+					*rep0 = r0Start
+					*rep1 = r1Start
+					*rep2 = r2Start
+
+					pad.cmdBuf = append(pad.cmdBuf, OpGrammarBlock)
+					pad.cmdBuf = append(pad.cmdBuf, varBuf[:nVar]...)
+					pad.cmdBuf = append(pad.cmdBuf, pwsData...)
+				}
+			}
+		}
 	}
 }

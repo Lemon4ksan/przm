@@ -12,7 +12,7 @@ import (
 
 // Block deduplication table configuration (PRZM-SPEC-0.5 Milestone 5).
 const (
-	DedupTableSize = 512
+	DedupTableSize = 2048
 	dedupTableMask = DedupTableSize - 1
 	dedupProbes    = 4
 )
@@ -121,4 +121,23 @@ func Hash64KBlock(block []byte) uint64 {
 	h *= p1
 	h ^= h >> 32
 	return h
+}
+
+// DetectRLE scans src starting at pos for a contiguous run of identical bytes.
+// Uses 8-byte uint64 loads for maximum CPU scanning throughput.
+func DetectRLE(src []byte, pos int) int {
+	n := len(src)
+	if pos >= n {
+		return 0
+	}
+	b := src[pos]
+	p := pos + 1
+	pattern := uint64(b) * 0x0101010101010101
+	for p+8 <= n && binary.LittleEndian.Uint64(src[p:p+8]) == pattern {
+		p += 8
+	}
+	for p < n && src[p] == b {
+		p++
+	}
+	return p - pos
 }

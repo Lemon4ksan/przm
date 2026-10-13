@@ -22,41 +22,146 @@ const (
 )
 
 // SheafSyntaxTable classifies syntax delimiters vs content semantics.
+// SheafSyntaxTable classifies syntax delimiters vs content semantics.
 // 1 = syntax delimiter (structural), 0 = content (semantic).
 var SheafSyntaxTable [256]uint8
 
-// SheafContextTable classifies preceding byte into 4 context classes for 2D Context Sheaf:
-// 0: Syntax / structural delimiters (from SheafSyntaxTable)
-// 1: Lowercase ASCII letters ('a'..'z')
-// 2: Uppercase ASCII letters ('A'..'Z') and ASCII digits ('0'..'9')
-// 3: Other bytes (control characters, whitespace, high UTF-8 bytes)
+// SheafContextTable classifies preceding byte into 4 context classes for Mode 0 (Refined Étale Sheaf):
+// 0: Whitespace (' ', '\t', '\r', '\n')
+// 1: Syntax delimiters (from SheafSyntaxTable except whitespace)
+// 2: Lowercase ASCII letters ('a'..'z') and '_'
+// 3: Other bytes (control characters, digits, uppercase, high UTF-8 bytes)
 var SheafContextTable [256]uint8
+
+// SheafContextTableM1 classifies preceding byte for Mode 1 (JSON/Log dense):
+// 0: Quote ('"') & Colon (':')
+// 1: Lowercase letters & identifiers ('a'..'z', '_')
+// 2: Numeric digits ('0'..'9')
+// 3: Whitespace & Structural ({, }, [, ], ,, etc.)
+var SheafContextTableM1 [256]uint8
+
+// SheafContextTableM2 classifies preceding byte for Mode 2 (2-Phase Causal Syntax/Content):
+// 0: Delimiters, whitespace, syntax
+// 1: Content (alphanumeric, identifiers, others)
+var SheafContextTableM2 [256]uint8
+
+// SheafContext8Table classifies preceding byte into 8 context classes for Order-1 Context Sheaf:
+// 0: Whitespace (' ', '\t', '\n', '\r')
+// 1: Punctuation / structural delimiters ('(', ')', '{', '}', '[', ']', ';', ',', '.', ':', '"', '\”)
+// 2: Operators ('=', '+', '-', '*', '/', '%', '&', '|', '^', '!', '<', '>', '~', '?')
+// 3: Lowercase vowels ('a', 'e', 'i', 'o', 'u')
+// 4: Lowercase consonants
+// 5: Uppercase ASCII letters ('A'..'Z')
+// 6: ASCII digits ('0'..'9')
+// 7: Other / control / binary
+var SheafContext8Table [256]uint8
+
+func classifyByte8(b byte) uint8 {
+	if b == ' ' || b == '\t' || b == '\n' || b == '\r' {
+		return 0
+	}
+	if b == '(' || b == ')' || b == '{' || b == '}' || b == '[' || b == ']' ||
+		b == ';' || b == ',' || b == '.' || b == ':' || b == '"' || b == '\'' {
+		return 1
+	}
+	if b == '=' || b == '+' || b == '-' || b == '*' || b == '/' || b == '%' ||
+		b == '&' || b == '|' || b == '^' || b == '!' || b == '<' || b == '>' || b == '~' || b == '?' {
+		return 2
+	}
+	if b == 'a' || b == 'e' || b == 'i' || b == 'o' || b == 'u' {
+		return 3
+	}
+	if b >= 'a' && b <= 'z' {
+		return 4
+	}
+	if b >= 'A' && b <= 'Z' {
+		return 5
+	}
+	if b >= '0' && b <= '9' {
+		return 6
+	}
+	return 7
+}
 
 func init() {
 	for i := range SheafSyntaxTable {
 		SheafSyntaxTable[i] = 0
 	}
-	for _, b := range []byte("{}[]()<>() :;,.\"'`=+-*/%&|^!~? \t\r\n\\") {
+	for _, b := range []byte("{}[]()<>() :;,.\"'`=+-*/%&|^!~? \t\r\n\\#") {
 		SheafSyntaxTable[b] = 1
 	}
+
+	// Mode 0: Refined 4-Class Étale Sheaf
 	for i := range SheafContextTable {
 		SheafContextTable[i] = 3
 	}
-	for b := range 256 {
-		if SheafSyntaxTable[b] == 1 {
-			SheafContextTable[b] = 0
-		} else if b >= 'a' && b <= 'z' {
+	for _, b := range []byte(" \t\r\n") {
+		SheafContextTable[b] = 0
+	}
+	for _, b := range []byte("{}[]()<>() :;,.\"'`=+-*/%&|^!~?\\#") {
+		if b != ' ' && b != '\t' && b != '\r' && b != '\n' {
 			SheafContextTable[b] = 1
-		} else if (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') {
-			SheafContextTable[b] = 2
-		} else {
-			SheafContextTable[b] = 3
 		}
+	}
+	for b := 0; b < 256; b++ {
+		if (b >= 'a' && b <= 'z') || b == '_' {
+			SheafContextTable[b] = 2
+		}
+	}
+
+	// Mode 1: JSON Dense
+	for i := range SheafContextTableM1 {
+		SheafContextTableM1[i] = 3
+	}
+	SheafContextTableM1['"'] = 0
+	SheafContextTableM1[':'] = 0
+	for b := 0; b < 256; b++ {
+		if (b >= 'a' && b <= 'z') || b == '_' {
+			SheafContextTableM1[b] = 1
+		} else if b >= '0' && b <= '9' {
+			SheafContextTableM1[b] = 2
+		}
+	}
+
+	// Mode 2: 2-Phase
+	for i := range SheafContextTableM2 {
+		SheafContextTableM2[i] = 1
+	}
+	for _, b := range []byte(" \t\r\n{}[]()<>() :;,.\"'`=+-*/%&|^!~?\\#") {
+		SheafContextTableM2[b] = 0
+	}
+	for b := range 256 {
+		SheafContext8Table[b] = classifyByte8(byte(b))
 	}
 }
 
-// InterleaveContextSheaf4 reconstructs origLen bytes into dst from 4 context fibers.
+// SheafContextOrder2 computes the Order-2 bigram context from previous two bytes.
+func SheafContextOrder2(p2, p1 byte) uint8 {
+	if p1 >= '0' && p1 <= '9' {
+		if (p2 >= '0' && p2 <= '9') || p2 == '.' || p2 == '-' {
+			return 0
+		}
+		return 1
+	}
+	if (p1 >= 'a' && p1 <= 'z') || p1 == '_' {
+		if (p2 >= 'a' && p2 <= 'z') || p2 == '_' {
+			return 2
+		}
+		return 3
+	}
+	if p1 == ' ' || p1 == '\t' || p1 == '\r' || p1 == '\n' {
+		return 0
+	}
+	return 1
+}
+
+// InterleaveContextSheaf4 reconstructs origLen bytes into dst from 4 context fibers using default Mode 0.
 func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
+	InterleaveContextSheaf4Mode(dst, f0, f1, f2, f3, origLen, CtxModeStructural)
+}
+
+// InterleaveContextSheaf4Mode reconstructs origLen bytes into dst from 4 context fibers using the specified mode.
+func InterleaveContextSheaf4Mode(dst, f0, f1, f2, f3 []byte, origLen int, mode uint8) {
 	if origLen <= 0 || len(dst) < origLen {
 		return
 	}
@@ -76,10 +181,43 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 		pF3 = unsafe.Pointer(&f3[0])
 	}
 
+	if mode == CtxModeOrder2 {
+		prev2, prev1 := byte(0), byte(0)
+		for j := 0; j < origLen; j++ {
+			c := SheafContextOrder2(prev2, prev1)
+			var bt byte
+			switch c {
+			case 0:
+				bt = *(*byte)(unsafe.Add(pF0, p0))
+				p0++
+			case 1:
+				bt = *(*byte)(unsafe.Add(pF1, p1))
+				p1++
+			case 2:
+				bt = *(*byte)(unsafe.Add(pF2, p2))
+				p2++
+			default:
+				bt = *(*byte)(unsafe.Add(pF3, p3))
+				p3++
+			}
+			*(*byte)(unsafe.Add(pDst, j)) = bt
+			prev2 = prev1
+			prev1 = bt
+		}
+		return
+	}
+
+	lut := &SheafContextTable
+	if mode == CtxModeJSONDense {
+		lut = &SheafContextTableM1
+	} else if mode == CtxMode2Phase {
+		lut = &SheafContextTableM2
+	}
+
 	prev := byte(0)
 	j := 0
 	for ; j+8 <= origLen; j += 8 {
-		c0 := SheafContextTable[prev]
+		c0 := lut[prev]
 		var b0 byte
 		switch c0 {
 		case 0:
@@ -97,7 +235,7 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 		}
 		*(*byte)(unsafe.Add(pDst, j)) = b0
 
-		c1 := SheafContextTable[b0]
+		c1 := lut[b0]
 		var b1 byte
 		switch c1 {
 		case 0:
@@ -115,7 +253,7 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 		}
 		*(*byte)(unsafe.Add(pDst, j+1)) = b1
 
-		c2 := SheafContextTable[b1]
+		c2 := lut[b1]
 		var b2 byte
 		switch c2 {
 		case 0:
@@ -133,7 +271,7 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 		}
 		*(*byte)(unsafe.Add(pDst, j+2)) = b2
 
-		c3 := SheafContextTable[b2]
+		c3 := lut[b2]
 		var b3 byte
 		switch c3 {
 		case 0:
@@ -151,7 +289,7 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 		}
 		*(*byte)(unsafe.Add(pDst, j+3)) = b3
 
-		c4 := SheafContextTable[b3]
+		c4 := lut[b3]
 		var b4 byte
 		switch c4 {
 		case 0:
@@ -169,7 +307,7 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 		}
 		*(*byte)(unsafe.Add(pDst, j+4)) = b4
 
-		c5 := SheafContextTable[b4]
+		c5 := lut[b4]
 		var b5 byte
 		switch c5 {
 		case 0:
@@ -187,7 +325,7 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 		}
 		*(*byte)(unsafe.Add(pDst, j+5)) = b5
 
-		c6 := SheafContextTable[b5]
+		c6 := lut[b5]
 		var b6 byte
 		switch c6 {
 		case 0:
@@ -205,7 +343,7 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 		}
 		*(*byte)(unsafe.Add(pDst, j+6)) = b6
 
-		c7 := SheafContextTable[b6]
+		c7 := lut[b6]
 		var b7 byte
 		switch c7 {
 		case 0:
@@ -226,7 +364,7 @@ func InterleaveContextSheaf4(dst, f0, f1, f2, f3 []byte, origLen int) {
 		prev = b7
 	}
 	for ; j < origLen; j++ {
-		c := SheafContextTable[prev]
+		c := lut[prev]
 		var bt byte
 		switch c {
 		case 0:

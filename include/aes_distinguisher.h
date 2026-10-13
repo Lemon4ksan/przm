@@ -66,6 +66,11 @@ void aes_shift_rows(uint8_t state[16]);
 void aes_mix_columns(uint8_t state[16]);
 void aes_add_round_key(uint8_t state[16], const uint8_t rk[16]);
 
+/* Elementary inverse round primitives (in-place on state[16]) */
+void aes_inv_sub_bytes(uint8_t state[16]);
+void aes_inv_shift_rows(uint8_t state[16]);
+void aes_inv_mix_columns(uint8_t state[16]);
+
 /*
  * aes_encrypt_block_with_tap:
  * Executes reduced-round AES on a single 16-byte block with intermediate state taps.
@@ -88,6 +93,19 @@ void aes_encrypt_block_with_tap(
  * Standard reduced-round encryption conforming to PROJECT.md interface contract.
  */
 void aes_reduced_encrypt(
+    const uint8_t in[16],
+    const uint8_t key[16],
+    int rounds,
+    bool final_mix,
+    uint8_t out[16]
+);
+
+/*
+ * aes_reduced_decrypt:
+ * Standard reduced-round decryption inverting aes_reduced_encrypt.
+ * Zero heap allocations (0 B/op).
+ */
+void aes_reduced_decrypt(
     const uint8_t in[16],
     const uint8_t key[16],
     int rounds,
@@ -296,6 +314,207 @@ int aes_crypto_core_decompress_block64(
     const uint8_t *src,
     uint8_t *dst,
     bool is_balanced
+);
+
+/*
+ * Season 8 Cycle 1: Key Schedule Linearity, Subspace Trails & Adaptive Clustering API
+ */
+
+/* Key schedule linearity verification report */
+typedef struct {
+    size_t total_column_updates;
+    size_t linear_updates;
+    size_t nonlinear_updates;
+    double linearity_ratio; /* linear_updates / (double)total_column_updates, exactly 0.75 */
+    bool identity_holds;    /* true if W_{4r+c} ^ W_{4r+c-1} == W_{4(r-1)+c} for all c in {1,2,3} */
+} aes_key_linearity_report_t;
+
+void aes_verify_key_schedule_linearity(
+    const uint8_t key[16],
+    int rounds,
+    aes_key_linearity_report_t *report
+);
+
+/* Related-key differential propagation report across 5 rounds */
+typedef struct {
+    uint8_t delta_k[16];                /* Injected key difference */
+    uint8_t delta_p[16];                /* Injected plaintext difference */
+    int active_key_cols[6];             /* Active columns in Delta K_r for r=0..5 */
+    int active_data_bytes[6];           /* Active bytes in Delta X_r for r=0..5 */
+    int active_data_cols[6];            /* Active columns in Delta X_r for r=0..5 */
+    bool r0_column_canceled;            /* True if Delta X_0 has fewer active cols than Delta K_0 */
+    bool r1_columns_inactive;           /* True if Delta X_1 has cols 1..3 inactive (zero) */
+    int sbox_active_key_schedule_r1r2;  /* Total non-linear S-boxes activated in key schedule for r=1,2 */
+} aes_related_key_diff_report_t;
+
+void aes_evaluate_related_key_diff_5rounds(
+    const uint8_t key[16],
+    const uint8_t delta_w[4],
+    aes_related_key_diff_report_t *report
+);
+
+/* Grassi Multiple-of-8 subspace trail evaluation report */
+typedef struct {
+    int rounds;
+    bool final_mix;
+    int ensemble_trials;
+    int m8_satisfied_count;
+    double m8_satisfied_pct;
+    int non_m8_count;
+    uint32_t mod8_histogram[8]; /* Counts of (N_coll mod 8) in {0, 1, ..., 7} */
+    double chi2_uniform_mod8;   /* Chi2 against uniform distribution on Z_8 (df=7) */
+    double p_value_mod8;        /* p-value against uniform Z_8 */
+    bool property_persists;     /* True if m8_satisfied_pct > 99.0% */
+} aes_multiple_of_8_report_t;
+
+void aes_evaluate_multiple_of_8(
+    const uint8_t key[16],
+    int rounds,
+    bool final_mix,
+    int num_trials,
+    aes_multiple_of_8_report_t *report
+);
+
+/* Adaptive ciphertext clustering report */
+typedef struct {
+    int num_clusters;           /* Default K = 16 */
+    uint32_t cluster_counts[16];
+    double chi2_statistic;
+    double degrees_of_freedom;  /* K - 1 = 15 */
+    double z_score;             /* Wilson-Hilferty standardized score */
+    double p_value;             /* Right-tail p-value */
+    bool is_non_uniform;        /* True if p_value < 0.01 (rejection of uniform null hypothesis) */
+} aes_clustering_report_t;
+
+void aes_adaptive_cluster_5round(
+    const uint8_t blocks[][16],
+    size_t num_blocks,
+    aes_clustering_report_t *report
+);
+
+/*
+ * Season 8 Cycle 2: Multi-Round Related-Key Differential & Invariant Trails on 5 Rounds,
+ * and Related-Key Boomerang / Quartet Differential Transitions
+ */
+
+/* Multi-Round Related-Key Differential & Invariant Trail Report */
+typedef struct {
+    uint8_t delta_w[4];
+    uint8_t delta_k0[16];
+    uint8_t delta_p[16];
+    int ks_active_sboxes[6];       /* Active S-boxes in key schedule for rounds 0..5 (r=0 is 0) */
+    int ks_total_active_sboxes;    /* Total active S-boxes across 5 rounds (exactly 3) */
+    int active_key_cols[6];        /* Active columns in Delta K_r for r=0..5 */
+    int active_key_bytes[6];       /* Active bytes in Delta K_r for r=0..5 */
+    bool ks_row1_2_zero_r3;        /* Rows 1 & 2 strictly zero in Delta K_3 */
+    bool ks_row1_zero_r4;          /* Row 1 strictly zero in Delta K_4 */
+    int active_data_cols[6];       /* Active columns in data difference for r=0..5 */
+    int active_data_bytes[6];      /* Active bytes in data difference for r=0..5 */
+    bool r1_cols123_zero;          /* Columns 1..3 of Delta X_1 are strictly 0 (prob 1.0) */
+    bool r5_barrier_reached;       /* True if Rounds 4 & 5 achieve full 4-column diffusion */
+} aes_rk_trail_5round_report_t;
+
+void aes_evaluate_rk_trail_5rounds_cycle2(
+    const uint8_t key[16],
+    const uint8_t delta_w[4],
+    aes_rk_trail_5round_report_t *report
+);
+
+/* Related-Key Boomerang / Quartet evaluation report */
+typedef struct {
+    int rounds;
+    bool final_mix;
+    size_t num_quartets;
+    size_t exact_returns;          /* P3 ^ P4 == delta_p */
+    size_t col_returns[4];         /* (P3 ^ P4 ^ delta_p)[:, c] == 0 */
+    size_t byte_matches;           /* total matching bytes across quartets */
+    double exact_return_prob;
+    double col_return_prob[4];
+    double chi2_statistic;         /* Chi-squared test against uniform random noise floor */
+    double p_value;                /* p-value for hypothesis rejection */
+    bool distinguisher_valid;      /* True if statistically distinguishing with p < 0.01 */
+} aes_rk_boomerang_report_t;
+
+void aes_evaluate_rk_boomerang_cycle2(
+    int rounds,
+    bool final_mix,
+    size_t num_quartets,
+    aes_rk_boomerang_report_t *report
+);
+
+/*
+ * Season 8 Cycle 3: Adaptive Subspace Invariant Compression & Key-Harmonic Distinguishers
+ */
+
+#define PRZM_MAGIC_SUBSPACE_CODEC 0x53554253 /* 'S','U','B','S' */
+#define PRZM_SUBSPACE_HEADER_SIZE 16
+
+typedef enum {
+    AES_STREAM_INDEPENDENT_RANDOM = 0,
+    AES_STREAM_RELATED_KEY_R1     = 1, /* Columns 1..3 zero -> 12 bytes saved per 32B pair (37.5%) */
+    AES_STREAM_SUBSPACE_TRAIL     = 2, /* Columns 1, 3 zero -> 8 bytes saved per 32B pair (25.0%) */
+    AES_STREAM_ROUND5_DIFFUSED    = 3  /* 5-round fully diffused -> Delta H = 0, no compression */
+} aes_stream_regime_t;
+
+typedef struct {
+    aes_stream_regime_t regime;
+    size_t num_pairs;          /* Number of 32-byte block pairs */
+    size_t raw_bytes;
+    size_t compressed_bytes;
+    double compression_ratio;  /* compressed_bytes / (double)raw_bytes */
+    double byte_savings_pct;   /* (1.0 - compression_ratio) * 100.0 */
+    double shannon_entropy;    /* Empirical bits per byte */
+    double shannon_deficit;    /* Delta H = 8.0 - (effective bits per byte) */
+    bool exact_reconstruction; /* 100% bit-exact roundtrip verified */
+    bool shannon_boundary_obeyed; /* true if compression occurs iff Delta H > 0 */
+} aes_subspace_compression_report_t;
+
+int aes_subspace_compress(
+    const uint8_t *src,
+    size_t src_len,
+    aes_stream_regime_t regime,
+    uint8_t *dst,
+    size_t dst_cap,
+    size_t *out_len
+);
+
+int aes_subspace_decompress(
+    const uint8_t *src,
+    size_t src_len,
+    uint8_t *dst,
+    size_t dst_cap,
+    size_t *out_len
+);
+
+void aes_evaluate_subspace_compression_cycle3(
+    aes_stream_regime_t regime,
+    size_t num_pairs,
+    aes_subspace_compression_report_t *report
+);
+
+/*
+ * The Next-Level Transcendence Bounty (+300 pts):
+ * 7-Round Related-Key Differential Trail & Structural Invariants (82.14% Linearity Preservation)
+ */
+
+typedef struct {
+    uint8_t delta_w[4];
+    uint8_t delta_k0[16];
+    uint8_t delta_p[16];
+    int ks_active_sboxes[8];          /* Active S-boxes in key schedule for rounds 0..7 (rounds 1..7: 0, 0, 1, 1, 1, 1, 1) */
+    int ks_total_active_sboxes;       /* Exactly 5 active S-boxes across 7 rounds (82.14% linearity) */
+    int active_key_cols[8];           /* Active columns in Delta K_r for r=0..7 */
+    int active_key_bytes[8];          /* Active bytes in Delta K_r for r=0..7 */
+    bool ks_col3_row123_zero_r6;      /* Delta K_6 column 3 has rows 1..3 strictly zero (only row 0 active) */
+    bool ks_col3_row012_zero_r7;      /* Delta K_7 column 3 has rows 0..2 strictly zero (only row 3 active) */
+    int active_data_cols[8];          /* Active data columns for r=0..7 */
+    int active_data_bytes[8];         /* Active data bytes for r=0..7 */
+} aes_rk_trail_7round_report_t;
+
+void aes_evaluate_rk_trail_7rounds_transcendence(
+    const uint8_t key[16],
+    const uint8_t delta_w[4],
+    aes_rk_trail_7round_report_t *report
 );
 
 #ifdef __cplusplus

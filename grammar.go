@@ -817,6 +817,197 @@ func GGTCEncode(src []byte) ([]byte, error) {
 	return out, nil
 }
 
+// GGTCDecodeInto decodes a GGTC stream directly into a pre-allocated destination buffer.
+// Guarantees strictly zero heap allocations (0 allocs/op) when cap(dst) >= origSize + 16.
+func GGTCDecodeInto(dst, src []byte) (int, error) {
+	if len(src) == 0 {
+		return 0, nil
+	}
+	if len(src) < 16 {
+		return 0, ErrGGTCCorrupted
+	}
+
+	if src[0] != ggtcMagic0 || src[1] != ggtcMagic1 || src[2] != ggtcVer1 {
+		return 0, fmt.Errorf("%w: invalid GGTC signature", ErrGGTCCorrupted)
+	}
+
+	origSize := int(binary.LittleEndian.Uint32(src[4:8]))
+	if origSize == 0 {
+		return 0, nil
+	}
+	if len(dst) < origSize {
+		return 0, ErrGGTCOutputTooBig
+	}
+
+	axiomLen := int(binary.LittleEndian.Uint32(src[8:12]))
+	numL1 := int(src[12])
+	numL2 := int(src[13])
+	numL3 := int(src[14])
+
+	if numL1 > maxL1Rules || numL2 > maxL2Rules || numL3 > maxL3Rules {
+		return 0, ErrGGTCCorrupted
+	}
+
+	ptr := 16
+	rulesSize := (numL1 + numL2 + numL3) * 2
+	if ptr+rulesSize > len(src) {
+		return 0, ErrGGTCCorrupted
+	}
+
+	// Zero-allocation stack arrays for flat wave expansion
+	var expL1 [maxL1Rules]uint16
+	var expL2 [maxL2Rules]uint32
+	var expL3 [maxL3Rules]uint64
+
+	for i := 0; i < numL1; i++ {
+		expL1[i] = uint16(src[ptr]) | (uint16(src[ptr+1]) << 8)
+		ptr += 2
+	}
+
+	for j := 0; j < numL2; j++ {
+		l1a, l1b := int(src[ptr]), int(src[ptr+1])
+		if l1a >= numL1 || l1b >= numL1 {
+			return 0, ErrGGTCCorrupted
+		}
+		expL2[j] = uint32(expL1[l1a]) | (uint32(expL1[l1b]) << 16)
+		ptr += 2
+	}
+
+	for k := 0; k < numL3; k++ {
+		l2a, l2b := int(src[ptr]), int(src[ptr+1])
+		if l2a >= numL2 || l2b >= numL2 {
+			return 0, ErrGGTCCorrupted
+		}
+		expL3[k] = uint64(expL2[l2a]) | (uint64(expL2[l2b]) << 32)
+		ptr += 2
+	}
+
+	axiomStream := src[ptr:]
+	axPtr := 0
+	axEnd := len(axiomStream)
+
+	var pDst unsafe.Pointer
+	var copyBack []byte
+	if cap(dst) >= origSize+16 {
+		dst = dst[:origSize+16]
+		pDst = unsafe.Pointer(&dst[0])
+	} else {
+		buf := make([]byte, origSize+16)
+		pDst = unsafe.Pointer(&buf[0])
+		copyBack = buf
+	}
+
+	dstStart := uintptr(pDst)
+
+	for axPtr < axEnd {
+		op := axiomStream[axPtr]
+		axPtr++
+
+		if op < 0xD0 {
+			*(*byte)(pDst) = op
+			pDst = unsafe.Add(pDst, 1)
+			continue
+		}
+
+		if op >= 0xF0 && op <= 0xFB {
+			id := int(op - 0xF0)
+			if id >= numL3 {
+				return 0, ErrGGTCCorrupted
+			}
+			*(*uint64)(pDst) = expL3[id]
+			pDst = unsafe.Add(pDst, 8)
+			continue
+		}
+
+		if op >= 0xE0 && op <= 0xEF {
+			id := int(op - 0xE0)
+			if id >= numL2 {
+				return 0, ErrGGTCCorrupted
+			}
+			*(*uint32)(pDst) = expL2[id]
+			pDst = unsafe.Add(pDst, 4)
+			continue
+		}
+
+		if op >= 0xD0 && op <= 0xDF {
+			id := int(op - 0xD0)
+			if id >= numL1 {
+				return 0, ErrGGTCCorrupted
+			}
+			*(*uint16)(pDst) = expL1[id]
+			pDst = unsafe.Add(pDst, 2)
+			continue
+		}
+
+		if op == 0xFF {
+			if axPtr >= axEnd {
+				return 0, ErrGGTCCorrupted
+			}
+			raw := axiomStream[axPtr]
+			axPtr++
+			*(*byte)(pDst) = raw
+			pDst = unsafe.Add(pDst, 1)
+			continue
+		}
+
+		if op == 0xFE {
+			if axPtr >= axEnd {
+				return 0, ErrGGTCCorrupted
+			}
+			id := int(axiomStream[axPtr])
+			axPtr++
+			if id >= numL3 {
+				return 0, ErrGGTCCorrupted
+			}
+			*(*uint64)(pDst) = expL3[id]
+			pDst = unsafe.Add(pDst, 8)
+			continue
+		}
+
+		if op == 0xFD {
+			if axPtr >= axEnd {
+				return 0, ErrGGTCCorrupted
+			}
+			id := int(axiomStream[axPtr])
+			axPtr++
+			if id >= numL2 {
+				return 0, ErrGGTCCorrupted
+			}
+			*(*uint32)(pDst) = expL2[id]
+			pDst = unsafe.Add(pDst, 4)
+			continue
+		}
+
+		if op == 0xFC {
+			if axPtr >= axEnd {
+				return 0, ErrGGTCCorrupted
+			}
+			id := int(axiomStream[axPtr])
+			axPtr++
+			if id >= numL1 {
+				return 0, ErrGGTCCorrupted
+			}
+			*(*uint16)(pDst) = expL1[id]
+			pDst = unsafe.Add(pDst, 2)
+			continue
+		}
+
+		return 0, ErrGGTCCorrupted
+	}
+
+	dstPos := int(uintptr(pDst) - dstStart)
+	if dstPos != origSize {
+		return 0, fmt.Errorf("%w: decoded %d bytes, want %d (axiomLen=%d)",
+			ErrGGTCSizeMismatch, dstPos, origSize, axiomLen)
+	}
+
+	if copyBack != nil {
+		copy(dst, copyBack[:origSize])
+	}
+
+	return origSize, nil
+}
+
 // GGTCDecode performs Zero-Stack SIMD Wave Expansion of a GGTC stream back to original bytes.
 // Guarantees O(N) execution with direct 64-bit and 32-bit vector stores and zero recursion.
 func GGTCDecode(src []byte) ([]byte, error) {
@@ -832,155 +1023,14 @@ func GGTCDecode(src []byte) ([]byte, error) {
 	}
 
 	origSize := int(binary.LittleEndian.Uint32(src[4:8]))
-	axiomLen := int(binary.LittleEndian.Uint32(src[8:12]))
-
-	numL1 := int(src[12])
-	numL2 := int(src[13])
-	numL3 := int(src[14])
-
-	ptr := 16
-	rulesSize := numL1*2 + numL2*2 + numL3*2
-	if ptr+rulesSize > len(src) {
-		return nil, ErrGGTCCorrupted
+	if origSize == 0 {
+		return []byte{}, nil
 	}
 
-	var g GrammarH_DAG
-	g.L1 = make([]RuleL1, numL1)
-	for i := range numL1 {
-		g.L1[i] = RuleL1{U: src[ptr], V: src[ptr+1]}
-		ptr += 2
-	}
-
-	g.L2 = make([]RuleL2, numL2)
-	for i := range numL2 {
-		g.L2[i] = RuleL2{L1A: src[ptr], L1B: src[ptr+1]}
-		ptr += 2
-	}
-
-	g.L3 = make([]RuleL3, numL3)
-	for i := range numL3 {
-		g.L3[i] = RuleL3{L2A: src[ptr], L2B: src[ptr+1]}
-		ptr += 2
-	}
-
-	// Precalculate 64-bit flat wave expansion tables
-	g.BuildExpansionTables()
-
-	// Allocate output with 16 bytes safety padding for 64-bit vector stores
 	dst := make([]byte, origSize+16)
-	dstPtr := unsafe.Pointer(&dst[0])
-	dstPos := 0
-	tokensRead := 0
-
-	axiomStream := src[ptr:]
-	axPtr := 0
-
-	// ==========================================
-	// Zero-Stack Flat SIMD Wave Expansion Loop
-	// ==========================================
-	pDst := dstPtr
-	axEnd := len(axiomStream)
-
-	for axPtr < axEnd {
-		op := axiomStream[axPtr]
-		axPtr++
-
-		if op < 0xD0 {
-			*(*byte)(pDst) = op
-			pDst = unsafe.Add(pDst, 1)
-			continue
-		}
-
-		if op >= 0xF0 && op <= 0xFB {
-			id := int(op - 0xF0)
-			if id >= len(g.L3) {
-				return nil, ErrGGTCCorrupted
-			}
-			*(*uint64)(pDst) = g.ExpL3[id]
-			pDst = unsafe.Add(pDst, 8)
-			continue
-		}
-
-		if op >= 0xE0 && op <= 0xEF {
-			id := int(op - 0xE0)
-			if id >= len(g.L2) {
-				return nil, ErrGGTCCorrupted
-			}
-			*(*uint32)(pDst) = g.ExpL2[id]
-			pDst = unsafe.Add(pDst, 4)
-			continue
-		}
-
-		if op >= 0xD0 && op <= 0xDF {
-			id := int(op - 0xD0)
-			if id >= len(g.L1) {
-				return nil, ErrGGTCCorrupted
-			}
-			*(*uint16)(pDst) = g.ExpL1[id]
-			pDst = unsafe.Add(pDst, 2)
-			continue
-		}
-
-		if op == 0xFF {
-			if axPtr >= axEnd {
-				return nil, ErrGGTCCorrupted
-			}
-			raw := axiomStream[axPtr]
-			axPtr++
-			*(*byte)(pDst) = raw
-			pDst = unsafe.Add(pDst, 1)
-			continue
-		}
-
-		if op == 0xFE {
-			if axPtr >= axEnd {
-				return nil, ErrGGTCCorrupted
-			}
-			id := int(axiomStream[axPtr])
-			axPtr++
-			if id >= len(g.L3) {
-				return nil, ErrGGTCCorrupted
-			}
-			*(*uint64)(pDst) = g.ExpL3[id]
-			pDst = unsafe.Add(pDst, 8)
-			continue
-		}
-
-		if op == 0xFD {
-			if axPtr >= axEnd {
-				return nil, ErrGGTCCorrupted
-			}
-			id := int(axiomStream[axPtr])
-			axPtr++
-			if id >= len(g.L2) {
-				return nil, ErrGGTCCorrupted
-			}
-			*(*uint32)(pDst) = g.ExpL2[id]
-			pDst = unsafe.Add(pDst, 4)
-			continue
-		}
-
-		if op == 0xFC {
-			if axPtr >= axEnd {
-				return nil, ErrGGTCCorrupted
-			}
-			id := int(axiomStream[axPtr])
-			axPtr++
-			if id >= len(g.L1) {
-				return nil, ErrGGTCCorrupted
-			}
-			*(*uint16)(pDst) = g.ExpL1[id]
-			pDst = unsafe.Add(pDst, 2)
-			continue
-		}
+	n, err := GGTCDecodeInto(dst, src)
+	if err != nil {
+		return nil, err
 	}
-
-	dstPos = int(uintptr(pDst) - uintptr(dstPtr))
-
-	if dstPos != origSize {
-		return nil, fmt.Errorf("%w: decoded %d bytes, want %d (tokens=%d/%d)",
-			ErrGGTCSizeMismatch, dstPos, origSize, tokensRead, axiomLen)
-	}
-
-	return dst[:origSize], nil
+	return dst[:n], nil
 }

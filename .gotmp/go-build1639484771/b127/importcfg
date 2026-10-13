@@ -1,0 +1,12 @@
+# import config
+packagefile bytes=C:\Users\senya\AppData\Local\go-build\b3\b3c8933b5af35a885f84447f65191f6aff2af0091adb2bd7064a6792888b022d-d
+packagefile embed=C:\Users\senya\AppData\Local\go-build\36\36329778cb4382796d6ec41b03696388ac6a0f286153325c0dfbbce52814dc61-d
+packagefile encoding/binary=C:\Users\senya\AppData\Local\go-build\c4\c445144f405504d6e18c5aede043daf7ffed9855c8eba7bdf1295ee4a2c7a7c7-d
+packagefile errors=C:\Users\senya\AppData\Local\go-build\70\701108f18215d941acd5bbc1b55ddb2e61c229a2ce5576cd6720571bf3563d01-d
+packagefile fmt=C:\Users\senya\AppData\Local\go-build\9f\9fde0dced106095e048baa7db2f24f8b793d65abf994f01406b10716e77cf77c-d
+packagefile os=C:\Users\senya\AppData\Local\go-build\93\933c55e2d66af1755f47809758e26787b7fd58d9bc23e945125ffc91326f920e-d
+packagefile runtime=C:\Users\senya\AppData\Local\go-build\f9\f9659d9060ed97e7c753be4adf2cb002f2fcf9b33a2f0fde630459e0627ab308-d
+packagefile sort=C:\Users\senya\AppData\Local\go-build\9a\9ade2dcb7cfe95c4673326f82e4a5376b7260ee26f093950801b5f08d0d59e0d-d
+packagefile sync=C:\Users\senya\AppData\Local\go-build\49\49fc8e77892010480c9e820a9a0dd420a6b655eb0eb5e540867dc61f2f7cea9f-d
+packagefile sync/atomic=C:\Users\senya\AppData\Local\go-build\96\96462c4358dde6de046ebbe4b59228c3b9ebfd57965d0ee302b518c8feb11371-d
+packagefile syscall=C:\Users\senya\AppData\Local\go-build\e7\e752ce123c97aa3be3c7c6c1b81333a455444a68098f5d062a9f6cdc63d10895-d

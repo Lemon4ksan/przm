@@ -671,15 +671,15 @@ static int deserialize_vans_matrix(const uint8_t* src, size_t src_len, VANSModel
     return PRZM_OK;
 }
 
-static const uint8_t przm_sheaf_context_lut[256] = {
+static const uint8_t przm_sheaf_context_lut0[256] = {
     3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 3, 3, 0, 3, 3, 
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
-    0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 
-    3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
-    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 3, 
-    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 3, 
+    0, 1, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 2, 
+    1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 3, 
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
@@ -690,12 +690,62 @@ static const uint8_t przm_sheaf_context_lut[256] = {
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
 };
 
-PRZM_INLINE void sheaf_context_interleave4(
+static const uint8_t przm_sheaf_context_lut1[256] = {
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 0, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1, 
+    3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+};
+
+static const uint8_t przm_sheaf_context_lut2[256] = {
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+};
+
+PRZM_INLINE uint8_t przm_sheaf_order2_context(uint8_t p2, uint8_t p1) {
+    if (p1 >= '0' && p1 <= '9') {
+        return ((p2 >= '0' && p2 <= '9') || p2 == '.' || p2 == '-') ? 0 : 1;
+    }
+    if ((p1 >= 'a' && p1 <= 'z') || p1 == '_') {
+        return ((p2 >= 'a' && p2 <= 'z') || p2 == '_') ? 2 : 3;
+    }
+    if (p1 == ' ' || p1 == '\t' || p1 == '\r' || p1 == '\n') return 0;
+    return 1;
+}
+
+PRZM_INLINE void sheaf_context_interleave4_mode(
     uint8_t* dst, size_t n,
     const uint8_t* f0,
     const uint8_t* f1,
     const uint8_t* f2,
-    const uint8_t* f3)
+    const uint8_t* f3,
+    uint8_t mode)
 {
     const uint8_t* p0 = f0;
     const uint8_t* p1 = f1;
@@ -703,43 +753,258 @@ PRZM_INLINE void sheaf_context_interleave4(
     const uint8_t* p3 = f3;
     uint8_t* d = dst;
     uint8_t* d_end = dst + n;
-    uint8_t prev = 0;
+    uint8_t prev1 = 0;
+    uint8_t prev2 = 0;
 
-    while (d + 8 <= d_end) {
-        #define STEP(k) \
-            uint8_t c##k = przm_sheaf_context_lut[prev]; \
-            uint8_t b##k; \
-            switch (c##k) { \
-            case 0: b##k = *p0++; break; \
-            case 1: b##k = *p1++; break; \
-            case 2: b##k = *p2++; break; \
-            default: b##k = *p3++; break; \
-            } \
-            *d++ = b##k; \
-            prev = b##k;
+    const uint8_t* lut = przm_sheaf_context_lut0;
+    if (mode == PRZM_CTX_MODE_JSON_DENSE) lut = przm_sheaf_context_lut1;
+    else if (mode == PRZM_CTX_MODE_2PHASE) lut = przm_sheaf_context_lut2;
 
-        STEP(0)
-        STEP(1)
-        STEP(2)
-        STEP(3)
-        STEP(4)
-        STEP(5)
-        STEP(6)
-        STEP(7)
-        #undef STEP
-    }
-    while (d < d_end) {
-        uint8_t c = przm_sheaf_context_lut[prev];
-        uint8_t b;
-        switch (c) {
-        case 0: b = *p0++; break;
-        case 1: b = *p1++; break;
-        case 2: b = *p2++; break;
-        default: b = *p3++; break;
+    if (mode == PRZM_CTX_MODE_ORDER2) {
+        while (d < d_end) {
+            uint8_t c = przm_sheaf_order2_context(prev2, prev1);
+            uint8_t b;
+            switch (c) {
+            case 0: b = *p0++; break;
+            case 1: b = *p1++; break;
+            case 2: b = *p2++; break;
+            default: b = *p3++; break;
+            }
+            *d++ = b;
+            prev2 = prev1;
+            prev1 = b;
         }
-        *d++ = b;
-        prev = b;
+    } else {
+        while (d + 8 <= d_end) {
+            #define STEP(k) \
+                uint8_t c##k = lut[prev1]; \
+                uint8_t b##k; \
+                switch (c##k) { \
+                case 0: b##k = *p0++; break; \
+                case 1: b##k = *p1++; break; \
+                case 2: b##k = *p2++; break; \
+                default: b##k = *p3++; break; \
+                } \
+                *d++ = b##k; \
+                prev1 = b##k;
+
+            STEP(0)
+            STEP(1)
+            STEP(2)
+            STEP(3)
+            STEP(4)
+            STEP(5)
+            STEP(6)
+            STEP(7)
+            #undef STEP
+        }
+        while (d < d_end) {
+            uint8_t c = lut[prev1];
+            uint8_t b;
+            switch (c) {
+            case 0: b = *p0++; break;
+            case 1: b = *p1++; break;
+            case 2: b = *p2++; break;
+            default: b = *p3++; break;
+            }
+            *d++ = b;
+            prev1 = b;
+        }
     }
+}
+
+static const uint16_t przm_static_context_freq[8][256] = {
+    { /* Context 0 */
+        3, 2, 2, 2, 2, 2, 2, 2, 2, 19, 54, 2, 2, 2, 2, 2, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        168, 23, 21, 26, 9, 7, 69, 15, 163, 18, 94, 122, 14, 52, 11, 58, 
+        84, 144, 68, 46, 76, 30, 23, 9, 43, 8, 14, 8, 73, 177, 50, 11, 
+        3, 34, 34, 54, 25, 11, 23, 30, 27, 29, 9, 9, 40, 40, 14, 11, 
+        37, 5, 25, 44, 22, 16, 9, 12, 7, 5, 7, 18, 12, 4, 22, 8, 
+        12, 65, 75, 71, 51, 40, 69, 19, 27, 100, 18, 15, 37, 40, 29, 39, 
+        68, 12, 54, 91, 75, 23, 39, 26, 8, 7, 7, 30, 82, 39, 4, 2, 
+        3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 3, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    },
+    { /* Context 1 */
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 255, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        772, 14, 40, 7, 13, 3, 9, 46, 38, 90, 26, 32, 123, 30, 38, 18, 
+        59, 150, 96, 69, 53, 36, 34, 24, 18, 18, 24, 133, 22, 42, 26, 5, 
+        5, 16, 16, 24, 16, 13, 24, 11, 9, 13, 3, 3, 9, 26, 7, 11, 
+        26, 5, 28, 13, 14, 11, 7, 13, 5, 5, 11, 13, 5, 30, 16, 22, 
+        24, 28, 57, 57, 30, 18, 22, 18, 32, 79, 16, 7, 46, 32, 13, 26, 
+        24, 11, 36, 57, 24, 30, 20, 14, 16, 14, 11, 11, 5, 36, 5, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        5, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 5, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    },
+    { /* Context 2 */
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 64, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        1134, 10, 10, 3, 6, 4, 75, 10, 15, 59, 176, 68, 35, 44, 12, 77, 
+        35, 21, 62, 26, 26, 10, 17, 8, 19, 8, 17, 73, 59, 236, 79, 10, 
+        4, 33, 12, 19, 8, 15, 15, 6, 17, 10, 6, 4, 15, 26, 12, 15, 
+        15, 4, 12, 26, 15, 8, 8, 15, 6, 6, 6, 24, 6, 28, 10, 19, 
+        8, 21, 53, 46, 26, 21, 19, 12, 10, 35, 6, 6, 37, 17, 10, 28, 
+        39, 3, 17, 48, 12, 12, 15, 8, 3, 8, 3, 3, 104, 37, 3, 3, 
+        4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 6, 3, 3, 3, 
+        3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 
+    },
+    { /* Context 3 */
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 11, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        204, 3, 4, 2, 6, 4, 4, 6, 11, 14, 4, 8, 17, 33, 7, 10, 
+        21, 22, 13, 17, 16, 11, 12, 13, 15, 11, 6, 6, 6, 7, 4, 3, 
+        2, 7, 10, 9, 3, 2, 6, 4, 4, 4, 2, 2, 6, 6, 2, 3, 
+        10, 4, 3, 7, 4, 2, 2, 2, 3, 2, 2, 5, 3, 15, 2, 28, 
+        6, 104, 49, 178, 200, 51, 131, 70, 9, 76, 4, 20, 274, 134, 485, 69, 
+        110, 11, 327, 252, 279, 49, 62, 31, 37, 15, 31, 2, 2, 7, 2, 2, 
+        2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+    },
+    { /* Context 4 */
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 21, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        418, 8, 11, 3, 3, 5, 2, 3, 27, 39, 16, 15, 47, 31, 16, 13, 
+        40, 39, 24, 27, 22, 17, 19, 12, 22, 8, 7, 19, 6, 7, 4, 2, 
+        2, 5, 4, 7, 4, 4, 7, 6, 6, 3, 2, 2, 6, 7, 3, 4, 
+        5, 2, 7, 4, 4, 2, 4, 4, 2, 2, 2, 19, 2, 9, 2, 90, 
+        8, 263, 33, 95, 85, 491, 47, 42, 79, 273, 6, 22, 106, 55, 37, 216, 
+        55, 5, 141, 141, 208, 101, 16, 11, 10, 64, 16, 4, 4, 7, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 3, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+    },
+    { /* Context 5 */
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 7, 2, 2, 2, 2, 2, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+        194, 4, 11, 3, 5, 8, 3, 34, 17, 44, 7, 15, 24, 25, 5, 11, 
+        21, 58, 34, 21, 36, 29, 19, 7, 17, 15, 17, 16, 4, 5, 8, 4, 
+        3, 152, 48, 101, 116, 209, 58, 54, 39, 94, 12, 20, 131, 82, 98, 112, 
+        79, 11, 159, 163, 127, 65, 23, 42, 32, 17, 24, 3, 5, 4, 7, 146, 
+        5, 86, 8, 11, 12, 97, 5, 7, 38, 70, 2, 2, 27, 7, 39, 98, 
+        35, 2, 48, 25, 19, 51, 12, 5, 12, 17, 2, 7, 5, 12, 2, 2, 
+        2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 7, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 
+    },
+    { /* Context 6 */
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 16, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        159, 6, 4, 2, 6, 6, 2, 6, 15, 73, 7, 10, 50, 25, 88, 19, 
+        233, 335, 378, 310, 360, 190, 234, 155, 188, 133, 7, 41, 6, 6, 5, 3, 
+        2, 13, 12, 16, 23, 11, 23, 10, 8, 6, 2, 4, 2, 5, 5, 5, 
+        12, 2, 4, 14, 6, 17, 8, 4, 6, 2, 2, 15, 2, 41, 6, 34, 
+        4, 31, 36, 33, 30, 28, 28, 3, 3, 19, 3, 6, 4, 7, 6, 9, 
+        11, 2, 12, 16, 4, 6, 6, 6, 28, 2, 2, 2, 4, 19, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 6, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 
+    },
+    { /* Context 7 */
+        6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 20, 6, 6, 6, 6, 6, 
+        6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 
+        163, 6, 10, 44, 6, 6, 10, 6, 25, 53, 15, 6, 29, 20, 20, 15, 
+        39, 29, 29, 25, 20, 25, 20, 6, 10, 6, 39, 6, 6, 25, 6, 6, 
+        6, 6, 53, 29, 25, 15, 34, 15, 48, 25, 6, 6, 48, 53, 15, 29, 
+        58, 10, 39, 68, 25, 15, 15, 15, 6, 6, 6, 15, 25, 6, 6, 72, 
+        53, 39, 72, 96, 77, 48, 48, 15, 20, 101, 6, 25, 106, 63, 34, 25, 
+        48, 6, 15, 130, 234, 53, 39, 6, 15, 6, 6, 20, 6, 6, 6, 6, 
+        48, 15, 6, 10, 6, 6, 6, 6, 6, 10, 6, 6, 6, 6, 6, 6, 
+        6, 6, 6, 34, 25, 6, 6, 6, 6, 6, 6, 6, 10, 6, 6, 6, 
+        10, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 5, 5, 5, 5, 
+        5, 5, 5, 5, 5, 5, 20, 5, 10, 10, 10, 5, 5, 5, 5, 5, 
+        6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 
+        20, 20, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 
+        6, 6, 15, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 
+        6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 
+    },
+};
+
+static uint8_t przm_sheaf_context8_lut[256];
+static VANSModel przm_static_context_models[8];
+static volatile int przm_static_context_models_initialized = 0;
+
+static void przm_init_static_context_models(void) {
+    if (przm_static_context_models_initialized) return;
+
+    for (int i = 0; i < 256; i++) {
+        uint8_t b = (uint8_t)i;
+        uint8_t cls = 7;
+        if (b == ' ' || b == '\t' || b == '\n' || b == '\r') {
+            cls = 0;
+        } else if (b == '(' || b == ')' || b == '{' || b == '}' || b == '[' || b == ']' ||
+                   b == ';' || b == ',' || b == '.' || b == ':' || b == '"' || b == '\'') {
+            cls = 1;
+        } else if (b == '=' || b == '+' || b == '-' || b == '*' || b == '/' || b == '%' ||
+                   b == '&' || b == '|' || b == '^' || b == '!' || b == '<' || b == '>' || b == '~' || b == '?') {
+            cls = 2;
+        } else if (b == 'a' || b == 'e' || b == 'i' || b == 'o' || b == 'u') {
+            cls = 3;
+        } else if (b >= 'a' && b <= 'z') {
+            cls = 4;
+        } else if (b >= 'A' && b <= 'Z') {
+            cls = 5;
+        } else if (b >= '0' && b <= '9') {
+            cls = 6;
+        }
+        przm_sheaf_context8_lut[i] = cls;
+    }
+
+    for (int c = 0; c < 8; c++) {
+        memcpy(przm_static_context_models[c].freq, przm_static_context_freq[c], sizeof(przm_static_context_freq[c]));
+        uint32_t cdf = 0;
+        for (int s = 0; s < 256; s++) {
+            przm_static_context_models[c].cdf[s] = (uint16_t)cdf;
+            uint32_t f = przm_static_context_models[c].freq[s];
+            for (uint32_t j = 0; j < f; j++) {
+                przm_static_context_models[c].lookup[cdf + j] = (uint8_t)s;
+            }
+            cdf += f;
+        }
+        przm_static_context_models[c].cdf[256] = (uint16_t)cdf;
+    }
+
+    przm_static_context_models_initialized = 1;
 }
 
 static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_t orig_len) {
@@ -749,6 +1014,68 @@ static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_
     }
 
     uint8_t flags = src[3];
+    if ((flags & PRZM_VANS_FLAG_CTX_ORDER1) != 0) {
+        if (src_len < 24) return PRZM_ERR_CORRUPTED_FRAME;
+        uint32_t header_orig = read_u32_le(src + 4);
+        if (header_orig != (uint32_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        if (orig_len == 0) return PRZM_OK;
+
+        przm_init_static_context_models();
+
+        uint32_t x[4];
+        x[0] = read_u32_le(src + 8);
+        x[1] = read_u32_le(src + 12);
+        x[2] = read_u32_le(src + 16);
+        x[3] = read_u32_le(src + 20);
+
+        size_t stream_ptr = 24;
+        uint8_t prev = 0;
+
+        size_t i = 0;
+        size_t limit = (orig_len >= 4) ? orig_len - 3 : 0;
+        for (; i < limit; i += 4) {
+            #define DECODE_CTX_LANE(lane, offset) do { \
+                uint8_t ctx = przm_sheaf_context8_lut[prev]; \
+                const VANSModel* m = &przm_static_context_models[ctx]; \
+                uint32_t slot = x[lane] & (VANS_M - 1); \
+                uint8_t s = m->lookup[slot]; \
+                dst[i + (offset)] = s; \
+                prev = s; \
+                uint32_t f = m->freq[s]; \
+                uint32_t c = m->cdf[s]; \
+                x[lane] = f * (x[lane] >> 12) + (slot - c); \
+                while (x[lane] < VANS_L) { \
+                    if (stream_ptr >= src_len) return PRZM_ERR_CORRUPTED_FRAME; \
+                    x[lane] = (x[lane] << 8) | (uint32_t)src[stream_ptr++]; \
+                } \
+            } while (0)
+
+            DECODE_CTX_LANE(0, 0);
+            DECODE_CTX_LANE(1, 1);
+            DECODE_CTX_LANE(2, 2);
+            DECODE_CTX_LANE(3, 3);
+            #undef DECODE_CTX_LANE
+        }
+        for (; i < orig_len; i++) {
+            int lane = (int)(i & 3);
+            uint8_t ctx = przm_sheaf_context8_lut[prev];
+            const VANSModel* m = &przm_static_context_models[ctx];
+            uint32_t slot = x[lane] & (VANS_M - 1);
+            uint8_t s = m->lookup[slot];
+            dst[i] = s;
+            prev = s;
+            uint32_t f = m->freq[s];
+            uint32_t c = m->cdf[s];
+            x[lane] = f * (x[lane] >> 12) + (slot - c);
+            while (x[lane] < VANS_L) {
+                if (stream_ptr >= src_len) return PRZM_ERR_CORRUPTED_FRAME;
+                x[lane] = (x[lane] << 8) | (uint32_t)src[stream_ptr++];
+            }
+        }
+
+        return PRZM_OK;
+    }
     if ((flags & PRZM_VANS_FLAG_CTX_SHEAF) != 0) {
         if (src_len < 40) return PRZM_ERR_CORRUPTED_FRAME;
         uint32_t header_orig = read_u32_le(src + 4);
@@ -785,30 +1112,47 @@ static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_
         size_t off = 40;
         if (flen0 > 0) {
             if (enclen0 == 0) return PRZM_ERR_CORRUPTED_FRAME;
-            int err = vans_decode4x(src + off, enclen0, f0, flen0);
-            if (err != PRZM_OK) return err;
+            if (enclen0 == flen0) {
+                memcpy(f0, src + off, flen0);
+            } else {
+                int err = vans_decode4x(src + off, enclen0, f0, flen0);
+                if (err != PRZM_OK) return err;
+            }
             off += enclen0;
         }
         if (flen1 > 0) {
             if (enclen1 == 0) return PRZM_ERR_CORRUPTED_FRAME;
-            int err = vans_decode4x(src + off, enclen1, f1, flen1);
-            if (err != PRZM_OK) return err;
+            if (enclen1 == flen1) {
+                memcpy(f1, src + off, flen1);
+            } else {
+                int err = vans_decode4x(src + off, enclen1, f1, flen1);
+                if (err != PRZM_OK) return err;
+            }
             off += enclen1;
         }
         if (flen2 > 0) {
             if (enclen2 == 0) return PRZM_ERR_CORRUPTED_FRAME;
-            int err = vans_decode4x(src + off, enclen2, f2, flen2);
-            if (err != PRZM_OK) return err;
+            if (enclen2 == flen2) {
+                memcpy(f2, src + off, flen2);
+            } else {
+                int err = vans_decode4x(src + off, enclen2, f2, flen2);
+                if (err != PRZM_OK) return err;
+            }
             off += enclen2;
         }
         if (flen3 > 0) {
             if (enclen3 == 0) return PRZM_ERR_CORRUPTED_FRAME;
-            int err = vans_decode4x(src + off, enclen3, f3, flen3);
-            if (err != PRZM_OK) return err;
+            if (enclen3 == flen3) {
+                memcpy(f3, src + off, flen3);
+            } else {
+                int err = vans_decode4x(src + off, enclen3, f3, flen3);
+                if (err != PRZM_OK) return err;
+            }
             off += enclen3;
         }
 
-        sheaf_context_interleave4(dst, orig_len, f0, f1, f2, f3);
+        uint8_t mode = (flags >> PRZM_CTX_MODE_SHIFT) & 0x0F;
+        sheaf_context_interleave4_mode(dst, orig_len, f0, f1, f2, f3, mode);
         return PRZM_OK;
     }
 
@@ -1141,6 +1485,160 @@ static int pws_decode(const uint8_t* src, size_t src_len, uint8_t* dst, size_t d
         }
         memcpy(tls_split_scratch, dst, orig_size);
         untranspose_stride(tls_split_scratch, dst, orig_size, stride);
+    }
+
+    return (int64_t)orig_size;
+}
+
+/* ============================================================================
+ * 12c. Grammar-Graph Tensor Compression (GGTC) 3-Layer Stratified H-DAG Decoder
+ * ============================================================================ */
+
+#define GGTC_MAX_L1 64
+#define GGTC_MAX_L2 32
+#define GGTC_MAX_L3 16
+
+int64_t przm_ggtc_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_cap) {
+    if (src_len == 0) return 0;
+    if (src == NULL || dst == NULL || src_len < 16) return PRZM_ERR_CORRUPTED_FRAME;
+
+    if (src[0] != PRZM_MAGIC_GGTC_0 || src[1] != PRZM_MAGIC_GGTC_1 || src[2] != PRZM_VERSION_1) {
+        return PRZM_ERR_INVALID_MAGIC;
+    }
+
+    uint32_t orig_size = read_u32_le(src + 4);
+    if (orig_size > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+    if (orig_size == 0) return 0;
+    if (dst_cap < (size_t)orig_size + PRZM_SAFETY_PADDING) return PRZM_ERR_BUFFER_TOO_SMALL;
+
+    /* Axiom token count from header */
+    uint32_t axiom_len = read_u32_le(src + 8);
+    (void)axiom_len;
+
+    uint8_t num_l1 = src[12];
+    uint8_t num_l2 = src[13];
+    uint8_t num_l3 = src[14];
+
+    if (num_l1 > GGTC_MAX_L1 || num_l2 > GGTC_MAX_L2 || num_l3 > GGTC_MAX_L3) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    size_t rules_size = ((size_t)num_l1 + (size_t)num_l2 + (size_t)num_l3) * 2;
+    if (16 + rules_size > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+    uint16_t exp_l1[GGTC_MAX_L1];
+    uint32_t exp_l2[GGTC_MAX_L2];
+    uint64_t exp_l3[GGTC_MAX_L3];
+
+    size_t ptr = 16;
+
+    /* 1. Build Layer 1 (2 bytes = [U, V]) */
+    for (uint8_t i = 0; i < num_l1; i++) {
+        uint8_t u = src[ptr];
+        uint8_t v = src[ptr + 1];
+        exp_l1[i] = (uint16_t)u | ((uint16_t)v << 8);
+        ptr += 2;
+    }
+
+    /* 2. Build Layer 2 (4 bytes = 2 * L1) */
+    for (uint8_t j = 0; j < num_l2; j++) {
+        uint8_t l1a = src[ptr];
+        uint8_t l1b = src[ptr + 1];
+        if (l1a >= num_l1 || l1b >= num_l1) return PRZM_ERR_CORRUPTED_FRAME;
+        uint32_t w0 = (uint32_t)exp_l1[l1a];
+        uint32_t w1 = (uint32_t)exp_l1[l1b];
+        exp_l2[j] = w0 | (w1 << 16);
+        ptr += 2;
+    }
+
+    /* 3. Build Layer 3 (8 bytes = 2 * L2) */
+    for (uint8_t k = 0; k < num_l3; k++) {
+        uint8_t l2a = src[ptr];
+        uint8_t l2b = src[ptr + 1];
+        if (l2a >= num_l2 || l2b >= num_l2) return PRZM_ERR_CORRUPTED_FRAME;
+        uint64_t d0 = (uint64_t)exp_l2[l2a];
+        uint64_t d1 = (uint64_t)exp_l2[l2b];
+        exp_l3[k] = d0 | (d1 << 32);
+        ptr += 2;
+    }
+
+    /* Zero-Stack SIMD Wave Expansion of Axiom Token Stream */
+    const uint8_t* ax_stream = src + ptr;
+    size_t ax_len = src_len - ptr;
+    size_t ax_ptr = 0;
+    size_t dst_pos = 0;
+
+    while (ax_ptr < ax_len) {
+        uint8_t op = ax_stream[ax_ptr++];
+
+        if (op < 0xD0) {
+            if (dst_pos + 1 > orig_size) return PRZM_ERR_CORRUPTED_FRAME;
+            dst[dst_pos++] = op;
+            continue;
+        }
+
+        if (op >= 0xF0 && op <= 0xFB) {
+            uint8_t id = op - 0xF0;
+            if (id >= num_l3 || dst_pos + 8 > orig_size) return PRZM_ERR_CORRUPTED_FRAME;
+            write_u64_le(dst + dst_pos, exp_l3[id]);
+            dst_pos += 8;
+            continue;
+        }
+
+        if (op >= 0xE0 && op <= 0xEF) {
+            uint8_t id = op - 0xE0;
+            if (id >= num_l2 || dst_pos + 4 > orig_size) return PRZM_ERR_CORRUPTED_FRAME;
+            write_u32_le(dst + dst_pos, exp_l2[id]);
+            dst_pos += 4;
+            continue;
+        }
+
+        if (op >= 0xD0 && op <= 0xDF) {
+            uint8_t id = op - 0xD0;
+            if (id >= num_l1 || dst_pos + 2 > orig_size) return PRZM_ERR_CORRUPTED_FRAME;
+            write_u16_le(dst + dst_pos, exp_l1[id]);
+            dst_pos += 2;
+            continue;
+        }
+
+        if (op == 0xFF) {
+            if (ax_ptr >= ax_len || dst_pos + 1 > orig_size) return PRZM_ERR_CORRUPTED_FRAME;
+            dst[dst_pos++] = ax_stream[ax_ptr++];
+            continue;
+        }
+
+        if (op == 0xFE) {
+            if (ax_ptr >= ax_len) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t id = ax_stream[ax_ptr++];
+            if (id >= num_l3 || dst_pos + 8 > orig_size) return PRZM_ERR_CORRUPTED_FRAME;
+            write_u64_le(dst + dst_pos, exp_l3[id]);
+            dst_pos += 8;
+            continue;
+        }
+
+        if (op == 0xFD) {
+            if (ax_ptr >= ax_len) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t id = ax_stream[ax_ptr++];
+            if (id >= num_l2 || dst_pos + 4 > orig_size) return PRZM_ERR_CORRUPTED_FRAME;
+            write_u32_le(dst + dst_pos, exp_l2[id]);
+            dst_pos += 4;
+            continue;
+        }
+
+        if (op == 0xFC) {
+            if (ax_ptr >= ax_len) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t id = ax_stream[ax_ptr++];
+            if (id >= num_l1 || dst_pos + 2 > orig_size) return PRZM_ERR_CORRUPTED_FRAME;
+            write_u16_le(dst + dst_pos, exp_l1[id]);
+            dst_pos += 2;
+            continue;
+        }
+
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    if (dst_pos != orig_size) {
+        return PRZM_ERR_CORRUPTED_FRAME;
     }
 
     return (int64_t)orig_size;
@@ -2264,6 +2762,212 @@ static int64_t huffman_compact4x_decode(const uint8_t* src, size_t src_len,
     return (int64_t)orig_len;
 }
 
+/* ----------------------------------------------------------------------------
+ * Log2 Distance Prefix Codebook Decoder (Entropy-Coded Band + Raw ExtraBits)
+ * ---------------------------------------------------------------------------- */
+
+static const uint32_t przm_dist_base[32] = {
+    1, 2, 3, 4,
+    5, 7, 9, 13,
+    17, 25, 33, 49,
+    65, 97, 129, 193,
+    257, 385, 513, 769,
+    1025, 1537, 2049, 3073,
+    4097, 6145, 8193, 12289,
+    16385, 24577, 32769, 65537
+};
+
+static const uint8_t przm_dist_extra_bits[32] = {
+    0, 0, 0, 0,
+    1, 1, 2, 2,
+    3, 3, 4, 4,
+    5, 5, 6, 6,
+    7, 7, 8, 8,
+    9, 9, 10, 10,
+    11, 11, 12, 12,
+    13, 13, 15, 24
+};
+
+static inline uint32_t przm_read_extra_bits(przm_huff_bit_reader_t* r, uint8_t nb) {
+    if (nb == 0) return 0;
+    if (nb <= 16) {
+        uint32_t val = (uint32_t)huff_reader_peek(r, (int)nb);
+        huff_reader_consume(r, (int)nb);
+        return val;
+    } else {
+        int rem = (int)nb - 16;
+        uint32_t high = (uint32_t)huff_reader_peek(r, 16);
+        huff_reader_consume(r, 16);
+        uint32_t low = (uint32_t)huff_reader_peek(r, rem);
+        huff_reader_consume(r, rem);
+        return (high << rem) | low;
+    }
+}
+
+static int64_t distance_prefix_decode(const uint8_t* src, size_t src_len,
+                                      uint8_t* dst, size_t dst_cap,
+                                      przm_canonical_huff_table_t* dec_table,
+                                      uint8_t* scratch_codes, size_t scratch_cap) {
+    if (src == NULL || src_len < 13) return PRZM_ERR_CORRUPTED_FRAME;
+    if (src[0] != PRZM_ENTROPY_MODE_DISTANCE_PREFIX) return PRZM_ERR_CORRUPTED_FRAME;
+
+    uint32_t orig_varint_len = read_u32_le(src + 1);
+    uint32_t match_count = read_u32_le(src + 5);
+    uint32_t code_stream_len = read_u32_le(src + 9);
+
+    if (orig_varint_len == 0 || match_count == 0) return 0;
+    if (dst_cap < (size_t)orig_varint_len) return PRZM_ERR_BUFFER_TOO_SMALL;
+    if (scratch_cap < (size_t)match_count) return PRZM_ERR_BUFFER_TOO_SMALL;
+    if (13 + (size_t)code_stream_len > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+    /* 1. Decode distance codes via compact Huffman */
+    int64_t dec_codes = huffman_compact_decode(src + 13, code_stream_len,
+                                               scratch_codes, scratch_cap, dec_table);
+    if (dec_codes < 0 || (uint32_t)dec_codes != match_count) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+
+    /* 2. Read extra bits and reconstruct LEB128 varints */
+    przm_huff_bit_reader_t r;
+    size_t extra_bits_offset = 13 + (size_t)code_stream_len;
+    huff_reader_init(&r, src + extra_bits_offset, src_len - extra_bits_offset);
+
+    size_t dst_pos = 0;
+    for (size_t i = 0; i < (size_t)match_count; i++) {
+        uint8_t code = scratch_codes[i];
+        if (code >= 32) return PRZM_ERR_CORRUPTED_FRAME;
+
+        uint8_t nb = przm_dist_extra_bits[code];
+        uint32_t extra = 0;
+        if (nb > 0) {
+            extra = przm_read_extra_bits(&r, nb);
+        }
+        uint32_t d = przm_dist_base[code] + extra;
+
+        /* Write LEB128 varint into dst */
+        if (d < 0x80) {
+            if (dst_pos >= (size_t)orig_varint_len) return PRZM_ERR_CORRUPTED_FRAME;
+            dst[dst_pos++] = (uint8_t)d;
+        } else if (d < 0x4000) {
+            if (dst_pos + 2 > (size_t)orig_varint_len) return PRZM_ERR_CORRUPTED_FRAME;
+            dst[dst_pos++] = (uint8_t)(d | 0x80);
+            dst[dst_pos++] = (uint8_t)(d >> 7);
+        } else if (d < 0x200000) {
+            if (dst_pos + 3 > (size_t)orig_varint_len) return PRZM_ERR_CORRUPTED_FRAME;
+            dst[dst_pos++] = (uint8_t)(d | 0x80);
+            dst[dst_pos++] = (uint8_t)((d >> 7) | 0x80);
+            dst[dst_pos++] = (uint8_t)(d >> 14);
+        } else if (d < 0x10000000) {
+            if (dst_pos + 4 > (size_t)orig_varint_len) return PRZM_ERR_CORRUPTED_FRAME;
+            dst[dst_pos++] = (uint8_t)(d | 0x80);
+            dst[dst_pos++] = (uint8_t)((d >> 7) | 0x80);
+            dst[dst_pos++] = (uint8_t)((d >> 14) | 0x80);
+            dst[dst_pos++] = (uint8_t)(d >> 21);
+        } else {
+            if (dst_pos + 5 > (size_t)orig_varint_len) return PRZM_ERR_CORRUPTED_FRAME;
+            dst[dst_pos++] = (uint8_t)(d | 0x80);
+            dst[dst_pos++] = (uint8_t)((d >> 7) | 0x80);
+            dst[dst_pos++] = (uint8_t)((d >> 14) | 0x80);
+            dst[dst_pos++] = (uint8_t)((d >> 21) | 0x80);
+            dst[dst_pos++] = (uint8_t)(d >> 28);
+        }
+    }
+
+    if (r.underflow || dst_pos != (size_t)orig_varint_len) {
+        return PRZM_ERR_CORRUPTED_FRAME;
+    }
+    return (int64_t)dst_pos;
+}
+
+static int64_t przm_unpack_stream(const uint8_t* src, size_t src_len,
+                                  uint8_t* dst, size_t dst_cap,
+                                  przm_canonical_huff_table_t* dec_table) {
+    if (src == NULL || src_len < 5) return PRZM_ERR_CORRUPTED_FRAME;
+    uint8_t mode = src[0];
+    uint32_t orig_len = read_u32_le(src + 1);
+    if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+    if (dst_cap < (size_t)orig_len) return PRZM_ERR_BUFFER_TOO_SMALL;
+
+    switch (mode) {
+        case PRZM_ENTROPY_MODE_FLAT:
+            if (src_len - 5 < (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(dst, src + 5, (size_t)orig_len);
+            return (int64_t)orig_len;
+
+        case PRZM_ENTROPY_MODE_HUFFMAN_4X:
+            return huffman4x_decode(src, src_len, dst, dst_cap, dec_table);
+
+        case PRZM_ENTROPY_MODE_HUFFMAN_COMPACT:
+            return huffman_compact_decode(src, src_len, dst, dst_cap, dec_table);
+
+        case PRZM_ENTROPY_MODE_HUFFMAN_COMPACT_4X:
+            return huffman_compact4x_decode(src, src_len, dst, dst_cap, dec_table);
+
+        case PRZM_ENTROPY_MODE_RECURSIVE_LZ: {
+            if ((size_t)orig_len > sizeof(tls_archival_scratch)) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            int64_t dec_n = przm_decompress(src + 5, src_len - 5, tls_archival_scratch, sizeof(tls_archival_scratch));
+            if (dec_n < 0 || (uint32_t)dec_n != orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+            memcpy(dst, tls_archival_scratch, (size_t)dec_n);
+            return dec_n;
+        }
+
+        case PRZM_ENTROPY_MODE_VANS_4X: {
+            int err = vans_decode4x(src + 5, src_len - 5, dst, (size_t)orig_len);
+            if (err != PRZM_OK) return err;
+            return (int64_t)orig_len;
+        }
+
+        case PRZM_ENTROPY_MODE_DISTANCE_PREFIX: {
+            if ((size_t)orig_len > sizeof(tls_off_scratch)) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            return distance_prefix_decode(src, src_len, dst, dst_cap, dec_table,
+                                          tls_archival_scratch, sizeof(tls_archival_scratch));
+        }
+
+        case PRZM_ENTROPY_MODE_SPLIT_VARINT: {
+            if (src_len < 9) return PRZM_ERR_CORRUPTED_FRAME;
+            size_t c_lsb_len = (size_t)read_u32_le(src + 5);
+            if (9 + c_lsb_len > src_len) return PRZM_ERR_CORRUPTED_FRAME;
+            const uint8_t* c_lsb = src + 9;
+            const uint8_t* c_msb = src + 9 + c_lsb_len;
+            size_t c_msb_len = src_len - (9 + c_lsb_len);
+
+            if (c_lsb_len < 5 || c_msb_len < 5) return PRZM_ERR_CORRUPTED_FRAME;
+            uint32_t lsb_orig_len = read_u32_le(c_lsb + 1);
+            uint32_t msb_orig_len = read_u32_le(c_msb + 1);
+            if (lsb_orig_len + msb_orig_len != orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+
+            if (lsb_orig_len > sizeof(tls_split_scratch) || msb_orig_len > sizeof(tls_archival_scratch)) {
+                return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+            }
+
+            int64_t n_lsb = przm_unpack_stream(c_lsb, c_lsb_len, tls_split_scratch, sizeof(tls_split_scratch), dec_table);
+            if (n_lsb < 0 || (uint32_t)n_lsb != lsb_orig_len) return (n_lsb < 0) ? n_lsb : PRZM_ERR_CORRUPTED_FRAME;
+
+            int64_t n_msb = przm_unpack_stream(c_msb, c_msb_len, tls_archival_scratch, sizeof(tls_archival_scratch), dec_table);
+            if (n_msb < 0 || (uint32_t)n_msb != msb_orig_len) return (n_msb < 0) ? n_msb : PRZM_ERR_CORRUPTED_FRAME;
+
+            size_t lsb_ptr = 0, msb_ptr = 0, dst_ptr = 0;
+            while (lsb_ptr < (size_t)lsb_orig_len && dst_ptr < (size_t)orig_len) {
+                uint8_t b0 = tls_split_scratch[lsb_ptr++];
+                dst[dst_ptr++] = b0;
+                while ((b0 & 0x80) != 0) {
+                    if (msb_ptr >= (size_t)msb_orig_len || dst_ptr >= (size_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+                    uint8_t bn = tls_archival_scratch[msb_ptr++];
+                    dst[dst_ptr++] = bn;
+                    if ((bn & 0x80) == 0) break;
+                }
+            }
+            if (dst_ptr != (size_t)orig_len || lsb_ptr != (size_t)lsb_orig_len || msb_ptr != (size_t)msb_orig_len) {
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
+            return (int64_t)orig_len;
+        }
+
+        default:
+            return PRZM_ERR_CORRUPTED_FRAME;
+    }
+}
+
 /* ============================================================================
  * 14. Standard Fused Frame Decoder Engine ('PRZM', 0x4D5A5250)
  * ============================================================================ */
@@ -2449,16 +3153,14 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
     uint32_t contracted_len = 0;
 
     if ((flags & 0x20) != 0) {
-        if ((flags & PRZM_FLAG_BCJ) == 0) {
-            size_t sec_dir_len = ((flags & PRZM_FLAG_EXT_OFFSET) != 0) ? 6 : 4;
-            size_t test_sec1 = offset + sec_dir_len;
-            if (test_sec1 + 8 <= src_len && src[test_sec1 + 2] != 0 && src[test_sec1 + 2] <= PRZM_NORM_BASE64_URL_P2) {
-                has_norm = true;
-                norm_mode = src[test_sec1 + 2];
-                contracted_len = (uint32_t)read_u16_le(src + test_sec1 + 3) |
-                                 ((uint32_t)src[test_sec1 + 6] << 16) |
-                                 ((uint32_t)src[test_sec1 + 7] << 24);
-            }
+        size_t sec_dir_len = ((flags & PRZM_FLAG_EXT_OFFSET) != 0) ? 6 : 4;
+        size_t test_sec1 = offset + sec_dir_len;
+        if (test_sec1 + 8 <= src_len && src[test_sec1 + 2] != 0 && src[test_sec1 + 2] <= PRZM_NORM_BASE64_URL_P2) {
+            has_norm = true;
+            norm_mode = src[test_sec1 + 2];
+            contracted_len = (uint32_t)read_u16_le(src + test_sec1 + 3) |
+                             ((uint32_t)src[test_sec1 + 6] << 16) |
+                             ((uint32_t)src[test_sec1 + 7] << 24);
         }
         if (!has_norm) {
             if (offset + 4 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
@@ -2538,105 +3240,27 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
     /* Decode Section 2 (Commands) */
     const uint8_t* cmds = NULL;
     size_t cmds_len = 0;
-
-    if (cmd_size == 0) {
-        cmds = NULL;
-        cmds_len = 0;
-    } else {
-        if (sec2_offset + 5 > sec2_offset + cmd_size || sec2_offset + 5 > src_len) {
-            return PRZM_ERR_CORRUPTED_FRAME;
-        }
-        uint8_t sec2_mode = src[sec2_offset];
+    if (cmd_size > 0) {
+        if (sec2_offset + 5 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
         uint32_t sec2_orig_len = read_u32_le(src + sec2_offset + 1);
-        if (sec2_orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
-
-        if (sec2_mode == PRZM_ENTROPY_MODE_FLAT) {
-            if (sec2_offset + 5 + (size_t)sec2_orig_len > sec2_offset + cmd_size ||
-                sec2_offset + 5 + (size_t)sec2_orig_len > src_len) {
-                return PRZM_ERR_CORRUPTED_FRAME;
-            }
-            cmds = src + sec2_offset + 5;
-            cmds_len = (size_t)sec2_orig_len;
-        } else if (sec2_mode == PRZM_ENTROPY_MODE_HUFFMAN_4X) {
-            if (sec2_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
-            int64_t dec_n = huffman4x_decode(src + sec2_offset, cmd_size, tls_cmd_scratch, sizeof(tls_cmd_scratch), &tls_huff_table);
-            if (dec_n < 0) return (int)dec_n;
-            cmds = tls_cmd_scratch;
-            cmds_len = (size_t)dec_n;
-        } else if (sec2_mode == PRZM_ENTROPY_MODE_HUFFMAN_COMPACT) {
-            if (sec2_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
-            int64_t dec_n = huffman_compact_decode(src + sec2_offset, cmd_size, tls_cmd_scratch, sizeof(tls_cmd_scratch), &tls_huff_table);
-            if (dec_n < 0) return (int)dec_n;
-            cmds = tls_cmd_scratch;
-            cmds_len = (size_t)dec_n;
-        } else if (sec2_mode == PRZM_ENTROPY_MODE_HUFFMAN_COMPACT_4X) {
-            if (sec2_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
-            int64_t dec_n = huffman_compact4x_decode(src + sec2_offset, cmd_size, tls_cmd_scratch, sizeof(tls_cmd_scratch), &tls_huff_table);
-            if (dec_n < 0) return (int)dec_n;
-            cmds = tls_cmd_scratch;
-            cmds_len = (size_t)dec_n;
-        } else if (sec2_mode == PRZM_ENTROPY_MODE_RECURSIVE_LZ) {
-            if (sec2_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
-            int64_t dec_n = przm_decompress(src + sec2_offset + 5, cmd_size - 5, tls_archival_scratch, sizeof(tls_archival_scratch));
-            if (dec_n < 0 || (uint32_t)dec_n != sec2_orig_len) return PRZM_ERR_CORRUPTED_FRAME;
-            memcpy(tls_cmd_scratch, tls_archival_scratch, (size_t)dec_n);
-            cmds = tls_cmd_scratch;
-            cmds_len = (size_t)dec_n;
-        } else {
-            return PRZM_ERR_CORRUPTED_FRAME;
-        }
+        if (sec2_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        int64_t dec_n = przm_unpack_stream(src + sec2_offset, cmd_size, tls_cmd_scratch, sizeof(tls_cmd_scratch), &tls_huff_table);
+        if (dec_n < 0 || (uint32_t)dec_n != sec2_orig_len) return (dec_n < 0) ? (int)dec_n : PRZM_ERR_CORRUPTED_FRAME;
+        cmds = tls_cmd_scratch;
+        cmds_len = (size_t)dec_n;
     }
 
     /* Decode Section 3 (Offsets) */
     const uint8_t* offs = NULL;
     size_t offs_len = 0;
-
-    if (off_size == 0) {
-        offs = NULL;
-        offs_len = 0;
-    } else {
-        if (sec3_offset + 5 > sec3_offset + off_size || sec3_offset + 5 > src_len) {
-            return PRZM_ERR_CORRUPTED_FRAME;
-        }
-        uint8_t sec3_mode = src[sec3_offset];
+    if (off_size > 0) {
+        if (sec3_offset + 5 > src_len) return PRZM_ERR_CORRUPTED_FRAME;
         uint32_t sec3_orig_len = read_u32_le(src + sec3_offset + 1);
-        if (sec3_orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
-
-        if (sec3_mode == PRZM_ENTROPY_MODE_FLAT) {
-            if (sec3_offset + 5 + (size_t)sec3_orig_len > sec3_offset + off_size ||
-                sec3_offset + 5 + (size_t)sec3_orig_len > src_len) {
-                return PRZM_ERR_CORRUPTED_FRAME;
-            }
-            offs = src + sec3_offset + 5;
-            offs_len = (size_t)sec3_orig_len;
-        } else if (sec3_mode == PRZM_ENTROPY_MODE_HUFFMAN_4X) {
-            if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
-            int64_t dec_n = huffman4x_decode(src + sec3_offset, off_size, tls_off_scratch, sizeof(tls_off_scratch), &tls_huff_table);
-            if (dec_n < 0) return (int)dec_n;
-            offs = tls_off_scratch;
-            offs_len = (size_t)dec_n;
-        } else if (sec3_mode == PRZM_ENTROPY_MODE_HUFFMAN_COMPACT) {
-            if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
-            int64_t dec_n = huffman_compact_decode(src + sec3_offset, off_size, tls_off_scratch, sizeof(tls_off_scratch), &tls_huff_table);
-            if (dec_n < 0) return (int)dec_n;
-            offs = tls_off_scratch;
-            offs_len = (size_t)dec_n;
-        } else if (sec3_mode == PRZM_ENTROPY_MODE_HUFFMAN_COMPACT_4X) {
-            if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
-            int64_t dec_n = huffman_compact4x_decode(src + sec3_offset, off_size, tls_off_scratch, sizeof(tls_off_scratch), &tls_huff_table);
-            if (dec_n < 0) return (int)dec_n;
-            offs = tls_off_scratch;
-            offs_len = (size_t)dec_n;
-        } else if (sec3_mode == PRZM_ENTROPY_MODE_RECURSIVE_LZ) {
-            if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
-            int64_t dec_n = przm_decompress(src + sec3_offset + 5, off_size - 5, tls_archival_scratch, sizeof(tls_archival_scratch));
-            if (dec_n < 0 || (uint32_t)dec_n != sec3_orig_len) return PRZM_ERR_CORRUPTED_FRAME;
-            memcpy(tls_off_scratch, tls_archival_scratch, (size_t)dec_n);
-            offs = tls_off_scratch;
-            offs_len = (size_t)dec_n;
-        } else {
-            return PRZM_ERR_CORRUPTED_FRAME;
-        }
+        if (sec3_orig_len > PRZM_TLS_SCRATCH_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        int64_t dec_n = przm_unpack_stream(src + sec3_offset, off_size, tls_off_scratch, sizeof(tls_off_scratch), &tls_huff_table);
+        if (dec_n < 0 || (uint32_t)dec_n != sec3_orig_len) return (dec_n < 0) ? (int)dec_n : PRZM_ERR_CORRUPTED_FRAME;
+        offs = tls_off_scratch;
+        offs_len = (size_t)dec_n;
     }
 
     /* Initialize 3 CPU repeat offset registers */
@@ -2653,6 +3277,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
     size_t off_ptr = 0;
     size_t lit_ptr = 0;
     size_t dst_pos = 0;
+    size_t min_match_base = (flags & PRZM_FLAG_MIN_MATCH_3) ? 3 : 4;
 
     bool is_split = !has_norm && ((flags & 0x20) != 0);
     size_t alloc_size = u_size;
@@ -2687,7 +3312,7 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
         if (op < 0x80) {
             /* Fast-Path 1: Fused Repeat Token (0 LLL MM KK) */
             size_t lit_len = (op >> 4) & 0x07;
-            size_t m_len = ((op >> 2) & 0x03) + 4;
+            size_t m_len = ((op >> 2) & 0x03) + min_match_base;
             int k = (int)(op & 0x03);
 
             if (lit_len > 0) {
@@ -2725,12 +3350,12 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             /* Fast-Path 2: Fused Extended Match (10 LL MMMM) */
             size_t lit_len = (op >> 4) & 0x03;
             size_t base_len = op & 0x0F;
-            size_t m_len = base_len + 4;
+            size_t m_len = base_len + min_match_base;
             if (base_len == 15) {
                 int extra = 0;
                 int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &extra);
                 if (err != PRZM_OK || extra < 0) return PRZM_ERR_CORRUPTED_FRAME;
-                m_len = 19 + (size_t)extra;
+                m_len = 15 + min_match_base + (size_t)extra;
             }
 
             if (lit_len > 0) {
@@ -2757,19 +3382,19 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
         }
 
         /* Specialized Opcodes (0xC0 .. 0xFF) */
-        if (op >= 0xC0 && op <= 0xCF) {
-            /* Long Repeat Match */
+        if (op >= 0xC0 && op <= 0xC3) {
+            /* Long Repeat Match (k 0..2) */
             int k = (int)(op & 0x0F);
             if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
             uint8_t token = cmds[cmd_ptr++];
             size_t lit_len = token >> 4;
             size_t base_len = token & 0x0F;
-            size_t m_len = base_len + 4;
+            size_t m_len = base_len + min_match_base;
             if (base_len == 15) {
                 int extra = 0;
                 int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &extra);
                 if (err != PRZM_OK || extra < 0) return PRZM_ERR_CORRUPTED_FRAME;
-                m_len = 19 + (size_t)extra;
+                m_len = 15 + min_match_base + (size_t)extra;
             }
 
             if (lit_len > 0) {
@@ -2803,13 +3428,114 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             continue;
         }
 
+        if (op >= 0xC4 && op <= 0xCD) {
+            /* Fused Offset Bracket (0xC4..0xCD) */
+            int bracket = (int)(op - 0xC4);
+            if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t token = cmds[cmd_ptr++];
+            size_t lit_len = (size_t)(token >> 4);
+            size_t base_len = (size_t)(token & 0x0F);
+            size_t m_len = base_len + min_match_base;
+
+            if (lit_len > 0) {
+                if (lit_ptr + lit_len > lits_len) return PRZM_ERR_CORRUPTED_FRAME;
+                if (!przm_check_cap(alloc_size, dst_pos, lit_len)) return PRZM_ERR_CORRUPTED_FRAME;
+                memcpy(decode_dst + dst_pos, lits + lit_ptr, lit_len);
+                lit_ptr += lit_len;
+                dst_pos += lit_len;
+            }
+
+            int d = 0;
+            if (bracket < 8) {
+                d = bracket + 1;
+            } else if (bracket == 8) {
+                d = 16;
+            } else {
+                d = 32;
+            }
+
+            rep2 = rep1;
+            rep1 = rep0;
+            rep0 = d;
+
+            if (dst_pos < (size_t)d) return PRZM_ERR_OFFSET_OOB;
+            if (!przm_check_cap(alloc_size, dst_pos, m_len)) return PRZM_ERR_CORRUPTED_FRAME;
+            copy_match(decode_dst, dst_pos, dst_pos - d, m_len, d);
+            dst_pos += m_len;
+            continue;
+        }
+
+        if (op == 0xCE) {
+            /* Sliding Difference Lattice & Direct 1-byte Immediate Offset */
+            if (cmd_ptr + 1 >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t desc = cmds[cmd_ptr++];
+            uint8_t delta_byte = cmds[cmd_ptr++];
+
+            int mode = (int)((desc >> 6) & 0x03);
+            size_t lit_len = (size_t)((desc >> 3) & 0x07);
+            size_t base_len = (size_t)(desc & 0x07);
+            size_t m_len = base_len + min_match_base;
+
+            if (lit_len == 7) {
+                int extra = 0;
+                int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &extra);
+                if (err != PRZM_OK || extra < 0) return PRZM_ERR_CORRUPTED_FRAME;
+                lit_len += (size_t)extra;
+            }
+            if (base_len == 7) {
+                int extra = 0;
+                int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &extra);
+                if (err != PRZM_OK || extra < 0) return PRZM_ERR_CORRUPTED_FRAME;
+                m_len += (size_t)extra;
+            }
+
+            if (lit_len > 0) {
+                if (lit_ptr + lit_len > lits_len) return PRZM_ERR_CORRUPTED_FRAME;
+                if (!przm_check_cap(alloc_size, dst_pos, lit_len)) return PRZM_ERR_CORRUPTED_FRAME;
+                memcpy(decode_dst + dst_pos, lits + lit_ptr, lit_len);
+                lit_ptr += lit_len;
+                dst_pos += lit_len;
+            }
+
+            int d = 0;
+            int delta_signed = (int)((int8_t)delta_byte);
+            switch (mode) {
+            case 0:
+                d = rep0 + delta_signed;
+                break;
+            case 1:
+                d = rep1 + delta_signed;
+                break;
+            case 2:
+                d = rep2 + delta_signed;
+                break;
+            case 3:
+                if (stride > 1) {
+                    d = rep0 + delta_signed * (int)stride;
+                } else {
+                    d = (int)delta_byte + 1;
+                }
+                break;
+            }
+
+            rep2 = rep1;
+            rep1 = rep0;
+            rep0 = d;
+
+            if (dst_pos < (size_t)d || d <= 0) return PRZM_ERR_OFFSET_OOB;
+            if (!przm_check_cap(alloc_size, dst_pos, m_len)) return PRZM_ERR_CORRUPTED_FRAME;
+            copy_match(decode_dst, dst_pos, dst_pos - d, m_len, d);
+            dst_pos += m_len;
+            continue;
+        }
+
         if (op >= 0xD0 && op <= 0xD7) {
             /* Stride Match (m 1..8) */
             int m = (int)(op & 0x07) + 1;
             if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
             uint8_t token = cmds[cmd_ptr++];
             size_t lit_len = (size_t)(token >> 4);
-            size_t m_len = (size_t)(token & 0x0F) + 4;
+            size_t m_len = (size_t)(token & 0x0F) + min_match_base;
 
             if (lit_len > 0) {
                 if (lit_ptr + lit_len > lits_len) return PRZM_ERR_CORRUPTED_FRAME;
@@ -2864,12 +3590,12 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
 
             if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
             size_t base_byte = cmds[cmd_ptr++];
-            size_t m_len = base_byte + 4;
+            size_t m_len = base_byte + min_match_base;
             if (base_byte == 255) {
                 int extra = 0;
                 int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &extra);
                 if (err != PRZM_OK || extra < 0) return PRZM_ERR_CORRUPTED_FRAME;
-                m_len = 259 + (size_t)extra;
+                m_len = 255 + min_match_base + (size_t)extra;
             }
 
             if (dst_pos < (size_t)d) return PRZM_ERR_OFFSET_OOB;
@@ -2903,12 +3629,12 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             /* Delta-Mask Match (Explicit) */
             if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
             size_t base_byte = cmds[cmd_ptr++];
-            size_t m_len = base_byte + 4;
+            size_t m_len = base_byte + min_match_base;
             if (base_byte == 255) {
                 int extra = 0;
                 int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &extra);
                 if (err != PRZM_OK || extra < 0) return PRZM_ERR_CORRUPTED_FRAME;
-                m_len = 259 + (size_t)extra;
+                m_len = 255 + min_match_base + (size_t)extra;
             }
 
             int d = 0;
@@ -3143,6 +3869,26 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
             continue;
         }
 
+        if (op == PRZM_OP_GRAMMAR_BLOCK) {
+            int comp_size = 0;
+            int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &comp_size);
+            if (err != PRZM_OK || comp_size <= 0 || cmd_ptr + (size_t)comp_size > cmd_end) {
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
+            const uint8_t* pws_chunk = cmds + cmd_ptr;
+            cmd_ptr += (size_t)comp_size;
+            if ((size_t)comp_size < 8) return PRZM_ERR_CORRUPTED_FRAME;
+            size_t orig_size = (size_t)read_u32_le(pws_chunk + 4);
+            if (orig_size == 0 || !przm_check_cap(alloc_size, dst_pos, orig_size)) {
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
+            int64_t dec_ret = pws_decode(pws_chunk, (size_t)comp_size, decode_dst + dst_pos,
+                                         alloc_size - dst_pos + PRZM_SAFETY_PADDING);
+            if (dec_ret < 0 || (size_t)dec_ret != orig_size) return PRZM_ERR_CORRUPTED_FRAME;
+            dst_pos += orig_size;
+            continue;
+        }
+
         return PRZM_ERR_CORRUPTED_FRAME;
     }
 
@@ -3224,8 +3970,6 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
                 i++;
             }
         }
-        x86_bcj_inverse(dst, u_size);
-    } else if ((flags & PRZM_FLAG_BCJ) != 0) {
         x86_bcj_inverse(dst, u_size);
     }
 
@@ -3566,9 +4310,13 @@ int64_t przm_decompress(const uint8_t* src, size_t src_len, uint8_t* dst, size_t
         return decompress_standard_fused(src, src_len, dst, dst_cap, NULL);
     }
 
-    /* Zero-Schema VM and GGTC are Go-native formats; return PRZM_ERR_UNSUPPORTED_MODE in pure C */
-    if ((src[0] == PRZM_MAGIC_VM_0 && src[1] == PRZM_MAGIC_VM_1 && src[2] == PRZM_VERSION_1) ||
-        (src[0] == PRZM_MAGIC_GGTC_0 && src[1] == PRZM_MAGIC_GGTC_1 && src[2] == PRZM_VERSION_1)) {
+    /* 7. Grammar-Graph Tensor Compression (GGTC) Frame ('GG\x01') */
+    if (src[0] == PRZM_MAGIC_GGTC_0 && src[1] == PRZM_MAGIC_GGTC_1 && src[2] == PRZM_VERSION_1) {
+        return przm_ggtc_decompress(src, src_len, dst, dst_cap);
+    }
+
+    /* Zero-Schema VM is a Go-native format; return PRZM_ERR_UNSUPPORTED_MODE in pure C */
+    if (src[0] == PRZM_MAGIC_VM_0 && src[1] == PRZM_MAGIC_VM_1 && src[2] == PRZM_VERSION_1) {
         return PRZM_ERR_UNSUPPORTED_MODE;
     }
 

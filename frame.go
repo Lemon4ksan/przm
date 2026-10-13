@@ -62,7 +62,9 @@ const (
 	OpcodeFlagFusedRepeat       uint8 = 0x00
 	OpcodeMaskFusedExt          uint8 = 0xC0
 	OpcodeFlagFusedExt          uint8 = 0x80
-	OpcodePrefixLongRepeat      uint8 = 0xC0 // 0xC0 .. 0xCF: Locality queue indices 0..15
+	OpcodePrefixLongRepeat      uint8 = 0xC0 // 0xC0 .. 0xC3: Locality queue indices 0..3
+	OpcodePrefixFusedBracket    uint8 = 0xC4 // 0xC4 .. 0xCD: Direct fused brackets for d in {1..8, 16, 32}
+	OpcodePrefixDiffLattice     uint8 = 0xCE // 0xCE: Diff Lattice / Direct 1-byte immediate offset (1 <= d <= 256)
 	OpcodePrefixStride          uint8 = 0xD0 // 0xD0 .. 0xD7
 	OpcodePrefixShortDict       uint8 = 0xD8 // 0xD8 .. 0xDF: Top-8 direct 1-byte schema tokens
 	OpcodePrefixDeltaRing       uint8 = 0xE0 // 0xE0 .. 0xE7
@@ -81,6 +83,7 @@ const (
 	OpcodePrefixTransEqQuote    uint8 = 0xFB // 0xFB <tokID>: tok + "=\""
 	OpcodePrefixTransTagClose   uint8 = 0xFC // 0xFC <tokID>: tok + ">"
 	OpCopyBlock                 uint8 = 0xFD // 0xFD: Aligned 64 KiB block replication (Milestone 5)
+	OpGrammarBlock              uint8 = 0xFE // 0xFE: Straight-Line Program / Grammar DAG Bisected Block
 	OpcodePrefixTransPair       uint8 = 0xFF // 0xFF <tok1> <tok2>: Sub-4-byte token pair (tok1 + tok2)
 )
 
@@ -91,6 +94,25 @@ const (
 	ExtLengthMask    uint8 = 0x0F // Bits 0..3: Base length
 	ExtLengthEscape  uint8 = 0x0F // Value 15 indicates variable-length extension
 )
+
+// isBracketDist returns true if distance d belongs to the fused bracket set {1..8, 16, 32}.
+func isBracketDist(d int) bool {
+	return (d >= 1 && d <= 8) || d == 16 || d == 32
+}
+
+// bracketIndex returns the bracket index (0..9) for distances in {1..8, 16, 32}.
+func bracketIndex(d int) int {
+	if d <= 8 {
+		return d - 1
+	}
+	if d == 16 {
+		return 8
+	}
+	if d == 32 {
+		return 9
+	}
+	return -1
+}
 
 var (
 	ErrInvalidMagic      = errors.New("przm: invalid magic signature")

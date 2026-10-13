@@ -403,6 +403,131 @@ func (d *frameDecoder) decode() error {
 			continue
 		}
 
+		if op >= 0xC4 && op <= 0xCD {
+			bracket := int(op - 0xC4)
+			if cmdPtr >= cmdEnd {
+				return fmt.Errorf("%w: truncated command stream", ErrCorruptedFrame)
+			}
+			token := cmds[cmdPtr]
+			cmdPtr++
+			litLen := int((token >> 4) & 0x0F)
+			baseLen := int(token & 0x0F)
+			mLen := baseLen + minMatchBase
+
+			if litLen > 0 {
+				if litPtr+litLen > litsLen || dstPos+litLen > outBufLen {
+					return fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
+				}
+				copy(outBuf[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
+				litPtr += litLen
+				dstPos += litLen
+			}
+
+			var dist int
+			if bracket < 8 {
+				dist = bracket + 1
+			} else if bracket == 8 {
+				dist = 16
+			} else {
+				dist = 32
+			}
+
+			rep2 = rep1
+			rep1 = rep0
+			rep0 = dist
+
+			srcIdx := dstPos - dist
+			if dist >= 16 && mLen <= 16 && srcIdx >= 0 && dstPos+16 <= outBufLen {
+				*(*[2]uint64)(unsafe.Add(baseDst, dstPos)) = *(*[2]uint64)(unsafe.Add(baseDst, srcIdx))
+			} else if dist >= 32 && mLen <= 32 && srcIdx >= 0 && dstPos+32 <= outBufLen {
+				*(*[4]uint64)(unsafe.Add(baseDst, dstPos)) = *(*[4]uint64)(unsafe.Add(baseDst, srcIdx))
+			} else if dist > 0 && srcIdx >= 0 && dstPos+mLen <= outBufLen {
+				copyMatch(baseDst, dstPos, srcIdx, mLen, dist)
+			} else {
+				if err := execMatch(baseDst, outBuf, rawDict, dstPos, dist, mLen); err != nil {
+					return err
+				}
+			}
+			dstPos += mLen
+			continue
+		}
+
+		if op == 0xCE {
+			if cmdPtr+1 >= cmdEnd {
+				return fmt.Errorf("%w: truncated command stream", ErrCorruptedFrame)
+			}
+			desc := cmds[cmdPtr]
+			deltaByte := cmds[cmdPtr+1]
+			cmdPtr += 2
+
+			mode := int((desc >> 6) & 0x03)
+			litLen := int((desc >> 3) & 0x07)
+			baseLen := int(desc & 0x07)
+			mLen := baseLen + minMatchBase
+
+			if litLen == 7 {
+				extra, newCmdPtr, err := fastReadVarint(cmds, cmdPtr)
+				if err != nil {
+					return err
+				}
+				cmdPtr = newCmdPtr
+				litLen += extra
+			}
+			if baseLen == 7 {
+				extra, newCmdPtr, err := fastReadVarint(cmds, cmdPtr)
+				if err != nil {
+					return err
+				}
+				cmdPtr = newCmdPtr
+				mLen += extra
+			}
+
+			if litLen > 0 {
+				if litPtr+litLen > litsLen || dstPos+litLen > outBufLen {
+					return fmt.Errorf("%w: literal stream truncated or overflow", ErrCorruptedFrame)
+				}
+				copy(outBuf[dstPos:dstPos+litLen], lits[litPtr:litPtr+litLen])
+				litPtr += litLen
+				dstPos += litLen
+			}
+
+			var dist int
+			deltaSigned := int(int8(deltaByte))
+			switch mode {
+			case 0:
+				dist = rep0 + deltaSigned
+			case 1:
+				dist = rep1 + deltaSigned
+			case 2:
+				dist = rep2 + deltaSigned
+			case 3:
+				if d.stride > 1 {
+					dist = rep0 + deltaSigned*d.stride
+				} else {
+					dist = int(deltaByte) + 1
+				}
+			}
+
+			rep2 = rep1
+			rep1 = rep0
+			rep0 = dist
+
+			srcIdx := dstPos - dist
+			if dist >= 16 && mLen <= 16 && srcIdx >= 0 && dstPos+16 <= outBufLen {
+				*(*[2]uint64)(unsafe.Add(baseDst, dstPos)) = *(*[2]uint64)(unsafe.Add(baseDst, srcIdx))
+			} else if dist >= 32 && mLen <= 32 && srcIdx >= 0 && dstPos+32 <= outBufLen {
+				*(*[4]uint64)(unsafe.Add(baseDst, dstPos)) = *(*[4]uint64)(unsafe.Add(baseDst, srcIdx))
+			} else if dist > 0 && srcIdx >= 0 && dstPos+mLen <= outBufLen {
+				copyMatch(baseDst, dstPos, srcIdx, mLen, dist)
+			} else {
+				if err := execMatch(baseDst, outBuf, rawDict, dstPos, dist, mLen); err != nil {
+					return err
+				}
+			}
+			dstPos += mLen
+			continue
+		}
+
 		// Specialized Opcodes (0xC0 .. 0xFF): sync back state before calling specialized opcode handlers
 		d.dstPos = dstPos
 		d.cmdPtr = cmdPtr
@@ -414,7 +539,7 @@ func (d *frameDecoder) decode() error {
 
 		var err error
 		switch {
-		case op >= 0xC0 && op <= 0xCF:
+		case op >= 0xC0 && op <= 0xC3:
 			err = d.decodeLongRepeat(op)
 		case op >= 0xD0 && op <= 0xD7:
 			err = d.decodeStrideMatch(op)
@@ -440,6 +565,8 @@ func (d *frameDecoder) decode() error {
 			err = d.decodeDirectLiteralRun(int(op - 0xF2))
 		case op == OpCopyBlock:
 			err = d.decodeCopyBlock()
+		case op == OpGrammarBlock:
+			err = d.decodeGrammarBlock()
 		default:
 			return fmt.Errorf("%w: unknown opcode 0x%02X", ErrCorruptedFrame, op)
 		}
@@ -1022,5 +1149,32 @@ func (d *frameDecoder) decodeCopyBlock() error {
 	}
 	copy(d.outBuf[d.dstPos:d.dstPos+DedupBlockSize], d.outBuf[ref:ref+DedupBlockSize])
 	d.dstPos += DedupBlockSize
+	return nil
+}
+
+// decodeGrammarBlock handles Straight-Line Program / Grammar DAG Bisected Block (OpGrammarBlock / 0xFE).
+func (d *frameDecoder) decodeGrammarBlock() error {
+	compSize, newCmdPtr, err := fastReadVarint(d.cmds, d.cmdPtr)
+	if err != nil {
+		return err
+	}
+	d.cmdPtr = newCmdPtr
+	if compSize <= 0 || d.cmdPtr+compSize > d.cmdEnd {
+		return fmt.Errorf("%w: truncated grammar block payload (compSize=%d)", ErrCorruptedFrame, compSize)
+	}
+	pwsChunk := d.cmds[d.cmdPtr : d.cmdPtr+compSize]
+	d.cmdPtr += compSize
+	if len(pwsChunk) < 8 {
+		return fmt.Errorf("%w: grammar block smaller than header", ErrCorruptedFrame)
+	}
+	origSize := int(binary.LittleEndian.Uint32(pwsChunk[4:8]))
+	if origSize <= 0 || d.dstPos+origSize > len(d.outBuf) {
+		return fmt.Errorf("%w: grammar block size overflow (origSize=%d, dstPos=%d, outBufLen=%d)",
+			ErrCorruptedFrame, origSize, d.dstPos, len(d.outBuf))
+	}
+	if _, err := PWSDecodeTo(d.outBuf[d.dstPos:d.dstPos+origSize], pwsChunk); err != nil {
+		return err
+	}
+	d.dstPos += origSize
 	return nil
 }

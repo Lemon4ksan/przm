@@ -8,6 +8,6 @@ package «przm» where
 
 lean_lib «PRZM» where
   -- Root library containing all core modules and tournament-proven theorems
-  roots := #[`PRZM, `przm_theorems, `symplectic_invariant, `padic_singularity, `hodge_cohomology]
+  roots := #[`PRZM, `przm_theorems, `symplectic_invariant, `padic_singularity, `hodge_cohomology, `AES5RInvariant, `AESRelatedKeyTrails, `AESShannonLimits, `GrammarSingularity, `SwarMixerConvergence, `WebDictLossless, `SiliconGFNI]
 
 

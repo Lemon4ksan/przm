@@ -1,0 +1,8 @@
+# import config
+packagefile os=C:\Users\senya\AppData\Local\go-build\93\933c55e2d66af1755f47809758e26787b7fd58d9bc23e945125ffc91326f920e-d
+packagefile reflect=C:\Users\senya\AppData\Local\go-build\99\99106aa7dec637286eee3fc5f03c1b2f235440c804f68e876873c649ce1fc5e3-d
+packagefile testing=C:\Users\senya\AppData\Local\go-build\53\53903dcc8c21dcf0886293c4813f6c6cd03e32df5a0383854454777bcc6c0500-d
+packagefile testing/internal/testdeps=C:\Users\senya\AppData\Local\go-build\43\4303a2e0a11950b53779268d4463ab35e7b93ae2e9879c1e901326f88903b658-d
+packagefile runtime=C:\Users\senya\AppData\Local\go-build\f9\f9659d9060ed97e7c753be4adf2cb002f2fcf9b33a2f0fde630459e0627ab308-d
+packagefile github.com/lemon4ksan/przm/gpu=d:\CodingProjects\przm\.gotmp\go-build1639484771\b153\_pkg_.a
+packagefile github.com/lemon4ksan/przm/gpu_test=d:\CodingProjects\przm\.gotmp\go-build1639484771\b155\_pkg_.a

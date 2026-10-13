@@ -301,6 +301,50 @@ static void test_pws_grammar(void) {
     TEST_PASS("pws_grammar");
 }
 
+/* 6b. Test GGTC 3-Layer Grammar Unrolling */
+static void test_ggtc_grammar(void) {
+    uint8_t frame[128];
+    size_t fptr = 0;
+    frame[fptr++] = 'G'; frame[fptr++] = 'G'; frame[fptr++] = 0x01; frame[fptr++] = 0x00;
+    write_u32_le(frame + fptr, 17); fptr += 4; /* OrigSize = 17 */
+    write_u32_le(frame + fptr, 6); fptr += 4;  /* AxiomLen = 6 tokens */
+
+    frame[fptr++] = 4; /* numL1 = 4 */
+    frame[fptr++] = 2; /* numL2 = 2 */
+    frame[fptr++] = 1; /* numL3 = 1 */
+    frame[fptr++] = 0; /* Pad */
+
+    /* L1 rules */
+    frame[fptr++] = 'P'; frame[fptr++] = 'R'; /* L1[0] */
+    frame[fptr++] = 'Z'; frame[fptr++] = 'M'; /* L1[1] */
+    frame[fptr++] = 'i'; frame[fptr++] = 'n'; /* L1[2] */
+    frame[fptr++] = 'g'; frame[fptr++] = 'u'; /* L1[3] */
+
+    /* L2 rules */
+    frame[fptr++] = 0; frame[fptr++] = 1;     /* L2[0] = L1[0], L1[1] -> "PRZM" */
+    frame[fptr++] = 2; frame[fptr++] = 3;     /* L2[1] = L1[2], L1[3] -> "ingu" */
+
+    /* L3 rules */
+    frame[fptr++] = 0; frame[fptr++] = 1;     /* L3[0] = L2[0], L2[1] -> "PRZMingu" */
+
+    /* Axiom */
+    frame[fptr++] = 0xF0; /* Direct L3[0] -> "PRZMingu" (8B) */
+    frame[fptr++] = 0xE0; /* Direct L2[0] -> "PRZM" (4B) */
+    frame[fptr++] = 0xD2; /* Direct L1[2] -> "in" (2B) */
+    frame[fptr++] = 'g';  /* Direct raw literal 'g' (1B) */
+    frame[fptr++] = 'o';  /* Direct raw literal 'o' (1B) */
+    frame[fptr++] = 0xFF; frame[fptr++] = 0xD5; /* Escaped byte 0xD5 (1B) */
+    /* Total decoded: 8 + 4 + 2 + 1 + 1 + 1 = 17 bytes */
+
+    uint8_t dst[128];
+    int64_t res = przm_decompress(frame, fptr, dst, sizeof(dst));
+    TEST_ASSERT(res == 17, "GGTC decompress size mismatch");
+    uint8_t expected[17] = {'P','R','Z','M','i','n','g','u','P','R','Z','M','i','n','g','o',0xD5};
+    TEST_ASSERT(memcmp(dst, expected, 17) == 0, "GGTC payload mismatch");
+
+    TEST_PASS("ggtc_grammar");
+}
+
 /* 7. Test IsoQuant 4D Quaternionic Isoclinic Uncollimation */
 static void test_isoquant_uncollimation(void) {
     uint8_t orig[32] = {
@@ -1083,14 +1127,14 @@ static void test_corrupted_and_truncated_frames(void) {
     };
     TEST_ASSERT(przm_decompress(split_frame, sizeof(split_frame), dst, sizeof(dst)) == PRZM_ERR_EXCEEDS_MAX_BLOCK, "excessive call count should error");
 
-    /* 11. Zero-Schema VM and GGTC Go-native frames return PRZM_ERR_UNSUPPORTED_MODE in C */
+    /* 11. Zero-Schema VM Go-native frame returns PRZM_ERR_UNSUPPORTED_MODE in C; truncated GGTC returns PRZM_ERR_CORRUPTED_FRAME */
     uint8_t vm_frame[8] = {'P', 'V', 0x01, 0x00, 0x40, 0x00, 0x00, 0x00}; /* 64 bytes */
     TEST_ASSERT(przm_get_uncompressed_size(vm_frame, sizeof(vm_frame)) == 64, "VM size should be 64");
     TEST_ASSERT(przm_decompress(vm_frame, sizeof(vm_frame), dst, sizeof(dst)) == PRZM_ERR_UNSUPPORTED_MODE, "VM should return UNSUPPORTED_MODE");
 
-    uint8_t ggtc_frame[8] = {'G', 'G', 0x01, 0x00, 0x80, 0x00, 0x00, 0x00}; /* 128 bytes */
+    uint8_t ggtc_frame[8] = {'G', 'G', 0x01, 0x00, 0x80, 0x00, 0x00, 0x00}; /* 128 bytes, truncated header (<16 bytes) */
     TEST_ASSERT(przm_get_uncompressed_size(ggtc_frame, sizeof(ggtc_frame)) == 128, "GGTC size should be 128");
-    TEST_ASSERT(przm_decompress(ggtc_frame, sizeof(ggtc_frame), dst, sizeof(dst)) == PRZM_ERR_UNSUPPORTED_MODE, "GGTC should return UNSUPPORTED_MODE");
+    TEST_ASSERT(przm_decompress(ggtc_frame, sizeof(ggtc_frame), dst, sizeof(dst)) == PRZM_ERR_CORRUPTED_FRAME, "Truncated GGTC should return CORRUPTED_FRAME");
 
     /* 12. Sheaf Trellis Mode 0 Truncation Regression */
     uint8_t trunc_sheaf_raw[16];
@@ -1744,6 +1788,7 @@ int main(int argc, char** argv) {
     test_standard_fused_raw();
     test_standard_fused_lz();
     test_pws_grammar();
+    test_ggtc_grammar();
     test_isoquant_uncollimation();
     test_gctr_decompression();
     test_heisenberg_unfoliation();

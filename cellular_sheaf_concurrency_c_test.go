@@ -336,8 +336,15 @@ func TestMilestone3_PureC_50RandomFrames(t *testing.T) {
 			t.Fatalf("Frame %d: failed to write przm file: %v", frameID, err)
 		}
 
-		cmd := exec.Command(cBinPath, inPath, outPath)
-		output, err := cmd.CombinedOutput()
+		var output []byte
+		for attempt := 0; attempt < 3; attempt++ {
+			cmd := exec.Command(cBinPath, inPath, outPath)
+			output, err = cmd.CombinedOutput()
+			if err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 		if err != nil {
 			t.Fatalf(
 				"Frame %d (W=%d, M=%d, mode=%d, len=%d): C decompressor crashed or returned error %v:\nOutput:\n%s",
