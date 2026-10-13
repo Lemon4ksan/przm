@@ -130,6 +130,7 @@ typedef struct {
 #define PRZM_VANS_FLAG_CTX_ORDER2 0x10
 #define PRZM_VANS_FLAG_OPCODE_ORDER2 0x20
 #define PRZM_VANS_FLAG_META_ORDER2   0x40
+#define PRZM_VANS_FLAG_VAR_ORDER2    0x80
 
 /* Context Sheaf Foliation Modes (PRZM-SPEC-0.5 Étale Sheaf Foliation) */
 #define PRZM_CTX_MODE_STRUCTURAL  0x00 /* Mode 0: Refined 4-Class Étale Sheaf */

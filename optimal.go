@@ -983,7 +983,7 @@ func compressBlockOptimal(
 
 		// Full RFC 7932 Static Dictionary Matching (13,146 words, 24 length classes, 121 transforms)
 		if activeMatcher != nil && activeMatcher.id == DictIDBrotliWeb {
-			rem := uSize - pos
+			rem := min(uSize-pos, bSize-i)
 			if rem >= 4 {
 				maxSearchLen := uint(37)
 				if uint(rem) < maxSearchLen {
@@ -1548,8 +1548,14 @@ func compressBlockOptimal(
 			}
 			if cand.repCode < -1 {
 				// Dictionary Token or Compact Raw Dict
+				if cand.repCode != -6 && int(cand.length) != candL {
+					continue
+				}
 				subLen := candL
 				next := i + subLen
+				if next > bSize {
+					continue
+				}
 				edgeCost := calcEdgeCostPRZM(subLen, int(cand.dist), int(cand.repCode), minMatchBase, hasStride, stride)
 				newCost := curCost + edgeCost
 
