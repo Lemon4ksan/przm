@@ -52,6 +52,8 @@ type dpCandidate struct {
 type dpScratchpad struct {
 	window       [1024]dpState             // 16 KB Hot Window
 	table3       [32768]int32              // 128 KB Hash Table
+	macro8       [65536 * 8]int32          // 2 MB 8-way 8-byte Macro Sliding Window Table
+	dagProd      [65536 * 2]int32          // 512 KB 2-way 16-byte DAG Production Table
 	trace        [BlockSize64K + 1]dpTrace // 768 KB Sequential Trace
 	litCostTable [256]int32                // 1 KB Shannon Entropy Bit-Cost Table
 	path         []int32
@@ -130,7 +132,10 @@ func calcDistPrefixCostPRZM(d int) int32 {
 	if d <= 65536 {
 		return 30 // 15 extra bits = 30 units
 	}
-	return 48 // 24 extra bits = 48 units
+	if d <= 2097152 {
+		return 34 // 17 extra bits = 34 units (under 2MB, varint is 3 bytes)
+	}
+	return 42 // 21-24 extra bits = 42 units (up to 16MB)
 }
 
 // calcOffCostPRZM returns the number of bytes required to serialize offset d in Section 3.
@@ -198,12 +203,12 @@ func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int, hasStride bool, str
 			cost = 80
 		}
 	} else {
-		// Explicit match: opcode bytes in Section 1 + distance code (1B) + extra bits (2 units/bit)
-		var baseCost int32 = 32
+		// Explicit match: opcode byte in Section 1 + Section 3 Huffman distance code (~24 units)
+		var baseCost int32 = 24
 		if mLen > 14+minMatchBase+127 {
-			baseCost = 64
+			baseCost = 52
 		} else if mLen > 14+minMatchBase {
-			baseCost = 48
+			baseCost = 38
 		}
 		cost = baseCost + calcDistPrefixCostPRZM(dist)
 	}
@@ -835,7 +840,7 @@ func compressBlockOptimal(
 
 		updateLong := func(d, l, repCode int) {
 			l = min(l, maxL)
-			if l < 64 {
+			if l < 32 {
 				return
 			}
 			score := l
@@ -930,8 +935,8 @@ func compressBlockOptimal(
 			}
 		}
 
-		// Explicit match candidates sorted into 8 distance brackets
-		var bracketBest [8]dpCandidate
+		// Explicit match candidates sorted into 12 distance brackets
+		var bracketBest [12]dpCandidate
 		updateBracket := func(d, l int) {
 			l = min(l, maxL)
 			if d <= 0 || d > windowSize || d == r0 || d == r1 || d == r2 || l < minMatchBase {
@@ -953,30 +958,36 @@ func compressBlockOptimal(
 			}
 			updateLong(d, l, -1)
 			minExp := minMatchBase
-			if d >= 16384 {
-				minExp = minMatchBase + 3
-			} else if d >= 2048 {
+			if d >= 65536 {
 				minExp = minMatchBase + 2
-			} else if d >= 128 {
+			} else if d >= 2048 {
 				minExp = minMatchBase + 1
 			}
 			if l < minExp {
 				return
 			}
 			b := 0
-			if d >= 131072 {
+			if d >= 4194304 {
+				b = 11
+			} else if d >= 1048576 {
+				b = 10
+			} else if d >= 262144 {
+				b = 9
+			} else if d >= 65536 {
+				b = 8
+			} else if d >= 16384 {
 				b = 7
-			} else if d >= 32768 {
+			} else if d >= 4096 {
 				b = 6
-			} else if d >= 8192 {
+			} else if d >= 1024 {
 				b = 5
-			} else if d >= 2048 {
+			} else if d >= 256 {
 				b = 4
-			} else if d >= 512 {
+			} else if d >= 64 {
 				b = 3
-			} else if d >= 128 {
+			} else if d >= 16 {
 				b = 2
-			} else if d >= 32 {
+			} else if d >= 4 {
 				b = 1
 			}
 			lClamped := min(l, dpMaxL)
@@ -1013,6 +1024,59 @@ func compressBlockOptimal(
 						updateBracket(d3, l3)
 					}
 				}
+			}
+		}
+
+		// Inter-Block 16-byte DAG Production Factorization (2-way associative)
+		if pos+16 <= uSize {
+			w16_0 := binary.LittleEndian.Uint64(src[pos : pos+8])
+			w16_1 := binary.LittleEndian.Uint64(src[pos+8 : pos+16])
+			h16 := uint32(((w16_0 ^ (w16_1 * 0x9E3779B97F4A7C15)) * 0x517cc1b727220a95) >> 48)
+			base16 := int(h16&0xFFFF) * 2
+			for s := 0; s < 2; s++ {
+				cand16 := int(dpPad.dagProd[base16+s]) - 1
+				if cand16 >= 0 && cand16 < pos {
+					d16 := pos - cand16
+					if d16 > 0 && d16 <= windowSize && d16 != r0 && d16 != r1 && d16 != r2 {
+						l16 := HenselLCPPos(src, pos, cand16, maxL)
+						if l16 >= 16 {
+							updateBracket(d16, l16)
+							updateLong(d16, l16, -1)
+						}
+					}
+				}
+			}
+			if int(dpPad.dagProd[base16])-1 != pos {
+				dpPad.dagProd[base16+1] = dpPad.dagProd[base16]
+				dpPad.dagProd[base16] = int32(pos + 1)
+			}
+		}
+
+		// Inter-Block 8-byte Macro Sliding Window Horizon Matcher (8-way associative)
+		if pos+8 <= uSize {
+			w8 := binary.LittleEndian.Uint64(src[pos : pos+8])
+			h8 := uint32((w8 * 0x517cc1b727220a95) >> 48)
+			base8 := int(h8&0xFFFF) * 8
+			for s := 0; s < 8; s++ {
+				cand8 := int(dpPad.macro8[base8+s]) - 1
+				if cand8 >= 0 && cand8 < pos {
+					d8 := pos - cand8
+					if d8 > 0 && d8 <= windowSize && d8 != r0 && d8 != r1 && d8 != r2 {
+						if binary.LittleEndian.Uint64(src[cand8:cand8+8]) == w8 {
+							l8 := HenselLCPPos(src, pos, cand8, maxL)
+							if l8 >= 8 {
+								updateBracket(d8, l8)
+								updateLong(d8, l8, -1)
+							}
+						}
+					}
+				}
+			}
+			if int(dpPad.macro8[base8])-1 != pos {
+				for s := 7; s > 0; s-- {
+					dpPad.macro8[base8+s] = dpPad.macro8[base8+s-1]
+				}
+				dpPad.macro8[base8] = int32(pos + 1)
 			}
 		}
 
@@ -1073,7 +1137,7 @@ func compressBlockOptimal(
 		}
 
 		// Check if Long Match Shortcut triggers
-		if bestLongScore >= 64 {
+		if bestLongScore >= 32 {
 			// 1. Emit optimal path up to current position i
 			emitPathPRZM(src, bStart, segStart, i, uSize, pad, dpPad, rep0, rep1, rep2, minMatchBase, hasStride, stride)
 
@@ -1168,6 +1232,29 @@ func compressBlockOptimal(
 			if pos+mLen-1+4 <= uSize {
 				insertHashPRZM(src, pos+mLen-1, uSize, pad, windowLog, sp1M, sp8M)
 			}
+			for pStep := pos; pStep < pos+mLen; pStep += 8 {
+				if pStep+8 <= uSize {
+					w8Step := binary.LittleEndian.Uint64(src[pStep : pStep+8])
+					h8Step := uint32((w8Step * 0x517cc1b727220a95) >> 48)
+					base8Step := int(h8Step&0xFFFF) * 8
+					if int(dpPad.macro8[base8Step])-1 != pStep {
+						for s := 7; s > 0; s-- {
+							dpPad.macro8[base8Step+s] = dpPad.macro8[base8Step+s-1]
+						}
+						dpPad.macro8[base8Step] = int32(pStep + 1)
+					}
+				}
+				if pStep+16 <= uSize {
+					w16_0 := binary.LittleEndian.Uint64(src[pStep : pStep+8])
+					w16_1 := binary.LittleEndian.Uint64(src[pStep+8 : pStep+16])
+					h16 := uint32(((w16_0 ^ (w16_1 * 0x9E3779B97F4A7C15)) * 0x517cc1b727220a95) >> 48)
+					base16Step := int(h16&0xFFFF) * 2
+					if int(dpPad.dagProd[base16Step])-1 != pStep {
+						dpPad.dagProd[base16Step+1] = dpPad.dagProd[base16Step]
+						dpPad.dagProd[base16Step] = int32(pStep + 1)
+					}
+				}
+			}
 
 			// Advance segStart and i
 			segStart = i + mLen
@@ -1192,7 +1279,7 @@ func compressBlockOptimal(
 			continue
 		}
 
-		for b := range 8 {
+		for b := range 12 {
 			if bracketBest[b].length >= int32(minMatchBase) && candCount < 30 {
 				candidates[candCount] = bracketBest[b]
 				candCount++
@@ -1241,7 +1328,11 @@ func compressBlockOptimal(
 				subLen := subLenBuf[sIdx]
 				if cand.repCode < 0 {
 					minSubReq := minMatchBase
-					if cand.dist >= 16384 {
+					if cand.dist >= 65536 {
+						if minSubReq < 6 {
+							minSubReq = 6
+						}
+					} else if cand.dist >= 16384 {
 						if minSubReq < 5 {
 							minSubReq = 5
 						}
