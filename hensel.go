@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	// Legacy 64 KiB constants (retained for backward compatibility)
+	// 64 KiB window constants
 	HenselWindowSize = 1 << WindowLog64K // 65,536
 	HenselWindowMask = HenselWindowSize - 1
 	HenselHashBits   = 16

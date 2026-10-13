@@ -706,9 +706,6 @@ func GetRawDictionary(id uint32) []byte {
 	return rawDictRegistry[id]
 }
 
-// DictIDBrotliWeb defines the 32-bit PRZM dictionary ID for the RFC 7932 Brotli-derived external web dictionary.
-const DictIDBrotliWeb uint32 = 0x4252544C // "BRTL"
-
 var webTokensRaw = []string{
 	"</div>",                         // [0]
 	"<div class=\"",                  // [1]

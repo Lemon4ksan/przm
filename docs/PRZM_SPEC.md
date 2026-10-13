@@ -147,7 +147,7 @@ $$\text{Sec4Offset} = \text{Sec3Offset} + \text{OffsetStreamSize}, \quad \text{S
 ### 3.4. Section 1: Window Size Definitions
 If the frame is compressed (`FLAG_UNCOMPRESSED == 0`), Section 1 consists of exactly 8 bytes specifying distribution parameters and window sizes.
 Byte 1 defines the `WindowLog` size:
-- `16`: **64 KiB** Window (Legacy Default)
+- `16`: **64 KiB** Window (Default)
 - `20`: **1 MiB** Window (L3 Cache Resident)
 - `23`: **8 MiB** Window (Full Baseline Coverage)
 
@@ -472,7 +472,7 @@ In the Standard Fused Frame (`Magic = 0x4D5A5250`), Section 2 is a byte stream o
 ```
 
 ### 17.1. 3-Repeat Register State Machine
-The LZ matched sequence is reconstructed via Command Opcodes mapped to 3 active Repeat Registers (`rep0`, `rep1`, `rep2`). This achieves extreme distance locality compression and supersedes the legacy 16-element ring buffer.
+The LZ matched sequence is reconstructed via Command Opcodes mapped to 3 active Repeat Registers (`rep0`, `rep1`, `rep2`). This achieves extreme distance locality compression across structured streams.
 
 **Register Initialization**:
 At the start of decompression:
@@ -487,8 +487,6 @@ When evaluating Repeat Match Opcodes (Index $k \in [0, 2]$), the registers pivot
 - **Repeat 1 ($k=1$)**: $d = rep_1$. $rep_1 = rep_0$, $rep_0 = d$.
 - **Repeat 2 ($k=2$)**: $d = rep_2$. $rep_2 = rep_1$, $rep_1 = rep_0$, $rep_0 = d$.
 - **Explicit New Offset ($d$)**: $rep_2 = rep_1$, $rep_1 = rep_0$, $rep_0 = d$.
-
-*(Note: Any legacy references to $Q[k]$ and MTF in Section 17.2 refer to the $rep_k$ register state machine.)*
 
 ### 17.1.1. LZ Reconstructor Safety & Bounds
 
@@ -570,16 +568,10 @@ When `FLAG_DICT_REF` is set in the frame header, parameter `DictID` (`uint32_le`
 - Extended Tokens `8..79` (Opcode `0xF2 <tokenID>`):
   - Common JSON keywords, HTTP headers, log fields (`"error":null`, `"ip":"127.0.0.1"`, `"Content-Type":"application/json"`).
 
-#### 17.5.2. `DictID = 2` (`DictIDCode`):
-- Direct Tokens `0..7` (Opcodes `0xD8..0xDF`):
-  - 0: `if err != nil {\n\treturn nil, err\n}`
-  - 1: `package main\n\nimport (\n`
-  - 2: `func (s *`
-  - 3: `context.Context`
-  - 4: `return nil, nil`
-  - 5: `for i := 0; i < `
-  - 6: `fmt.Sprintf("`
-  - 7: `sync.Mutex`
+#### 17.5.2. `DictID = 0x4252544C` (`DictIDBrotliWeb`):
+- Format: RFC 7932 Brotli Web Static Dictionary (`"BRTL"`, 122,784 bytes static dictionary payload).
+- Multi-length classes (4 to 24 bytes), 13,146 static vocabulary entries.
+- Integrated with Section 3 negative-offset match indexing (`offset > dstPos`) and RFC 7932 121-Word Transformation Matrix (`0xF8 <transform_id> <word_id>`).
 
 ---
 

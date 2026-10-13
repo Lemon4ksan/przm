@@ -38,13 +38,13 @@ const (
 	FlagNibble       uint8 = 0x80 // Bit 7: Section 4 encoded via SIMD Nibble-Plane Splitting or V-ANS
 )
 
-// Well-known dictionary identifiers (PRZM-SPEC-0.5 FlagDictRef).
+// Well-known dictionary identifiers (FlagDictRef).
 const (
 	DictIDNone        uint32 = 0
-	DictIDJSON        uint32 = 1      // Structured web service JSON logs & APIs
-	DictIDCode        uint32 = 2      // Deprecated: legacy source code dictionary
-	DictIDReservedMax uint32 = 0x0FFF // Reserved for universal open standards
-	DictIDExternalMin uint32 = 0x1000 // Minimum ID for domain-specific / external dictionaries
+	DictIDJSON        uint32 = 1          // Structured web service JSON logs & APIs
+	DictIDBrotliWeb   uint32 = 0x4252544C // RFC 7932 Brotli Web Static Dictionary ('B','R','T','L')
+	DictIDReservedMax uint32 = 0x0FFF     // Reserved for universal open standards
+	DictIDExternalMin uint32 = 0x1000     // Minimum ID for domain-specific / external dictionaries
 )
 
 // Opcode categories (PRZM-SPEC-0.5 Section 3).
@@ -125,9 +125,9 @@ var (
 	ErrInvalidDict       = errors.New("przm: invalid dictionary format")
 )
 
-// WindowLog levels (PRZM-SPEC-0.5 Milestone 2 Window Scaling)
+// WindowLog levels (Milestone 2 Window Scaling)
 const (
-	WindowLog64K = 16 // 64 KiB window (legacy default)
+	WindowLog64K = 16 // 64 KiB window default
 	WindowLog1M  = 20 // 1 MiB window (L3 cache resident)
 	WindowLog8M  = 23 // 8 MiB window (full coverage)
 )
@@ -231,7 +231,7 @@ func ParseFrameHeader(src []byte) (FrameHeader, error) {
 		if wlog >= 16 && wlog <= 24 {
 			hdr.WindowLog = wlog
 		} else {
-			// Legacy frame fallback: infer window from uncompressedSize and FlagExtOffset
+			// Fallback: infer window from uncompressedSize and FlagExtOffset
 			if (flags & FlagExtOffset) != 0 {
 				if uncompressedSize > 1024*1024 {
 					hdr.WindowLog = WindowLog8M // 23

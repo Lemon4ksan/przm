@@ -204,6 +204,9 @@ func TestGPUMultiChunkIntegration(t *testing.T) {
 }
 
 func TestGPULargePayloadCompressionRoundtrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping heavy GPU large payload test in short mode")
+	}
 	if !gpu.IsAvailable() {
 		t.Skip("NVIDIA Ampere+ CUDA GPU not available on this machine")
 	}
@@ -400,6 +403,9 @@ func TestGPUPackStreamRoundtrip(t *testing.T) {
 }
 
 func TestGPUD2DCompressionRoundtrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping heavy GPU D2D test in short mode")
+	}
 	if !gpu.IsAvailable() {
 		t.Skip("NVIDIA Ampere+ CUDA GPU not available")
 	}

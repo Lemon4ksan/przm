@@ -111,8 +111,6 @@ func describeDictionary(dictID uint32) string {
 		return "RFC 7932 Brotli Web Dictionary"
 	case DictIDJSON:
 		return "Structured JSON / Web API Vocabulary"
-	case DictIDCode:
-		return "Legacy Source Code Vocabulary"
 	default:
 		return fmt.Sprintf("External Custom Dictionary (0x%08X)", dictID)
 	}

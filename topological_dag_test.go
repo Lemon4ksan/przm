@@ -111,7 +111,11 @@ func TestTopologicalDAG_Section3_Elimination(t *testing.T) {
 	}
 	data := buf.Bytes()
 
-	for level := 3; level <= 6; level++ {
+	maxLevel := 6
+	if testing.Short() {
+		maxLevel = 5
+	}
+	for level := 3; level <= maxLevel; level++ {
 		t.Run(fmt.Sprintf("Level_%d", level), func(t *testing.T) {
 			comp, err := przm.Compress(data, level)
 			if err != nil {

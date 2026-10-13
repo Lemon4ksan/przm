@@ -20,7 +20,7 @@ const (
 	vansVer1   uint8 = 0x01
 
 	vansFlag4X        uint8 = 0x01 // 4-way interleaved SIMD-friendly streams
-	vansFlagSheaf     uint8 = 0x02 // Legacy Étale Sheaf Vector C stream splitting applied to literals
+	vansFlagSheaf     uint8 = 0x02 // Étale Sheaf Vector C stream splitting applied to literals
 	vansFlagCtxSheaf  uint8 = 0x04 // 2D Context Sheaf Markovian splitting (4 fibers, 0 bitmask)
 	vansFlagCtxOrder1 uint8 = 0x08 // Order-1 Context-conditioned ANS (Direct Context Sheaf)
 	vansFlagCtxOrder2 uint8 = 0x10 // Order-2 Context-conditioned ANS (64-state Context Sheaf)
