@@ -19,11 +19,11 @@ const (
 	vansMagic1 uint8 = 0x41 // 'A'
 	vansVer1   uint8 = 0x01
 
-	vansFlag4X        uint8 = 0x01 // 4-way interleaved SIMD-friendly streams
-	vansFlagSheaf     uint8 = 0x02 // Étale Sheaf Vector C stream splitting applied to literals
-	vansFlagCtxSheaf  uint8 = 0x04 // 2D Context Sheaf Markovian splitting (4 fibers, 0 bitmask)
-	vansFlagCtxOrder1 uint8 = 0x08 // Order-1 Context-conditioned ANS (Direct Context Sheaf)
-	vansFlagCtxOrder2 uint8 = 0x10 // Order-2 Context-conditioned ANS (64-state Context Sheaf)
+	vansFlag4X           uint8 = 0x01 // 4-way interleaved SIMD-friendly streams
+	vansFlagSheaf        uint8 = 0x02 // Étale Sheaf Vector C stream splitting applied to literals
+	vansFlagCtxSheaf     uint8 = 0x04 // 2D Context Sheaf Markovian splitting (4 fibers, 0 bitmask)
+	vansFlagCtxOrder1    uint8 = 0x08 // Order-1 Context-conditioned ANS (Direct Context Sheaf)
+	vansFlagCtxOrder2    uint8 = 0x10 // Order-2 Context-conditioned ANS (64-state Context Sheaf)
 	vansFlagOpcodeOrder2 uint8 = 0x20 // 8-context Bigram/Order-2 V-ANS for opcodes
 	vansFlagMetaOrder2   uint8 = 0x40 // 8-context Bigram/Order-2 V-ANS for metadata
 	vansFlagVarOrder2    uint8 = 0x80 // 8-context Bigram/Order-2 V-ANS for varStream
@@ -458,7 +458,7 @@ func VANSDecode4xTo(dst, src []byte, model *VANSModel) ([]byte, error) {
 	if (flags & vansFlag4X) == 0 {
 		return nil, fmt.Errorf("%w: unsupported V-ANS mode", ErrVANSCorrupted)
 	}
-	if (flags & vansFlagCtxSheaf) == 0 && (flags & vansFlagCtxOrder2) != 0 {
+	if (flags&vansFlagCtxSheaf) == 0 && (flags&vansFlagCtxOrder2) != 0 {
 		return ContextVANSDecodeOrder2To(dst, src)
 	}
 	if (flags & vansFlagOpcodeOrder2) != 0 {
@@ -934,7 +934,7 @@ func ContextVANSDecodeOrder2To(dst, src []byte) ([]byte, error) {
 	}
 
 	flags := src[3]
-	if (flags & vansFlagCtxSheaf) != 0 || (flags & vansFlagCtxOrder2) == 0 {
+	if (flags&vansFlagCtxSheaf) != 0 || (flags&vansFlagCtxOrder2) == 0 {
 		return nil, fmt.Errorf("%w: unsupported V-ANS mode", ErrVANSCorrupted)
 	}
 
@@ -1471,7 +1471,7 @@ func EncodeDistClusteredVANS(src []byte) []byte {
 
 // DecodeDistClusteredVANSTo decodes a 4-context Markov Clustered V-ANS stream into dst.
 // Guarantees strictly 0 dynamic heap allocations if cap(dst) >= origLen.
-func DecodeDistClusteredVANSTo(dst []byte, src []byte, origLen int) (int, error) {
+func DecodeDistClusteredVANSTo(dst, src []byte, origLen int) (int, error) {
 	if len(src) < 5 {
 		return 0, ErrCorruptedStream
 	}

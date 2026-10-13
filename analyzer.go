@@ -157,7 +157,7 @@ func describeStreamMode(mode uint8) string {
 		return "ModeDistancePrefixByte (Compact 2-Byte Prefix Header)"
 	case ModeDistancePrefixCompact:
 		return "ModeDistancePrefixCompact (Compact 3-Byte Prefix Header)"
-	case 12:
+	case ModeDistClusteredVANSCompact:
 		return "Mode 12 (4-Context Clustered Distance V-ANS)"
 	case 13:
 		return "Mode 13 (Log2 Length-Prefix Codebook)"
@@ -301,7 +301,11 @@ func AnalyzeFrame(compressed []byte) (*ChannelBreakdown, error) {
 				if cap(pad.cmdBuf) < sec2OrigLen+64 {
 					pad.cmdBuf = bufkit.AlignedBytes(sec2OrigLen+64, bufkit.CacheLineSize)
 				}
-				n, errUnpack := UnpackStream(pad.cmdBuf[:sec2OrigLen], compressed[sec2Offset:sec2Offset+hdr.CmdStreamSize], &pad.table)
+				n, errUnpack := UnpackStream(
+					pad.cmdBuf[:sec2OrigLen],
+					compressed[sec2Offset:sec2Offset+hdr.CmdStreamSize],
+					&pad.table,
+				)
 				if errUnpack == nil {
 					cmds = pad.cmdBuf[:n]
 				}
@@ -551,7 +555,11 @@ func AnalyzeFrame(compressed []byte) (*ChannelBreakdown, error) {
 			if cap(pad.offBuf) < sec3OrigLen+64 {
 				pad.offBuf = bufkit.AlignedBytes(sec3OrigLen+64, bufkit.CacheLineSize)
 			}
-			n, errUnpack := UnpackStream(pad.offBuf[:sec3OrigLen], compressed[sec3Offset:sec3Offset+hdr.OffsetStreamSize], &pad.table)
+			n, errUnpack := UnpackStream(
+				pad.offBuf[:sec3OrigLen],
+				compressed[sec3Offset:sec3Offset+hdr.OffsetStreamSize],
+				&pad.table,
+			)
 			if errUnpack == nil {
 				offs = pad.offBuf[:n]
 			}
@@ -562,7 +570,11 @@ func AnalyzeFrame(compressed []byte) (*ChannelBreakdown, error) {
 				if cap(pad.offBuf) < sec3OrigLen+64 {
 					pad.offBuf = bufkit.AlignedBytes(sec3OrigLen+64, bufkit.CacheLineSize)
 				}
-				n, errUnpack := UnpackStream(pad.offBuf[:sec3OrigLen], compressed[sec3Offset:sec3Offset+hdr.OffsetStreamSize], &pad.table)
+				n, errUnpack := UnpackStream(
+					pad.offBuf[:sec3OrigLen],
+					compressed[sec3Offset:sec3Offset+hdr.OffsetStreamSize],
+					&pad.table,
+				)
 				if errUnpack == nil {
 					offs = pad.offBuf[:n]
 				}
@@ -579,7 +591,12 @@ func AnalyzeFrame(compressed []byte) (*ChannelBreakdown, error) {
 				if cap(pad.offBuf) < sec3OrigLen+64 {
 					pad.offBuf = bufkit.AlignedBytes(sec3OrigLen+64, bufkit.CacheLineSize)
 				}
-				n, errDec := DecodeDistancePrefix(pad.offBuf[:sec3OrigLen], compressed[sec3Offset:sec3Offset+hdr.OffsetStreamSize], &pad.table, pad.scanlineBuf)
+				n, errDec := DecodeDistancePrefix(
+					pad.offBuf[:sec3OrigLen],
+					compressed[sec3Offset:sec3Offset+hdr.OffsetStreamSize],
+					&pad.table,
+					pad.scanlineBuf,
+				)
 				if errDec == nil {
 					offs = pad.offBuf[:n]
 				}
@@ -587,7 +604,11 @@ func AnalyzeFrame(compressed []byte) (*ChannelBreakdown, error) {
 				if cap(pad.offBuf) < sec3OrigLen+64 {
 					pad.offBuf = bufkit.AlignedBytes(sec3OrigLen+64, bufkit.CacheLineSize)
 				}
-				n, errUnpack := UnpackStream(pad.offBuf[:sec3OrigLen], compressed[sec3Offset:sec3Offset+hdr.OffsetStreamSize], &pad.table)
+				n, errUnpack := UnpackStream(
+					pad.offBuf[:sec3OrigLen],
+					compressed[sec3Offset:sec3Offset+hdr.OffsetStreamSize],
+					&pad.table,
+				)
 				if errUnpack == nil {
 					offs = pad.offBuf[:n]
 				}
@@ -715,7 +736,12 @@ func (b *ChannelBreakdown) SummaryString() string {
 	sb.WriteString("================================================================================\n")
 	sb.WriteString("                    PRZM FRAME DIAGNOSTIC & PROFILING REPORT                    \n")
 	sb.WriteString("================================================================================\n")
-	fmt.Fprintf(&sb, "  Uncompressed Size:  %10d B (%6.2f KB)\n", b.UncompressedSize, float64(b.UncompressedSize)/1024.0)
+	fmt.Fprintf(
+		&sb,
+		"  Uncompressed Size:  %10d B (%6.2f KB)\n",
+		b.UncompressedSize,
+		float64(b.UncompressedSize)/1024.0,
+	)
 	fmt.Fprintf(&sb, "  Compressed Size:    %10d B (%6.2f KB)\n", b.CompressedSize, float64(b.CompressedSize)/1024.0)
 	fmt.Fprintf(&sb, "  Compression Ratio:  %10.2fx (Space Saved: %.1f%%)\n", b.Ratio, b.SpaceSavedPct)
 	fmt.Fprintf(&sb, "  Window Capacity:    %10d KB (Log2=%d)\n", b.WindowSizeKB, b.WindowLog)
@@ -737,10 +763,34 @@ func (b *ChannelBreakdown) SummaryString() string {
 		return "[" + strings.Repeat("■", bars) + strings.Repeat(" ", 20-bars) + "]"
 	}
 
-	fmt.Fprintf(&sb, "  [Section 1] Framing & Directory : %6d B (%5.1f%%)  %s\n", b.TotalFraming, b.FramingPct, renderBar(b.FramingPct))
-	fmt.Fprintf(&sb, "  [Section 2] Commands Stream     : %6d B (%5.1f%%)  %s\n", b.CmdSize, b.CmdPct, renderBar(b.CmdPct))
-	fmt.Fprintf(&sb, "  [Section 3] Offsets Channel     : %6d B (%5.1f%%)  %s\n", b.OffsetSize, b.OffsetPct, renderBar(b.OffsetPct))
-	fmt.Fprintf(&sb, "  [Section 4] Literals Channel    : %6d B (%5.1f%%)  %s\n", b.LiteralSize, b.LiteralPct, renderBar(b.LiteralPct))
+	fmt.Fprintf(
+		&sb,
+		"  [Section 1] Framing & Directory : %6d B (%5.1f%%)  %s\n",
+		b.TotalFraming,
+		b.FramingPct,
+		renderBar(b.FramingPct),
+	)
+	fmt.Fprintf(
+		&sb,
+		"  [Section 2] Commands Stream     : %6d B (%5.1f%%)  %s\n",
+		b.CmdSize,
+		b.CmdPct,
+		renderBar(b.CmdPct),
+	)
+	fmt.Fprintf(
+		&sb,
+		"  [Section 3] Offsets Channel     : %6d B (%5.1f%%)  %s\n",
+		b.OffsetSize,
+		b.OffsetPct,
+		renderBar(b.OffsetPct),
+	)
+	fmt.Fprintf(
+		&sb,
+		"  [Section 4] Literals Channel    : %6d B (%5.1f%%)  %s\n",
+		b.LiteralSize,
+		b.LiteralPct,
+		renderBar(b.LiteralPct),
+	)
 	sb.WriteString("--------------------------------------------------------------------------------\n")
 	sb.WriteString("SECTION 2 (COMMANDS) EXECUTION PROFILE:\n")
 	fmt.Fprintf(&sb, "  Encoding Mode:      %s\n", b.CmdModeName)
@@ -763,21 +813,35 @@ func (b *ChannelBreakdown) SummaryString() string {
 	fmt.Fprintf(&sb, "    • Compound Token Pairs:           %6d\n", b.CatTokenPairCount)
 	fmt.Fprintf(&sb, "    • Raw Dictionary Matches:         %6d\n", b.CatRawDictCount)
 	fmt.Fprintf(&sb, "    • Periodic Stride Matches:        %6d\n", b.Cat01StrideCount)
-	fmt.Fprintf(&sb, "    • Delta Locality / Ring Matches:  %6d\n", b.CatDeltaLocCount+b.CatDeltaRingCount+b.CatDeltaExpCount)
+	fmt.Fprintf(
+		&sb,
+		"    • Delta Locality / Ring Matches:  %6d\n",
+		b.CatDeltaLocCount+b.CatDeltaRingCount+b.CatDeltaExpCount,
+	)
 	fmt.Fprintf(&sb, "    • RLE / Grammar / Dedup Blocks:   %6d\n", b.Cat10RLECount+b.CatGrammarCount+b.CatDedupCount)
 	fmt.Fprintf(&sb, "    • Pure Literal Run Tokens:        %6d\n", b.Cat11LitRunCount)
 	sb.WriteString("--------------------------------------------------------------------------------\n")
 	sb.WriteString("SECTION 3 (OFFSETS) SPATIAL DISTRIBUTION:\n")
 	fmt.Fprintf(&sb, "  Encoding Mode:      %s\n", b.OffsetModeName)
 	fmt.Fprintf(&sb, "  Emitted Offsets:    %d offsets (Unpacked: %d B)\n", b.MatchDistCount, b.OffsetUnpackedBytes)
-	fmt.Fprintf(&sb, "  Distinct Offsets:   %d distinct distances | Average Distance: %.1f B\n", b.DistinctOffsets, b.AvgDistance)
+	fmt.Fprintf(
+		&sb,
+		"  Distinct Offsets:   %d distinct distances | Average Distance: %.1f B\n",
+		b.DistinctOffsets,
+		b.AvgDistance,
+	)
 	fmt.Fprintf(&sb, "  Distance Entropy:   %.3f bits/symbol\n", b.DistanceEntropy)
 	sb.WriteString("--------------------------------------------------------------------------------\n")
 	sb.WriteString("SECTION 4 (LITERALS) ENTROPY & V-ANS PROFILE:\n")
 	fmt.Fprintf(&sb, "  Encoding Mode:      %s\n", b.LiteralMode)
 	fmt.Fprintf(&sb, "  Literal Count:      %d bytes (Compressed: %d B)\n", b.LiteralCount, b.LiteralSize)
 	fmt.Fprintf(&sb, "  Shannon Entropy:    %.3f bits/byte (Ideal: %d B)\n", b.LiteralEntropy, b.PotentialLiteralBytes)
-	fmt.Fprintf(&sb, "  Effective Bitrate:  %.3f bits/literal (V-ANS Efficiency Gain: %.1f%%)\n", b.BitsPerLiteral, b.VANSGainPct)
+	fmt.Fprintf(
+		&sb,
+		"  Effective Bitrate:  %.3f bits/literal (V-ANS Efficiency Gain: %.1f%%)\n",
+		b.BitsPerLiteral,
+		b.VANSGainPct,
+	)
 	sb.WriteString("================================================================================\n")
 
 	return sb.String()

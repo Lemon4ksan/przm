@@ -391,7 +391,13 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 					return nil, fmt.Errorf("%w: truncated flat command stream", ErrCorruptedFrame)
 				}
 				cmds = src[sec2Offset+5 : sec2Offset+5+sec2OrigLen]
-			case ModeHuffman4X, ModeHuffmanCompact, ModeHuffmanCompact4X, ModeRecursiveLZ, ModeVANS4X, ModeSplitVarint, ModeCommandEntropy:
+			case ModeHuffman4X,
+				ModeHuffmanCompact,
+				ModeHuffmanCompact4X,
+				ModeRecursiveLZ,
+				ModeVANS4X,
+				ModeSplitVarint,
+				ModeCommandEntropy:
 				if pad == nil {
 					pad = decScratchPool.Get()
 					defer decScratchPool.Put(pad)
@@ -399,7 +405,11 @@ func decompressWithDictToEx(src, dst []byte, customDict *Dictionary, explicitRaw
 				if cap(pad.cmdBuf) < sec2OrigLen+64 {
 					pad.cmdBuf = bufkit.AlignedBytes(sec2OrigLen+64, bufkit.CacheLineSize)
 				}
-				n, err := UnpackStream(pad.cmdBuf[:sec2OrigLen], src[sec2Offset:sec2Offset+hdr.CmdStreamSize], &pad.table)
+				n, err := UnpackStream(
+					pad.cmdBuf[:sec2OrigLen],
+					src[sec2Offset:sec2Offset+hdr.CmdStreamSize],
+					&pad.table,
+				)
 				if err != nil {
 					return nil, err
 				}

@@ -362,7 +362,9 @@ func TestWebDictionary_ZeroDistanceOverhead(t *testing.T) {
 			t.Fatalf("axiom token %d (0x%02X) not in direct L3 range 0xE0..0xEF", i, op)
 		}
 	}
-	t.Logf("[PASS] Zero-distance confirmed: 32 raw bytes compressed into exactly 4 axiom bytes (8.0x token compression)")
+	t.Logf(
+		"[PASS] Zero-distance confirmed: 32 raw bytes compressed into exactly 4 axiom bytes (8.0x token compression)",
+	)
 }
 
 // -----------------------------------------------------------------------------
@@ -394,7 +396,10 @@ func TestWebDictionary_ZeroAllocationDecompression(t *testing.T) {
 	})
 
 	if allocs != 0.00 {
-		t.Fatalf("DecompressWebDictTo violated 0-allocation guarantee: got %.2f allocs/op (expected strictly 0)", allocs)
+		t.Fatalf(
+			"DecompressWebDictTo violated 0-allocation guarantee: got %.2f allocs/op (expected strictly 0)",
+			allocs,
+		)
 	}
 	t.Logf("[PASS] Zero-Allocation Decompression Verified: %.4f allocs/op", allocs)
 }

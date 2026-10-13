@@ -182,7 +182,7 @@ func initMatcher(m *dictMatcher, id uint32, rawTokens []string) {
 		}
 		seen := make(map[string]rfcPatternCandidate)
 
-		var allWords [][]byte
+		allWords := make([][]byte, 0, len(m.tokens)+len(rfcTopWordsBytes))
 		allWords = append(allWords, m.tokens...)
 		allWords = append(allWords, rfcTopWordsBytes...)
 
@@ -939,30 +939,30 @@ var webTokensRaw = []string{
 	"### Performance Bounds", // [229]
 	"Under maximum saturation, each broker node sustains 12.8 million input/output operations per second (IOPS)", // [230]
 	" with memory footprint bounded by O(log N) where N represents active TCP/QUIC stream sessions.",             // [231]
-	"<div ",             // [232]
-	"style=\"",          // [233]
-	"<span ",            // [234]
-	"background-",       // [235]
-	"margin-",           // [236]
-	"border-",           // [237]
-	"return ",           // [238]
-	"false;",            // [239]
-	"true;",             // [240]
-	" 0;",               // [241]
-	"const ",            // [242]
-	"uint8_t",           // [243]
-	"uint32_t",          // [244]
-	"int32_t",           // [245]
-	"int64_t",           // [246]
-	"memcpy(",           // [247]
-	"return PRZM_ERR_",  // [248]
-	"CORRUPTED_FRAME;",  // [249]
-	"compression",       // [250]
-	"return PRZM_ERR_CORRUPTED_FRAME;",    // [251]
-	"uint8_t* ",                           // [252]
-	"read_u32_le(",                        // [253]
-	"uint32_t ",                           // [254]
-	"size_t ",                             // [255]
+	"<div ",                            // [232]
+	"style=\"",                         // [233]
+	"<span ",                           // [234]
+	"background-",                      // [235]
+	"margin-",                          // [236]
+	"border-",                          // [237]
+	"return ",                          // [238]
+	"false;",                           // [239]
+	"true;",                            // [240]
+	" 0;",                              // [241]
+	"const ",                           // [242]
+	"uint8_t",                          // [243]
+	"uint32_t",                         // [244]
+	"int32_t",                          // [245]
+	"int64_t",                          // [246]
+	"memcpy(",                          // [247]
+	"return PRZM_ERR_",                 // [248]
+	"CORRUPTED_FRAME;",                 // [249]
+	"compression",                      // [250]
+	"return PRZM_ERR_CORRUPTED_FRAME;", // [251]
+	"uint8_t* ",                        // [252]
+	"read_u32_le(",                     // [253]
+	"uint32_t ",                        // [254]
+	"size_t ",                          // [255]
 }
 
 func init() {

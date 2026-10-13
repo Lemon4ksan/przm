@@ -11,8 +11,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lemon4ksan/przm"
 	"github.com/lemon4ksan/seal/codec/compress/brotli"
+
+	"github.com/lemon4ksan/przm"
 )
 
 func TestCommandEntropy_RoundtripAndZeroAlloc(t *testing.T) {
@@ -112,7 +113,10 @@ func TestCommandEntropy_RoundtripAndZeroAlloc(t *testing.T) {
 					}
 				})
 				if allocsDict > 0.00 {
-					t.Fatalf("DecompressTo (Dict) violated Zero-Allocation Law: got %.2f allocs/op, want 0.00", allocsDict)
+					t.Fatalf(
+						"DecompressTo (Dict) violated Zero-Allocation Law: got %.2f allocs/op, want 0.00",
+						allocsDict,
+					)
 				}
 			})
 		}

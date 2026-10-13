@@ -523,7 +523,19 @@ func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
 		rep3 = 3 * stride
 	}
 
-	fastEncoder := newFastBlockEncoder(src, uSize, windowSize, minMatch, hasStride, stride, pad, &rep0, &rep1, &rep2, &rep3)
+	fastEncoder := newFastBlockEncoder(
+		src,
+		uSize,
+		windowSize,
+		minMatch,
+		hasStride,
+		stride,
+		pad,
+		&rep0,
+		&rep1,
+		&rep2,
+		&rep3,
+	)
 	greedyEncoder := newGreedyBlockEncoder(
 		src, uSize, level, windowSize, windowLog,
 		minMatch, minMatchBase, compactDict, dictLen,

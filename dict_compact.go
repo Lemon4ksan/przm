@@ -1,7 +1,7 @@
 package przm
 
 type compactRFCPair struct {
-	wordID uint16
+	wordID  uint16
 	transID uint8
 }
 
@@ -2057,7 +2057,6 @@ var kCompactRFCPairs = [2048]compactRFCPair{
 	{763, 1},
 	{1058, 6},
 }
-
 
 var compactRFCMap [8192]int16
 

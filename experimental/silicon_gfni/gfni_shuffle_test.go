@@ -16,8 +16,10 @@ const GF2IdentityMatrix uint64 = 0x8040201008040201
 
 // Standard AES affine transformation matrix over GF(2):
 // Row i: [1, 0, 0, 0, 1, 1, 1, 1] rotated by i positions.
-const AESAffineMatrix uint64 = 0xF87C3E1F8FC7E3F1
-const AESAffineImm8 uint8 = 0x63
+const (
+	AESAffineMatrix uint64 = 0xF87C3E1F8FC7E3F1
+	AESAffineImm8   uint8  = 0x63
+)
 
 func TestGF256FieldAxioms(t *testing.T) {
 	// Test multiplicative identity
@@ -197,7 +199,7 @@ func TestMicroDecompressorBlock64(t *testing.T) {
 
 	var original [64]byte
 	for i := 0; i < 64; i++ {
-		original[i] = byte(i * 17 + 5)
+		original[i] = byte(i*17 + 5)
 	}
 
 	var compressed [64]byte
@@ -207,7 +209,11 @@ func TestMicroDecompressorBlock64(t *testing.T) {
 	md.DecompressBlock64(decompressed[:], compressed[:])
 
 	if !bytes.Equal(decompressed[:], original[:]) {
-		t.Fatalf("Permutation annihilation failed: decompressed does not match original\nGot:  %x\nWant: %x", decompressed, original)
+		t.Fatalf(
+			"Permutation annihilation failed: decompressed does not match original\nGot:  %x\nWant: %x",
+			decompressed,
+			original,
+		)
 	}
 }
 

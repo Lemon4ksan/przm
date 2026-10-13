@@ -18,6 +18,9 @@ import (
 )
 
 func compressBrotli11(t testing.TB, data []byte) []byte {
+	if _, err := exec.LookPath("brotli"); err != nil {
+		t.Skip("brotli CLI not installed in PATH")
+	}
 	tmpIn, err := os.CreateTemp("", "br_in_*.bin")
 	if err != nil {
 		t.Fatalf("failed to create temp in: %v", err)

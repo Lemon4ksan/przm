@@ -248,7 +248,7 @@ func (m Mixer) Predict(features uint8) uint16 {
 //   - Weights remain strictly bounded within [WeightMin, WeightMax] = [-128, 127].
 //   - Zero deadzone: when e != 0 and learningRate > 0, step is guaranteed to be at least +/- 1.
 //   - Zero heap allocations, zero scratch memory.
-func (m *Mixer) Update(features uint8, actualBit uint8, learningRate uint8) {
+func (m *Mixer) Update(features, actualBit, learningRate uint8) {
 	if learningRate == 0 || features == 0 {
 		return
 	}

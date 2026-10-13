@@ -455,7 +455,6 @@ func packLiteralSection(
 			}
 			if ctxOrder1Ok && len(ctxOrder1Out) < bestLen {
 				vansOut = ctxOrder1Out
-				bestLen = len(ctxOrder1Out)
 				vansBeatsRaw = true
 			}
 		}

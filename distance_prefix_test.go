@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/lemon4ksan/foundation/bufkit"
+
 	"github.com/lemon4ksan/przm"
 )
 
@@ -183,7 +184,7 @@ func TestDistancePrefix_E2E_GoAndPureC(t *testing.T) {
 			defer os.Remove(tmpPrzm)
 			defer os.Remove(tmpOut)
 
-			if err := os.WriteFile(tmpPrzm, comp, 0644); err != nil {
+			if err := os.WriteFile(tmpPrzm, comp, 0o644); err != nil {
 				t.Fatalf("write tmp przm: %v", err)
 			}
 

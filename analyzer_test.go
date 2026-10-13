@@ -9,8 +9,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/lemon4ksan/przm"
 	"github.com/lemon4ksan/seal/codec/compress/brotli"
+
+	"github.com/lemon4ksan/przm"
 )
 
 func TestAnalyzer_StandardFrame(t *testing.T) {

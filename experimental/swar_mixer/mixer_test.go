@@ -381,8 +381,10 @@ func TestMixer_BoundaryCases(t *testing.T) {
 	}
 }
 
-var sinkP uint16
-var sinkF uint8
+var (
+	sinkP uint16
+	sinkF uint8
+)
 
 func BenchmarkMixer_Predict(b *testing.B) {
 	m := NewMixerWithWeights([8]int8{12, -34, 56, -78, 90, -12, 34, -56})

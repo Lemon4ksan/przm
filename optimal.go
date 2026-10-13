@@ -71,24 +71,6 @@ var dpScratchPool = generic.NewPool(func() *dpScratchpad {
 	}
 })
 
-// getVarintBracket classifies distance d into one of 4 varint serialization brackets:
-// Bracket 0: < 128 (1 byte offset)
-// Bracket 1: < 16,384 (2 bytes offset)
-// Bracket 2: < 2,097,152 (3 bytes offset)
-// Bracket 3: >= 2,097,152 (4 bytes offset)
-func getVarintBracket(d int) int {
-	if d < 128 {
-		return 0
-	}
-	if d < 16384 {
-		return 1
-	}
-	if d < 2097152 {
-		return 2
-	}
-	return 3
-}
-
 // buildShannonLitCostTable computes the empirical zero-order Shannon entropy bit-cost table
 // for all 256 byte values within the 64 KiB block in fixed-point units (16 units = 1 byte = 8 bits).
 func buildShannonLitCostTable(src []byte, bStart, bSize int, table *[256]int32) {
@@ -130,11 +112,6 @@ func calcDistPrefixCostPRZM(d int) int32 {
 	k := bits.Len32(ud)
 	nb := k - 2
 	return int32(2 * nb)
-}
-
-// calcOffCostPRZM returns the number of bytes required to serialize offset d in Section 3.
-func calcOffCostPRZM(d int) int {
-	return getVarintBracket(d) + 1
 }
 
 // calcEdgeCostPRZM calculates the calibrated fixed-point bit-cost (scaled by 16 = 8 bits) for a match edge.
@@ -199,7 +176,6 @@ func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int, hasStride bool, str
 	} else if isBracketDist(dist) && mLen <= 15+minMatchBase {
 		// Fused Bracket: 2 bytes in Section 1, 0 offset bytes in Section 3
 		cost = 22
-
 	} else {
 		// Explicit match: opcode byte in Section 1 + Section 3 Huffman distance code (~24 units)
 		var baseCost int32 = 16
@@ -377,7 +353,7 @@ func populateMacroTables(
 		insertHashPRZM(src, pos, dictLen, pad, windowLog, sp1M, sp8M)
 		if pos+3 <= dictLen {
 			h3 := uint32(src[pos]) | (uint32(src[pos+1]) << 8) | (uint32(src[pos+2]) << 16)
-			base3 := int(((h3 * 0x1E35A7BD) >> 16) & 0xFFFF) * 8
+			base3 := int(((h3*0x1E35A7BD)>>16)&0xFFFF) * 8
 			if int(dpPad.table3[base3])-1 != pos {
 				for s := 7; s > 0; s-- {
 					dpPad.table3[base3+s] = dpPad.table3[base3+s-1]
@@ -387,7 +363,7 @@ func populateMacroTables(
 		}
 		if pos+4 <= dictLen {
 			w4 := binary.LittleEndian.Uint32(src[pos : pos+4])
-			hSec := int(((w4 * 0x7FEB352D) >> 15) & 0xFFFF) * 4
+			hSec := int(((w4*0x7FEB352D)>>15)&0xFFFF) * 4
 			if int(dpPad.headSec[hSec])-1 != pos {
 				dpPad.headSec[hSec+3] = dpPad.headSec[hSec+2]
 				dpPad.headSec[hSec+2] = dpPad.headSec[hSec+1]
@@ -421,7 +397,9 @@ func populateMacroTables(
 			w32_1 := binary.LittleEndian.Uint64(src[pos+8 : pos+16])
 			w32_2 := binary.LittleEndian.Uint64(src[pos+16 : pos+24])
 			w32_3 := binary.LittleEndian.Uint64(src[pos+24 : pos+32])
-			h32 := uint32(((w32_0 ^ (w32_1 * 0x9E3779B97F4A7C15) ^ (w32_2 * 0xC6A4A7935BD1E995) ^ (w32_3 * 0x517cc1b727220a95)) * 0x517cc1b727220a95) >> 48)
+			h32 := uint32(
+				((w32_0 ^ (w32_1 * 0x9E3779B97F4A7C15) ^ (w32_2 * 0xC6A4A7935BD1E995) ^ (w32_3 * 0x517cc1b727220a95)) * 0x517cc1b727220a95) >> 48,
+			)
 			base32 := int(h32&0xFFFF) * 2
 			if int(dpPad.dagProd32[base32])-1 != pos {
 				dpPad.dagProd32[base32+1] = dpPad.dagProd32[base32]
@@ -430,7 +408,6 @@ func populateMacroTables(
 		}
 	}
 }
-
 
 var isDelimLUT = [256]bool{
 	' ': true, '\t': true, '\n': true, '\r': true,
@@ -616,7 +593,8 @@ func emitPathPRZM(
 			}
 
 			// 2. Coalesce consecutive schema dictionary tokens into OpcodePrefixTransPair (0xFF <tok1> <tok2>)
-			if prevTo == coalesceFrom && ((prevRep == -3 && repCode == -3) || (prevRep == -3 && repCode == -2) || (prevRep == -2 && repCode == -3)) {
+			if prevTo == coalesceFrom &&
+				((prevRep == -3 && repCode == -3) || (prevRep == -3 && repCode == -2) || (prevRep == -2 && repCode == -3)) {
 				prevFrom := dpPad.trace[prevTo].from
 				tok1 := dpPad.trace[prevTo].extra1
 				tok2 := dpPad.trace[to].extra1
@@ -1312,11 +1290,10 @@ func compressBlockOptimal(
 			}
 		}
 
-
 		// Secondary 3-byte 8-way associative table (64K buckets x 8 slots)
 		if pos+3 <= uSize {
 			h3 := uint32(src[pos]) | (uint32(src[pos+1]) << 8) | (uint32(src[pos+2]) << 16)
-			base3 := int(((h3 * 0x1E35A7BD) >> 16) & 0xFFFF) * 8
+			base3 := int(((h3*0x1E35A7BD)>>16)&0xFFFF) * 8
 			for s := 0; s < 8; s++ {
 				prev3 := int(dpPad.table3[base3+s]) - 1
 				if prev3 >= 0 && prev3 < pos {
@@ -1343,7 +1320,9 @@ func compressBlockOptimal(
 			w32_1 := binary.LittleEndian.Uint64(src[pos+8 : pos+16])
 			w32_2 := binary.LittleEndian.Uint64(src[pos+16 : pos+24])
 			w32_3 := binary.LittleEndian.Uint64(src[pos+24 : pos+32])
-			h32 := uint32(((w32_0 ^ (w32_1 * 0x9E3779B97F4A7C15) ^ (w32_2 * 0xC6A4A7935BD1E995) ^ (w32_3 * 0x517cc1b727220a95)) * 0x517cc1b727220a95) >> 48)
+			h32 := uint32(
+				((w32_0 ^ (w32_1 * 0x9E3779B97F4A7C15) ^ (w32_2 * 0xC6A4A7935BD1E995) ^ (w32_3 * 0x517cc1b727220a95)) * 0x517cc1b727220a95) >> 48,
+			)
 			base32 := int(h32&0xFFFF) * 2
 			for s := 0; s < 2; s++ {
 				cand32 := int(dpPad.dagProd32[base32+s]) - 1
@@ -1459,7 +1438,7 @@ func compressBlockOptimal(
 
 			// Secondary 4-byte 4-way associative hash table
 			w4 := binary.LittleEndian.Uint32(src[pos : pos+4])
-			hSec := int(((w4 * 0x7FEB352D) >> 15) & 0xFFFF) * 4
+			hSec := int(((w4*0x7FEB352D)>>15)&0xFFFF) * 4
 			for s := 0; s < 4; s++ {
 				candSec := int(dpPad.headSec[hSec+s]) - 1
 				if candSec >= 0 && candSec < pos {
@@ -1503,7 +1482,22 @@ func compressBlockOptimal(
 		// Check if Long Match Shortcut triggers
 		if bestLongScore >= 512 {
 			// 1. Emit optimal path up to current position i
-			emitPathPRZM(src, bStart, segStart, i, uSize, pad, dpPad, rep0, rep1, rep2, rep3, minMatchBase, hasStride, stride)
+			emitPathPRZM(
+				src,
+				bStart,
+				segStart,
+				i,
+				uSize,
+				pad,
+				dpPad,
+				rep0,
+				rep1,
+				rep2,
+				rep3,
+				minMatchBase,
+				hasStride,
+				stride,
+			)
 
 			// 2. Emit the long match directly
 			mLen := int(bestLong.length)
@@ -1627,7 +1621,9 @@ func compressBlockOptimal(
 					w32_1 := binary.LittleEndian.Uint64(src[pStep+8 : pStep+16])
 					w32_2 := binary.LittleEndian.Uint64(src[pStep+16 : pStep+24])
 					w32_3 := binary.LittleEndian.Uint64(src[pStep+24 : pStep+32])
-					h32 := uint32(((w32_0 ^ (w32_1 * 0x9E3779B97F4A7C15) ^ (w32_2 * 0xC6A4A7935BD1E995) ^ (w32_3 * 0x517cc1b727220a95)) * 0x517cc1b727220a95) >> 48)
+					h32 := uint32(
+						((w32_0 ^ (w32_1 * 0x9E3779B97F4A7C15) ^ (w32_2 * 0xC6A4A7935BD1E995) ^ (w32_3 * 0x517cc1b727220a95)) * 0x517cc1b727220a95) >> 48,
+					)
 					base32Step := int(h32&0xFFFF) * 2
 					if int(dpPad.dagProd32[base32Step])-1 != pStep {
 						dpPad.dagProd32[base32Step+1] = dpPad.dagProd32[base32Step]
@@ -1800,7 +1796,22 @@ func compressBlockOptimal(
 
 	// 4. Backward Path Trace & PRZM Token Emission for the remaining segment
 	if segStart < bSize {
-		emitPathPRZM(src, bStart, segStart, bSize, uSize, pad, dpPad, rep0, rep1, rep2, rep3, minMatchBase, hasStride, stride)
+		emitPathPRZM(
+			src,
+			bStart,
+			segStart,
+			bSize,
+			uSize,
+			pad,
+			dpPad,
+			rep0,
+			rep1,
+			rep2,
+			rep3,
+			minMatchBase,
+			hasStride,
+			stride,
+		)
 	}
 
 	// 5. Rate-Distortion Evaluation: Hierarchical SLP Grammar DAG Bisection

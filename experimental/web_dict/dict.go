@@ -23,11 +23,11 @@ var (
 )
 
 var (
-	ErrMalformedHeader     = errors.New("przm/web_dict: malformed stream header")
-	ErrDictionaryMismatch  = errors.New("przm/web_dict: dictionary ID or digest mismatch")
-	ErrCorruptedStream     = errors.New("przm/web_dict: corrupted token stream")
-	ErrBufferOverflow      = errors.New("przm/web_dict: destination buffer overflow")
-	ErrSizeMismatch        = errors.New("przm/web_dict: decompressed size mismatch")
+	ErrMalformedHeader      = errors.New("przm/web_dict: malformed stream header")
+	ErrDictionaryMismatch   = errors.New("przm/web_dict: dictionary ID or digest mismatch")
+	ErrCorruptedStream      = errors.New("przm/web_dict: corrupted token stream")
+	ErrBufferOverflow       = errors.New("przm/web_dict: destination buffer overflow")
+	ErrSizeMismatch         = errors.New("przm/web_dict: decompressed size mismatch")
 	ErrRFC9651InvalidSyntax = errors.New("przm/web_dict: invalid RFC 9651 structured field syntax")
 )
 
@@ -368,13 +368,13 @@ type RuleL3 struct {
 
 // WebDictionary encapsulates pre-baked static dictionary strings stratified into an H-DAG.
 type WebDictionary struct {
-	ID        string
-	SHA256    [32]byte
-	RawBytes  []byte
-	L1        []RuleL1
-	L2        []RuleL2
-	L3        []RuleL3
-	Phrases   [][]byte
+	ID       string
+	SHA256   [32]byte
+	RawBytes []byte
+	L1       []RuleL1
+	L2       []RuleL2
+	L3       []RuleL3
+	Phrases  [][]byte
 
 	// Precomputed flat SIMD vector expansion tables (up to 256 rules per layer)
 	ExpL1 [256]uint16
@@ -382,9 +382,9 @@ type WebDictionary struct {
 	ExpL3 [256]uint64
 
 	// O(1) Fast Match Tables
-	L1Direct [65536]uint16     // 0 = none, (rule_id + 1)
-	L2Map    map[uint32]uint8  // 32-bit quadgram -> rule_id
-	L3Map    map[uint64]uint8  // 64-bit octagram -> rule_id
+	L1Direct  [65536]uint16     // 0 = none, (rule_id + 1)
+	L2Map     map[uint32]uint8  // 32-bit quadgram -> rule_id
+	L3Map     map[uint64]uint8  // 64-bit octagram -> rule_id
 	PhraseMap map[string]uint16 // phrase string -> phrase_id
 }
 
@@ -668,7 +668,7 @@ func CompressWebDict(src []byte, dict *WebDictionary) ([]byte, error) {
 	copy(out[0:7], MagicWebDict[:])
 	out[7] = WireVersion1
 	binary.LittleEndian.PutUint16(out[8:10], 0x0001) // Flag: GroundedWebDict
-	copy(out[10:18], dict.SHA256[:8])              // 8-byte cryptographic digest prefix
+	copy(out[10:18], dict.SHA256[:8])                // 8-byte cryptographic digest prefix
 	binary.LittleEndian.PutUint32(out[18:22], uint32(n))
 	binary.LittleEndian.PutUint32(out[22:26], uint32(len(axiom)))
 	copy(out[26:], axiom)
@@ -707,7 +707,7 @@ func DecompressWebDict(src []byte, dict *WebDictionary) ([]byte, error) {
 }
 
 // DecompressWebDictTo decompresses directly into caller-provided dst with 0 allocations.
-func DecompressWebDictTo(src []byte, dst []byte, dict *WebDictionary) (int, error) {
+func DecompressWebDictTo(src, dst []byte, dict *WebDictionary) (int, error) {
 	if len(src) == 0 {
 		return 0, nil
 	}

@@ -17,19 +17,19 @@ import (
 
 // Mode identifiers for Entropy-Pack
 const (
-	ModeFlat             uint8 = 0 // Raw uncompressed payload (0% CPU, O(1) slice copy)
-	ModeHuffman4X        uint8 = 1 // 4-stream interleaved Table-Driven Canonical Huffman (RAM-speed focus: >10 GB/s)
-	ModeHuffmanCompact   uint8 = 2 // Single-stream Table-Driven Canonical Huffman with 32B Active-Mask (<65B header)
-	ModeHuffmanCompact4X uint8 = 3 // 4-stream interleaved Table-Driven Canonical Huffman with 32B Active-Mask
-	ModeRecursiveLZ      uint8 = 4 // Recursive PRZM LZ77 frame (for structured, highly-repetitive command streams)
-	ModeVANS4X           uint8 = 5 // 4-way interleaved Vector-State ANS coder
-	ModeDistancePrefix   uint8 = 6 // Log2 Distance Prefix Codebook (Entropy-coded DistanceCode + Raw ExtraBits)
-	ModeSplitVarint               uint8 = 7  // De-interleaved LEB128 Varint Stream (LSB channel + MSB continuation channel)
-	ModeCommandEntropy            uint8 = 8  // 3-way structural splitting of command stream (Opcodes, Meta, Varints)
-	ModeFlatCompact               uint8 = 9  // Compact 1-byte header raw uncompressed payload (origLen = streamLen - 1)
-	ModeDistancePrefixCompact     uint8 = 10 // 7-byte header Distance Prefix (uint16 origLen, matchCount, codeStreamLen)
-	ModeDistancePrefixByte        uint8 = 11 // 4-byte header Distance Prefix (uint8 origLen, matchCount, codeStreamLen)
-	ModeDistClusteredVANSCompact  uint8 = 12 // 5-byte header 4-context Clustered V-ANS for Distance Codes (1B mode, 4B state)
+	ModeFlat                     uint8 = 0  // Raw uncompressed payload (0% CPU, O(1) slice copy)
+	ModeHuffman4X                uint8 = 1  // 4-stream interleaved Table-Driven Canonical Huffman (RAM-speed focus: >10 GB/s)
+	ModeHuffmanCompact           uint8 = 2  // Single-stream Table-Driven Canonical Huffman with 32B Active-Mask (<65B header)
+	ModeHuffmanCompact4X         uint8 = 3  // 4-stream interleaved Table-Driven Canonical Huffman with 32B Active-Mask
+	ModeRecursiveLZ              uint8 = 4  // Recursive PRZM LZ77 frame (for structured, highly-repetitive command streams)
+	ModeVANS4X                   uint8 = 5  // 4-way interleaved Vector-State ANS coder
+	ModeDistancePrefix           uint8 = 6  // Log2 Distance Prefix Codebook (Entropy-coded DistanceCode + Raw ExtraBits)
+	ModeSplitVarint              uint8 = 7  // De-interleaved LEB128 Varint Stream (LSB channel + MSB continuation channel)
+	ModeCommandEntropy           uint8 = 8  // 3-way structural splitting of command stream (Opcodes, Meta, Varints)
+	ModeFlatCompact              uint8 = 9  // Compact 1-byte header raw uncompressed payload (origLen = streamLen - 1)
+	ModeDistancePrefixCompact    uint8 = 10 // 7-byte header Distance Prefix (uint16 origLen, matchCount, codeStreamLen)
+	ModeDistancePrefixByte       uint8 = 11 // 4-byte header Distance Prefix (uint8 origLen, matchCount, codeStreamLen)
+	ModeDistClusteredVANSCompact uint8 = 12 // 5-byte header 4-context Clustered V-ANS for Distance Codes (1B mode, 4B state)
 )
 
 var ErrCorruptedStream = errors.New("entropy_pack: corrupted stream")
@@ -1305,7 +1305,15 @@ func UnpackStream(dst, src []byte, scratchTable *CanonicalHuffmanTable) (int, er
 		codeStreamLen := int(src[3])
 		scratchBuf := distCodeScratchPool.Get()
 		defer distCodeScratchPool.Put(scratchBuf)
-		return decodeDistancePrefixPayload(dst, origVarintLen, matchCount, codeStreamLen, src[4:], scratchTable, *scratchBuf)
+		return decodeDistancePrefixPayload(
+			dst,
+			origVarintLen,
+			matchCount,
+			codeStreamLen,
+			src[4:],
+			scratchTable,
+			*scratchBuf,
+		)
 	}
 	if mode == ModeDistancePrefixCompact {
 		if len(src) < 7 {
@@ -1316,7 +1324,15 @@ func UnpackStream(dst, src []byte, scratchTable *CanonicalHuffmanTable) (int, er
 		codeStreamLen := int(binary.LittleEndian.Uint16(src[5:7]))
 		scratchBuf := distCodeScratchPool.Get()
 		defer distCodeScratchPool.Put(scratchBuf)
-		return decodeDistancePrefixPayload(dst, origVarintLen, matchCount, codeStreamLen, src[7:], scratchTable, *scratchBuf)
+		return decodeDistancePrefixPayload(
+			dst,
+			origVarintLen,
+			matchCount,
+			codeStreamLen,
+			src[7:],
+			scratchTable,
+			*scratchBuf,
+		)
 	}
 
 	if len(src) < 5 {
@@ -1489,18 +1505,54 @@ type DistCodeEntry struct {
 }
 
 var DistTable = [49]DistCodeEntry{
-	{1, 0}, {2, 0}, {3, 0}, {4, 0},
-	{5, 1}, {7, 1}, {9, 2}, {13, 2},
-	{17, 3}, {25, 3}, {33, 4}, {49, 4},
-	{65, 5}, {97, 5}, {129, 6}, {193, 6},
-	{257, 7}, {385, 7}, {513, 8}, {769, 8},
-	{1025, 9}, {1537, 9}, {2049, 10}, {3073, 10},
-	{4097, 11}, {6145, 11}, {8193, 12}, {12289, 12},
-	{16385, 13}, {24577, 13}, {32769, 14}, {49153, 14},
-	{65537, 15}, {98305, 15}, {131073, 16}, {196609, 16},
-	{262145, 17}, {393217, 17}, {524289, 18}, {786433, 18},
-	{1048577, 19}, {1572865, 19}, {2097153, 20}, {3145729, 20},
-	{4194305, 21}, {6291457, 21}, {8388609, 22}, {12582913, 22},
+	{1, 0},
+	{2, 0},
+	{3, 0},
+	{4, 0},
+	{5, 1},
+	{7, 1},
+	{9, 2},
+	{13, 2},
+	{17, 3},
+	{25, 3},
+	{33, 4},
+	{49, 4},
+	{65, 5},
+	{97, 5},
+	{129, 6},
+	{193, 6},
+	{257, 7},
+	{385, 7},
+	{513, 8},
+	{769, 8},
+	{1025, 9},
+	{1537, 9},
+	{2049, 10},
+	{3073, 10},
+	{4097, 11},
+	{6145, 11},
+	{8193, 12},
+	{12289, 12},
+	{16385, 13},
+	{24577, 13},
+	{32769, 14},
+	{49153, 14},
+	{65537, 15},
+	{98305, 15},
+	{131073, 16},
+	{196609, 16},
+	{262145, 17},
+	{393217, 17},
+	{524289, 18},
+	{786433, 18},
+	{1048577, 19},
+	{1572865, 19},
+	{2097153, 20},
+	{3145729, 20},
+	{4194305, 21},
+	{6291457, 21},
+	{8388609, 22},
+	{12582913, 22},
 	{16777217, 24},
 }
 
@@ -1658,7 +1710,13 @@ func EncodeDistancePrefix(varints []byte) ([]byte, error) {
 	}
 }
 
-func decodeDistancePrefixPayload(dst []byte, origVarintLen, matchCount, codeStreamLen int, payload []byte, scratchTable *CanonicalHuffmanTable, scratchCodes []byte) (int, error) {
+func decodeDistancePrefixPayload(
+	dst []byte,
+	origVarintLen, matchCount, codeStreamLen int,
+	payload []byte,
+	scratchTable *CanonicalHuffmanTable,
+	scratchCodes []byte,
+) (int, error) {
 	if origVarintLen == 0 || matchCount == 0 {
 		return 0, nil
 	}
@@ -1753,7 +1811,7 @@ func decodeDistancePrefixPayload(dst []byte, origVarintLen, matchCount, codeStre
 }
 
 // DecodeDistancePrefix decodes a ModeDistancePrefix (standard, compact, or byte) stream into dst with zero heap allocations.
-func DecodeDistancePrefix(dst []byte, src []byte, scratchTable *CanonicalHuffmanTable, scratchCodes []byte) (int, error) {
+func DecodeDistancePrefix(dst, src []byte, scratchTable *CanonicalHuffmanTable, scratchCodes []byte) (int, error) {
 	if len(src) == 0 {
 		return 0, ErrCorruptedStream
 	}
@@ -1765,7 +1823,15 @@ func DecodeDistancePrefix(dst []byte, src []byte, scratchTable *CanonicalHuffman
 		origVarintLen := int(src[1])
 		matchCount := int(src[2])
 		codeStreamLen := int(src[3])
-		return decodeDistancePrefixPayload(dst, origVarintLen, matchCount, codeStreamLen, src[4:], scratchTable, scratchCodes)
+		return decodeDistancePrefixPayload(
+			dst,
+			origVarintLen,
+			matchCount,
+			codeStreamLen,
+			src[4:],
+			scratchTable,
+			scratchCodes,
+		)
 	}
 	if mode == ModeDistancePrefixCompact {
 		if len(src) < 7 {
@@ -1774,7 +1840,15 @@ func DecodeDistancePrefix(dst []byte, src []byte, scratchTable *CanonicalHuffman
 		origVarintLen := int(binary.LittleEndian.Uint16(src[1:3]))
 		matchCount := int(binary.LittleEndian.Uint16(src[3:5]))
 		codeStreamLen := int(binary.LittleEndian.Uint16(src[5:7]))
-		return decodeDistancePrefixPayload(dst, origVarintLen, matchCount, codeStreamLen, src[7:], scratchTable, scratchCodes)
+		return decodeDistancePrefixPayload(
+			dst,
+			origVarintLen,
+			matchCount,
+			codeStreamLen,
+			src[7:],
+			scratchTable,
+			scratchCodes,
+		)
 	}
 	if mode == ModeDistancePrefix {
 		if len(src) < 13 {
@@ -1783,7 +1857,15 @@ func DecodeDistancePrefix(dst []byte, src []byte, scratchTable *CanonicalHuffman
 		origVarintLen := int(binary.LittleEndian.Uint32(src[1:5]))
 		matchCount := int(binary.LittleEndian.Uint32(src[5:9]))
 		codeStreamLen := int(binary.LittleEndian.Uint32(src[9:13]))
-		return decodeDistancePrefixPayload(dst, origVarintLen, matchCount, codeStreamLen, src[13:], scratchTable, scratchCodes)
+		return decodeDistancePrefixPayload(
+			dst,
+			origVarintLen,
+			matchCount,
+			codeStreamLen,
+			src[13:],
+			scratchTable,
+			scratchCodes,
+		)
 	}
 	return 0, ErrCorruptedStream
 }
@@ -2400,6 +2482,3 @@ func PackCommandStream(src []byte, prefMode uint8) ([]byte, error) {
 	}
 	return best, nil
 }
-
-
-
