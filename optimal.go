@@ -839,7 +839,7 @@ func compressBlockOptimal(
 		}
 
 		// 2. Candidate Generation with Bracket Dominance Pareto Pruning & Long Match Shortcut
-		var candidates [32]dpCandidate
+		var candidates [64]dpCandidate
 		candCount := 0
 
 		var bestLong dpCandidate
@@ -863,7 +863,7 @@ func compressBlockOptimal(
 		// Dictionary Token Matching
 		if activeMatcher != nil {
 			tokIdx, transOp, tokLen, _, score, pairTok2, isRFC := activeMatcher.match(src, pos)
-			if score >= 1 && tokLen >= 2 && candCount < 30 {
+			if score >= 1 && tokLen >= 2 && candCount < 60 {
 				if isRFC {
 					candidates[candCount] = dpCandidate{
 						dist:    int32(tokIdx),
@@ -904,6 +904,41 @@ func compressBlockOptimal(
 						extra:   int32(tokIdx) | (int32(transOp) << 8),
 					}
 					candCount++
+				}
+			}
+		}
+
+		// Full RFC 7932 Static Dictionary Matching (13,146 words, 24 length classes, 121 transforms)
+		if activeMatcher != nil && activeMatcher.id == DictIDBrotliWeb {
+			rem := uSize - pos
+			if rem >= 4 {
+				maxSearchLen := uint(37)
+				if uint(rem) < maxSearchLen {
+					maxSearchLen = uint(rem)
+				}
+				var staticMatches [38]uint32
+				for idx := range staticMatches {
+					staticMatches[idx] = kInvalidMatch
+				}
+				if findAllStaticDictionaryMatches(src[pos:], 4, maxSearchLen, staticMatches[:]) {
+					for l := uint(4); l <= maxSearchLen; l++ {
+						m := staticMatches[l]
+						if m < kInvalidMatch && candCount < 60 {
+							dist := m >> 5
+							lenCode := m & 31
+							shift := kBrotliSizeBitsByLength[lenCode]
+							wordIdx := dist & ((1 << shift) - 1)
+							transID := dist >> shift
+							wordID := 256 + len(rfcTopWordsBytes) + int(rfcWordBase[lenCode]) + int(wordIdx)
+							candidates[candCount] = dpCandidate{
+								dist:    int32(wordID),
+								length:  int32(l),
+								repCode: -7,
+								extra:   int32(transID),
+							}
+							candCount++
+						}
+					}
 				}
 			}
 		}
@@ -959,7 +994,7 @@ func compressBlockOptimal(
 			}
 			mPos := pos - d
 			if compactDict && dictLen > 0 && mPos < dictLen {
-				if candCount < 30 && l >= minMatchBase {
+				if candCount < 60 && l >= minMatchBase {
 					candidates[candCount] = dpCandidate{
 						dist:    int32(mPos),
 						length:  int32(min(l, dpMaxL)),
@@ -1351,7 +1386,7 @@ func compressBlockOptimal(
 		}
 
 		for b := range 12 {
-			if bracketBest[b].length >= int32(minMatchBase) && candCount < 30 {
+			if bracketBest[b].length >= int32(minMatchBase) && candCount < 60 {
 				candidates[candCount] = bracketBest[b]
 				candCount++
 			}

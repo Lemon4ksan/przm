@@ -925,6 +925,11 @@ func (d *frameDecoder) decodeRFCTransform() error {
 		rfcIdx := wordID - 256
 		if rfcIdx < len(rfcTopWordsBytes) {
 			word = rfcTopWordsBytes[rfcIdx]
+		} else {
+			brotliIdx := rfcIdx - len(rfcTopWordsBytes)
+			if brotliIdx < len(przmBrotliWords) {
+				word = przmBrotliWords[brotliIdx]
+			}
 		}
 	}
 	if len(word) == 0 {

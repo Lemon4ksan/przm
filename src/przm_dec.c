@@ -3980,6 +3980,11 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
                 if (rfc_idx < PRZM_RFC_WORDS_COUNT) {
                     word_str = przm_rfc_words[rfc_idx].str;
                     word_len = przm_rfc_words[rfc_idx].len;
+                } else {
+                    size_t brotli_idx = rfc_idx - PRZM_RFC_WORDS_COUNT;
+                    if (brotli_idx < PRZM_RFC_DICT_WORDS_COUNT) {
+                        word_str = przm_get_rfc_dict_word(brotli_idx, &word_len);
+                    }
                 }
             }
             if (!word_str || word_len == 0) return PRZM_ERR_CORRUPTED_FRAME;

@@ -408,6 +408,41 @@ static const uint8_t przm_rfc_transforms[121][3] = {
     {0, 10, 34}, /* [120] */
 };
 
+#include "przm_brotli_data.h"
+
+#define PRZM_RFC_DICT_WORDS_COUNT 13504
+
+static const uint16_t przm_rfc_word_base[22] = {
+    0, 1024, 2048, 4096, 6144, 7168, 8192, 9216, 10240, 11264,
+    11776, 12288, 12544, 12672, 12800, 13056, 13184, 13312, 13376, 13440, 13472, 13504
+};
+
+static const uint32_t przm_rfc_dict_data_offsets[21] = {
+    0, 4096, 9216, 21504, 35840, 44032, 53248, 63488, 74752, 87040,
+    93696, 100864, 104704, 106752, 108928, 113536, 115968, 118528, 119872, 121280, 122016
+};
+
+static inline const char* przm_get_rfc_dict_word(size_t rfc_idx, size_t* out_len) {
+    if (rfc_idx >= PRZM_RFC_DICT_WORDS_COUNT) return NULL;
+    int low = 0, high = 20;
+    while (low <= high) {
+        int mid = (low + high) >> 1;
+        if (rfc_idx < przm_rfc_word_base[mid]) {
+            high = mid - 1;
+        } else if (rfc_idx >= przm_rfc_word_base[mid + 1]) {
+            low = mid + 1;
+        } else {
+            size_t l = (size_t)(mid + 4);
+            size_t word_idx = rfc_idx - przm_rfc_word_base[mid];
+            size_t offset = przm_rfc_dict_data_offsets[mid] + word_idx * l;
+            *out_len = l;
+            return (const char*)(przm_brotli_dict_data + offset);
+        }
+    }
+    return NULL;
+}
+
+
 #define PRZM_RFC_WORDS_COUNT 512
 static const przm_dict_entry_t przm_rfc_words[512] = {
     { "return", 6 }, /* [0] */

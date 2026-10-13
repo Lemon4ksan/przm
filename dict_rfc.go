@@ -598,9 +598,10 @@ func applyRFC7932Transform(dst []byte, transID uint8, word []byte) (int, error) 
 	if transID >= 121 {
 		return 0, fmt.Errorf("%w: invalid RFC transform ID %d", ErrCorruptedFrame, transID)
 	}
-	pfxIdx := kRFC7932Transforms[transID*3]
-	op := kRFC7932Transforms[transID*3+1]
-	sfxIdx := kRFC7932Transforms[transID*3+2]
+	tBase := int(transID) * 3
+	pfxIdx := kRFC7932Transforms[tBase]
+	op := kRFC7932Transforms[tBase+1]
+	sfxIdx := kRFC7932Transforms[tBase+2]
 
 	pfxOff := kRFC7932PrefixSuffixMap[pfxIdx]
 	pfxLen := int(kRFC7932PrefixSuffix[pfxOff])
@@ -667,3 +668,8 @@ func applyRFC7932Transform(dst []byte, transID uint8, word []byte) (int, error) 
 
 	return outLen, nil
 }
+
+func GetRFC7932Transforms() []uint8 {
+	return kRFC7932Transforms[:]
+}
+
