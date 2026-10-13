@@ -528,7 +528,7 @@ func emitPathPRZM(
 			prevRep := int(dpPad.trace[prevTo].repCode)
 			prevDist := int(dpPad.trace[prevTo].dist)
 
-			if (prevRep >= 0 || prevDist > 0) && prevTo == coalesceFrom {
+			if (prevRep >= 0 || (prevRep == -1 && prevDist > 0)) && prevTo == coalesceFrom {
 				prevFrom := dpPad.trace[prevTo].from
 				dpPad.trace[to].from = prevFrom
 				dpPad.trace[to].dist = int32(prevDist)
