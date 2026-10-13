@@ -24,6 +24,8 @@ const (
 	vansFlagCtxSheaf  uint8 = 0x04 // 2D Context Sheaf Markovian splitting (4 fibers, 0 bitmask)
 	vansFlagCtxOrder1 uint8 = 0x08 // Order-1 Context-conditioned ANS (Direct Context Sheaf)
 	vansFlagCtxOrder2 uint8 = 0x10 // Order-2 Context-conditioned ANS (64-state Context Sheaf)
+	vansFlagOpcodeOrder2 uint8 = 0x20 // 8-context Bigram/Order-2 V-ANS for opcodes
+	vansFlagMetaOrder2   uint8 = 0x40 // 8-context Bigram/Order-2 V-ANS for metadata
 
 	CtxModeStructural uint8 = 0x00 // Mode 0: Refined 4-Class Étale Sheaf (Delim, WS, Ident, Num)
 	CtxModeJSONDense  uint8 = 0x01 // Mode 1: JSON/Log Syntax-Dense Foliation
@@ -457,6 +459,12 @@ func VANSDecode4xTo(dst, src []byte, model *VANSModel) ([]byte, error) {
 	}
 	if (flags & vansFlagCtxSheaf) == 0 && (flags & vansFlagCtxOrder2) != 0 {
 		return ContextVANSDecodeOrder2To(dst, src)
+	}
+	if (flags & vansFlagOpcodeOrder2) != 0 {
+		return ContextVANSDecodeOpcode8To(dst, src)
+	}
+	if (flags & vansFlagMetaOrder2) != 0 {
+		return ContextVANSDecodeMeta8To(dst, src)
 	}
 	if (flags & vansFlagCtxOrder1) != 0 {
 		return ContextVANSDecode4xTo(dst, src)
@@ -996,4 +1004,263 @@ func ContextVANSDecodeOrder2(src []byte) ([]byte, error) {
 	dst := make([]byte, origLen)
 	return ContextVANSDecodeOrder2To(dst, src)
 }
+
+// ContextVANSEncodeOpcode8 encodes opStream using 8-context Bigram V-ANS.
+func ContextVANSEncodeOpcode8(src []byte) ([]byte, error) {
+	n := len(src)
+	if n == 0 {
+		return []byte{}, nil
+	}
+
+	var x [4]uint32
+	for i := range 4 {
+		x[i] = vansL
+	}
+
+	var bitstream []byte
+
+	// Encode backwards
+	for i := n - 1; i >= 0; i-- {
+		lane := i & 3
+		s := src[i]
+		p := byte(0)
+		if i > 0 {
+			p = src[i-1]
+		}
+		ctx := ctxOpcode(p)
+		m := &OpcodeStaticModels8[ctx]
+		f := uint32(m.Freq[s])
+		cdf := uint32(m.CDF[s])
+
+		// Renormalization
+		xMax := (uint32(4096) * f) - 1
+		for x[lane] > xMax {
+			bitstream = append(bitstream, byte(x[lane]))
+			x[lane] >>= 8
+		}
+
+		// State transition
+		x[lane] = (x[lane]/f)*vansM + cdf + (x[lane] % f)
+	}
+
+	headerSize := 24
+	totalSize := headerSize + len(bitstream)
+
+	out := make([]byte, 0, totalSize)
+	out = append(out, vansMagic0, vansMagic1, vansVer1, vansFlag4X|vansFlagOpcodeOrder2)
+	var lenBuf [4]byte
+	binary.LittleEndian.PutUint32(lenBuf[:], uint32(n))
+	out = append(out, lenBuf[:]...)
+
+	for i := range 4 {
+		var stBuf [4]byte
+		binary.LittleEndian.PutUint32(stBuf[:], x[i])
+		out = append(out, stBuf[:]...)
+	}
+
+	for _, b := range slices.Backward(bitstream) {
+		out = append(out, b)
+	}
+
+	return out, nil
+}
+
+// ContextVANSDecodeOpcode8To decodes an 8-context Bigram V-ANS stream into dst with 0 allocations.
+func ContextVANSDecodeOpcode8To(dst, src []byte) ([]byte, error) {
+	if len(src) == 0 {
+		return dst[:0], nil
+	}
+	if len(src) < 24 {
+		return nil, ErrVANSCorrupted
+	}
+
+	if src[0] != vansMagic0 || src[1] != vansMagic1 || src[2] != vansVer1 {
+		return nil, fmt.Errorf("%w: invalid V-ANS signature", ErrVANSCorrupted)
+	}
+
+	flags := src[3]
+	if (flags & vansFlagOpcodeOrder2) == 0 {
+		return nil, fmt.Errorf("%w: unsupported V-ANS opcode mode", ErrVANSCorrupted)
+	}
+
+	origLen := int(binary.LittleEndian.Uint32(src[4:8]))
+	if origLen < 0 || origLen > MaxBlockSize {
+		return nil, fmt.Errorf("%w: invalid V-ANS origLen %d", ErrVANSCorrupted, origLen)
+	}
+	if origLen == 0 {
+		return dst[:0], nil
+	}
+
+	var x [4]uint32
+	ptr := 8
+	for i := range 4 {
+		x[i] = binary.LittleEndian.Uint32(src[ptr : ptr+4])
+		ptr += 4
+	}
+
+	if cap(dst) < origLen {
+		return nil, fmt.Errorf("%w: dst capacity %d < origLen %d", ErrBufferTooSmall, cap(dst), origLen)
+	}
+	dst = dst[:origLen]
+
+	streamPtr := ptr
+	srcLen := len(src)
+	prev := byte(0)
+
+	for i := 0; i < origLen; i++ {
+		lane := i & 3
+		ctx := ctxOpcode(prev)
+		m := &OpcodeStaticModels8[ctx]
+
+		slot := x[lane] & (vansM - 1)
+		s := byte(m.DecodeTable[slot] & 0xFF)
+		dst[i] = s
+		prev = s
+
+		f := uint32(m.Freq[s])
+		cdf := uint32(m.CDF[s])
+
+		x[lane] = f*(x[lane]>>12) + (slot - cdf)
+
+		for x[lane] < vansL {
+			if streamPtr >= srcLen {
+				return nil, ErrVANSCorrupted
+			}
+			x[lane] = (x[lane] << 8) | uint32(src[streamPtr])
+			streamPtr++
+		}
+	}
+
+	return dst, nil
+}
+
+// ContextVANSEncodeMeta8 encodes metaStream using 8-context Bigram V-ANS.
+func ContextVANSEncodeMeta8(src []byte) ([]byte, error) {
+	n := len(src)
+	if n == 0 {
+		return []byte{}, nil
+	}
+
+	var x [4]uint32
+	for i := range 4 {
+		x[i] = vansL
+	}
+
+	var bitstream []byte
+
+	// Encode backwards
+	for i := n - 1; i >= 0; i-- {
+		lane := i & 3
+		s := src[i]
+		p := byte(0)
+		if i > 0 {
+			p = src[i-1]
+		}
+		ctx := ctxMeta(p)
+		m := &MetaStaticModels8[ctx]
+		f := uint32(m.Freq[s])
+		cdf := uint32(m.CDF[s])
+
+		// Renormalization
+		xMax := (uint32(4096) * f) - 1
+		for x[lane] > xMax {
+			bitstream = append(bitstream, byte(x[lane]))
+			x[lane] >>= 8
+		}
+
+		// State transition
+		x[lane] = (x[lane]/f)*vansM + cdf + (x[lane] % f)
+	}
+
+	headerSize := 24
+	totalSize := headerSize + len(bitstream)
+
+	out := make([]byte, 0, totalSize)
+	out = append(out, vansMagic0, vansMagic1, vansVer1, vansFlag4X|vansFlagMetaOrder2)
+	var lenBuf [4]byte
+	binary.LittleEndian.PutUint32(lenBuf[:], uint32(n))
+	out = append(out, lenBuf[:]...)
+
+	for i := range 4 {
+		var stBuf [4]byte
+		binary.LittleEndian.PutUint32(stBuf[:], x[i])
+		out = append(out, stBuf[:]...)
+	}
+
+	for _, b := range slices.Backward(bitstream) {
+		out = append(out, b)
+	}
+
+	return out, nil
+}
+
+// ContextVANSDecodeMeta8To decodes an 8-context Bigram V-ANS stream into dst with 0 allocations.
+func ContextVANSDecodeMeta8To(dst, src []byte) ([]byte, error) {
+	if len(src) == 0 {
+		return dst[:0], nil
+	}
+	if len(src) < 24 {
+		return nil, ErrVANSCorrupted
+	}
+
+	if src[0] != vansMagic0 || src[1] != vansMagic1 || src[2] != vansVer1 {
+		return nil, fmt.Errorf("%w: invalid V-ANS signature", ErrVANSCorrupted)
+	}
+
+	flags := src[3]
+	if (flags & vansFlagMetaOrder2) == 0 {
+		return nil, fmt.Errorf("%w: unsupported V-ANS meta mode", ErrVANSCorrupted)
+	}
+
+	origLen := int(binary.LittleEndian.Uint32(src[4:8]))
+	if origLen < 0 || origLen > MaxBlockSize {
+		return nil, fmt.Errorf("%w: invalid V-ANS origLen %d", ErrVANSCorrupted, origLen)
+	}
+	if origLen == 0 {
+		return dst[:0], nil
+	}
+
+	var x [4]uint32
+	ptr := 8
+	for i := range 4 {
+		x[i] = binary.LittleEndian.Uint32(src[ptr : ptr+4])
+		ptr += 4
+	}
+
+	if cap(dst) < origLen {
+		return nil, fmt.Errorf("%w: dst capacity %d < origLen %d", ErrBufferTooSmall, cap(dst), origLen)
+	}
+	dst = dst[:origLen]
+
+	streamPtr := ptr
+	srcLen := len(src)
+	prev := byte(0)
+
+	for i := 0; i < origLen; i++ {
+		lane := i & 3
+		ctx := ctxMeta(prev)
+		m := &MetaStaticModels8[ctx]
+
+		slot := x[lane] & (vansM - 1)
+		s := byte(m.DecodeTable[slot] & 0xFF)
+		dst[i] = s
+		prev = s
+
+		f := uint32(m.Freq[s])
+		cdf := uint32(m.CDF[s])
+
+		x[lane] = f*(x[lane]>>12) + (slot - cdf)
+
+		for x[lane] < vansL {
+			if streamPtr >= srcLen {
+				return nil, ErrVANSCorrupted
+			}
+			x[lane] = (x[lane] << 8) | uint32(src[streamPtr])
+			streamPtr++
+		}
+	}
+
+	return dst, nil
+}
+
 

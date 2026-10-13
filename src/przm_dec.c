@@ -1035,6 +1035,76 @@ static void przm_init_static_context_models_order2(void) {
     przm_static_context_models_order2_initialized = 1;
 }
 
+#include "przm_cmd_entropy_tables.h"
+
+static VANSModel przm_static_opcode_models8[8];
+static int przm_static_opcode_models8_initialized = 0;
+
+static void przm_init_static_opcode_models8(void) {
+    if (przm_static_opcode_models8_initialized) return;
+
+    for (int c = 0; c < 8; c++) {
+        uint32_t cdf = 0;
+        for (int s = 0; s < 256; s++) {
+            uint16_t f = przm_static_opcode_freq8[c][s];
+            przm_static_opcode_models8[c].freq[s] = f;
+            przm_static_opcode_models8[c].cdf[s] = (uint16_t)cdf;
+            for (uint32_t j = 0; j < f; j++) {
+                przm_static_opcode_models8[c].lookup[cdf + j] = (uint8_t)s;
+            }
+            cdf += f;
+        }
+        przm_static_opcode_models8[c].cdf[256] = (uint16_t)cdf;
+    }
+
+    przm_static_opcode_models8_initialized = 1;
+}
+
+static VANSModel przm_static_meta_models8[8];
+static int przm_static_meta_models8_initialized = 0;
+
+static void przm_init_static_meta_models8(void) {
+    if (przm_static_meta_models8_initialized) return;
+
+    for (int c = 0; c < 8; c++) {
+        uint32_t cdf = 0;
+        for (int s = 0; s < 256; s++) {
+            uint16_t f = przm_static_meta_freq8[c][s];
+            przm_static_meta_models8[c].freq[s] = f;
+            przm_static_meta_models8[c].cdf[s] = (uint16_t)cdf;
+            for (uint32_t j = 0; j < f; j++) {
+                przm_static_meta_models8[c].lookup[cdf + j] = (uint8_t)s;
+            }
+            cdf += f;
+        }
+        przm_static_meta_models8[c].cdf[256] = (uint16_t)cdf;
+    }
+
+    przm_static_meta_models8_initialized = 1;
+}
+
+static inline uint8_t przm_ctx_opcode(uint8_t prev) {
+    if (prev == 0xF3 || prev == 0xF4) return 0;
+    if ((prev >= 0xF5 && prev <= 0xFA) || prev == 0xF0) return 1;
+    if (prev == 0xCF) return 2;
+    if (prev >= 0x80 && prev <= 0x8F) return 3;
+    if (prev >= 0x90 && prev <= 0xBF) return 4;
+    if (prev < 0x80 || (prev >= 0xC0 && prev <= 0xC3)) return 5;
+    if (prev >= 0xC4 && prev <= 0xCE) return 6;
+    return 7;
+}
+
+static inline uint8_t przm_ctx_meta(uint8_t prev) {
+    if (prev == 0) return 0;
+    if (prev < 4) return 1;
+    if (prev < 16) return 2;
+    if (prev < 32) return 3;
+    if (prev < 64) return 4;
+    if (prev < 128) return 5;
+    if (prev < 192) return 6;
+    return 7;
+}
+
 static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_t orig_len) {
     if (src_len < 8) return PRZM_ERR_CORRUPTED_FRAME;
     if (src[0] != PRZM_MAGIC_VANS_0 || src[1] != PRZM_MAGIC_VANS_1 || src[2] != PRZM_VERSION_1) {
@@ -1042,6 +1112,82 @@ static int vans_decode4x(const uint8_t* src, size_t src_len, uint8_t* dst, size_
     }
 
     uint8_t flags = src[3];
+    if ((flags & PRZM_VANS_FLAG_OPCODE_ORDER2) != 0) {
+        if (src_len < 24) return PRZM_ERR_CORRUPTED_FRAME;
+        uint32_t header_orig = read_u32_le(src + 4);
+        if (header_orig != (uint32_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        if (orig_len == 0) return PRZM_OK;
+
+        przm_init_static_opcode_models8();
+
+        uint32_t x[4];
+        x[0] = read_u32_le(src + 8);
+        x[1] = read_u32_le(src + 12);
+        x[2] = read_u32_le(src + 16);
+        x[3] = read_u32_le(src + 20);
+
+        size_t stream_ptr = 24;
+        uint8_t prev = 0;
+
+        for (size_t i = 0; i < orig_len; i++) {
+            size_t lane = i & 3;
+            uint8_t ctx = przm_ctx_opcode(prev);
+            const VANSModel* m = &przm_static_opcode_models8[ctx];
+            uint32_t slot = x[lane] & (VANS_M - 1);
+            uint8_t s = m->lookup[slot];
+            dst[i] = s;
+            prev = s;
+
+            uint32_t f = m->freq[s];
+            uint32_t c = m->cdf[s];
+            x[lane] = f * (x[lane] >> 12) + (slot - c);
+            while (x[lane] < VANS_L) {
+                if (stream_ptr >= src_len) return PRZM_ERR_CORRUPTED_FRAME;
+                x[lane] = (x[lane] << 8) | (uint32_t)src[stream_ptr++];
+            }
+        }
+        return PRZM_OK;
+    }
+
+    if ((flags & PRZM_VANS_FLAG_META_ORDER2) != 0) {
+        if (src_len < 24) return PRZM_ERR_CORRUPTED_FRAME;
+        uint32_t header_orig = read_u32_le(src + 4);
+        if (header_orig != (uint32_t)orig_len) return PRZM_ERR_CORRUPTED_FRAME;
+        if (orig_len > PRZM_MAX_BLOCK_SIZE) return PRZM_ERR_EXCEEDS_MAX_BLOCK;
+        if (orig_len == 0) return PRZM_OK;
+
+        przm_init_static_meta_models8();
+
+        uint32_t x[4];
+        x[0] = read_u32_le(src + 8);
+        x[1] = read_u32_le(src + 12);
+        x[2] = read_u32_le(src + 16);
+        x[3] = read_u32_le(src + 20);
+
+        size_t stream_ptr = 24;
+        uint8_t prev = 0;
+
+        for (size_t i = 0; i < orig_len; i++) {
+            size_t lane = i & 3;
+            uint8_t ctx = przm_ctx_meta(prev);
+            const VANSModel* m = &przm_static_meta_models8[ctx];
+            uint32_t slot = x[lane] & (VANS_M - 1);
+            uint8_t s = m->lookup[slot];
+            dst[i] = s;
+            prev = s;
+
+            uint32_t f = m->freq[s];
+            uint32_t c = m->cdf[s];
+            x[lane] = f * (x[lane] >> 12) + (slot - c);
+            while (x[lane] < VANS_L) {
+                if (stream_ptr >= src_len) return PRZM_ERR_CORRUPTED_FRAME;
+                x[lane] = (x[lane] << 8) | (uint32_t)src[stream_ptr++];
+            }
+        }
+        return PRZM_OK;
+    }
+
     if ((flags & PRZM_VANS_FLAG_CTX_SHEAF) == 0 && (flags & PRZM_VANS_FLAG_CTX_ORDER2) != 0) {
         if (src_len < 24) return PRZM_ERR_CORRUPTED_FRAME;
         uint32_t header_orig = read_u32_le(src + 4);
