@@ -37,7 +37,7 @@ var (
 	ErrCellularSheafNoBenefit       = errors.New("przm: cellular sheaf does not compress data")
 )
 
-// Candidate strides for autonomous structure discovery.
+// CSHDCandidateStrides represents the candidate strides for autonomous structure discovery.
 var CSHDCandidateStrides = []int{4, 8, 16, 32, 64}
 
 var sheafPayloadPool = generic.NewPool(func() *[]byte {

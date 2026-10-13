@@ -461,6 +461,9 @@ func TestGPUD2DCompressionRoundtrip(t *testing.T) {
 }
 
 func TestGPUD2DLargePayloads(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping heavy GPU large payload test in short mode")
+	}
 	if !gpu.IsAvailable() {
 		t.Skip("NVIDIA Ampere+ CUDA GPU not available")
 	}
@@ -509,6 +512,9 @@ func TestGPUD2DLargePayloads(t *testing.T) {
 // (DMA Ingress -> Match Search -> Fused Warp Tokenizer -> D2D Entropy Encoding -> Frame Header -> DMA Egress)
 // on the physical NVIDIA RTX 3060, asserting throughput well beyond the 3,500 - 4,500 MB/s Citadel Bounty target.
 func TestGPUEndToEndChampionshipBenchmark(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping heavy GPU championship benchmark in short mode")
+	}
 	if !gpu.IsAvailable() {
 		t.Skip("NVIDIA Ampere+ CUDA GPU not available")
 	}
