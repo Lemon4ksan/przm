@@ -151,8 +151,8 @@ func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int, hasStride bool, str
 		return 20
 	}
 	if repCode == -5 {
-		// Sub-4-byte Token Pair: 3 bytes opcode (0xFF <tok1> <tok2>), 0 offset bytes
-		return 30
+		// Sub-Word Token Pair: 3 bytes opcode (0xFF <tok1> <tok2>), 0 offset bytes
+		return 20
 	}
 	if repCode == -6 {
 		// Compact Raw Dict: 1 byte opcode (0xE9) + 1 byte token + offCost
@@ -161,11 +161,12 @@ func calcEdgeCostPRZM(mLen, dist, repCode, minMatchBase int, hasStride bool, str
 	}
 	if repCode == -7 {
 		// RFC 7932 Transformed Dictionary Match:
-		// 1 byte opcode (0xCF) + 1 byte transID + varint(wordID)
+		// Compact 2-byte token: 3 bytes command (0xCF <b0> <b1>) -> 27 cost units
+		// Non-compact fallback: 4 bytes command -> 32 cost units
 		if dist < 128 {
-			return 24 // 3 command bytes (~12 bits)
+			return 27
 		}
-		return 32 // 4 command bytes (~16 bits)
+		return 32
 	}
 	var cost int32
 	if repCode >= 0 {
@@ -514,18 +515,35 @@ func emitPathPRZM(
 	for i := 0; i < len(path); i++ {
 		to := path[i]
 		repCode := int(dpPad.trace[to].repCode)
-
 		dist := int(dpPad.trace[to].dist)
-		if len(coalesced) > 0 && (repCode == 0 || (repCode == -1 && dist > 0 && dist == int(dpPad.trace[coalesced[len(coalesced)-1]].dist))) {
+
+		if len(coalesced) > 0 {
 			prevTo := coalesced[len(coalesced)-1]
 			prevRep := int(dpPad.trace[prevTo].repCode)
 			prevDist := int(dpPad.trace[prevTo].dist)
 
-			if (prevRep >= 0 || (prevRep == -1 && prevDist > 0)) && prevTo == coalesceFrom {
+			// 1. Coalesce consecutive LZ matches sharing same distance
+			if (repCode == 0 || (repCode == -1 && dist > 0 && dist == prevDist)) &&
+				(prevRep >= 0 || (prevRep == -1 && prevDist > 0)) && prevTo == coalesceFrom {
 				prevFrom := dpPad.trace[prevTo].from
 				dpPad.trace[to].from = prevFrom
 				dpPad.trace[to].dist = int32(prevDist)
 				dpPad.trace[to].repCode = int8(prevRep)
+				coalesced[len(coalesced)-1] = to
+				coalesceFrom = to
+				continue
+			}
+
+			// 2. Coalesce consecutive schema dictionary tokens into OpcodePrefixTransPair (0xFF <tok1> <tok2>)
+			if prevTo == coalesceFrom && ((prevRep == -3 && repCode == -3) || (prevRep == -3 && repCode == -2) || (prevRep == -2 && repCode == -3)) {
+				prevFrom := dpPad.trace[prevTo].from
+				tok1 := dpPad.trace[prevTo].extra1
+				tok2 := dpPad.trace[to].extra1
+				dpPad.trace[to].from = prevFrom
+				dpPad.trace[to].dist = 0
+				dpPad.trace[to].repCode = -5
+				dpPad.trace[to].extra1 = tok1
+				dpPad.trace[to].extra2 = tok2
 				coalesced[len(coalesced)-1] = to
 				coalesceFrom = to
 				continue
@@ -592,13 +610,21 @@ func emitPathPRZM(
 				}
 				writeOffsetPRZM(&pad.offsetBuf, mDist)
 			case -7:
-				// RFC 7932 Transformed Dictionary Match (0xCF <transID> <varint wordID>)
-				transID := dpPad.trace[to].extra1
-				wordID := int(dpPad.trace[to].dist)
-				pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixRFCTransform, transID)
-				var varBuf [8]byte
-				n := binary.PutUvarint(varBuf[:], uint64(wordID))
-				pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
+				// RFC 7932 Transformed Dictionary Match
+				b0 := dpPad.trace[to].extra1
+				if b0 >= 128 {
+					// Compact 2-byte dictionary token (0xCF <b0> <b1>)
+					b1 := dpPad.trace[to].extra2
+					pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixRFCTransform, b0, b1)
+				} else {
+					// Fallback (0xCF <transID> <varint wordID>)
+					transID := b0
+					wordID := int(dpPad.trace[to].dist)
+					pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixRFCTransform, transID)
+					var varBuf [8]byte
+					n := binary.PutUvarint(varBuf[:], uint64(wordID))
+					pad.cmdBuf = append(pad.cmdBuf, varBuf[:n]...)
+				}
 			}
 			litStart = -1
 			litLen = 0
@@ -859,11 +885,25 @@ func compressBlockOptimal(
 			tokIdx, transOp, tokLen, _, score, pairTok2, isRFC := activeMatcher.match(src, pos)
 			if score >= 1 && tokLen >= 2 && candCount < 60 {
 				if isRFC {
+					var b0, b1 uint8
+					if transOp == 0 && tokIdx >= 256 && int(tokIdx)-256 < len(rfcTopWordsBytes) {
+						rfcIdx := int(tokIdx) - 256
+						packed := uint16(13504 + rfcIdx)
+						b0 = 0x80 | uint8((packed>>7)&0x7F)
+						b1 = uint8(packed & 0x7F)
+					} else {
+						b0 = transOp
+						b1 = 0
+					}
+					distCode := int32(tokIdx)
+					if b0 >= 128 {
+						distCode = 0
+					}
 					candidates[candCount] = dpCandidate{
-						dist:    int32(tokIdx),
+						dist:    distCode,
 						length:  int32(tokLen),
 						repCode: -7,
-						extra:   int32(transOp),
+						extra:   int32(b0) | (int32(b1) << 8),
 					}
 					candCount++
 				} else if tokIdx < 8 && transOp == 0 {
@@ -923,12 +963,38 @@ func compressBlockOptimal(
 							shift := kBrotliSizeBitsByLength[lenCode]
 							wordIdx := dist & ((1 << shift) - 1)
 							transID := dist >> shift
-							wordID := 256 + len(rfcTopWordsBytes) + int(rfcWordBase[lenCode]) + int(wordIdx)
+							brotliIdx := int(rfcWordBase[lenCode]) + int(wordIdx)
+							wordID := 256 + len(rfcTopWordsBytes) + brotliIdx
+
+							var b0, b1 uint8
+							if transID == 0 && brotliIdx < 13504 {
+								packed := uint16(brotliIdx)
+								b0 = 0x80 | uint8((packed>>7)&0x7F)
+								b1 = uint8(packed & 0x7F)
+							} else if transID != 0 {
+								cIdx := lookupCompactRFCPair(uint16(brotliIdx), uint8(transID))
+								if cIdx >= 0 {
+									packed := uint16(14016 + cIdx)
+									b0 = 0x80 | uint8((packed>>7)&0x7F)
+									b1 = uint8(packed & 0x7F)
+								} else {
+									b0 = uint8(transID)
+									b1 = 0
+								}
+							} else {
+								b0 = uint8(transID)
+								b1 = 0
+							}
+							distCode := int32(wordID)
+							if b0 >= 128 {
+								distCode = 0
+							}
+
 							candidates[candCount] = dpCandidate{
-								dist:    int32(wordID),
+								dist:    distCode,
 								length:  int32(l),
 								repCode: -7,
-								extra:   int32(transID),
+								extra:   int32(b0) | (int32(b1) << 8),
 							}
 							candCount++
 						}

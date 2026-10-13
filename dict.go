@@ -216,6 +216,9 @@ func (m *dictMatcher) match(
 	pairTok2 = -1
 	bestScore = 0
 
+	bestSchemaIdx := -1
+	bestSchemaLen := 0
+
 	// 1. Length >= 4 matches via head/chain
 	if pos+4 <= uSize {
 		u32 := binary.LittleEndian.Uint32(src[pos : pos+4])
@@ -232,6 +235,12 @@ func (m *dictMatcher) match(
 					bestCost = int(e.cost)
 					bestScore = score
 					isRFC = e.isRFC
+				}
+			}
+			if !e.isRFC && e.transOp == 0 && pLen > bestSchemaLen && pos+pLen <= uSize {
+				if bytes.Equal(src[pos:pos+pLen], e.pattern) {
+					bestSchemaIdx = int(e.tokIdx)
+					bestSchemaLen = pLen
 				}
 			}
 		}
@@ -255,6 +264,12 @@ func (m *dictMatcher) match(
 					isRFC = e.isRFC
 				}
 			}
+			if !e.isRFC && e.transOp == 0 && pLen > bestSchemaLen && pos+pLen <= uSize {
+				if bytes.Equal(src[pos:pos+pLen], e.pattern) {
+					bestSchemaIdx = int(e.tokIdx)
+					bestSchemaLen = pLen
+				}
+			}
 		}
 	}
 
@@ -275,12 +290,18 @@ func (m *dictMatcher) match(
 					isRFC = e.isRFC
 				}
 			}
+			if !e.isRFC && e.transOp == 0 && pLen > bestSchemaLen && pos+pLen <= uSize {
+				if bytes.Equal(src[pos:pos+pLen], e.pattern) {
+					bestSchemaIdx = int(e.tokIdx)
+					bestSchemaLen = pLen
+				}
+			}
 		}
 	}
 
-	// 4. Sub-4-byte Token Pair probe (0xFF)
-	if !isRFC && bestLen >= 2 && bestTransOp == 0 && pos+bestLen+2 <= uSize {
-		pos2 := pos + bestLen
+	// 4. Sub-Word Token Pair probe (0xFF)
+	if bestSchemaLen >= 2 && pos+bestSchemaLen+2 <= uSize {
+		pos2 := pos + bestSchemaLen
 		tok2Idx := -1
 		tok2Len := 0
 
@@ -333,10 +354,11 @@ func (m *dictMatcher) match(
 		}
 
 		if tok2Len >= 2 {
-			pairLen := bestLen + tok2Len
-			pairCost := 3 // 0xFF, byte(bestIdx), byte(tok2Idx)
+			pairLen := bestSchemaLen + tok2Len
+			pairCost := 3 // 0xFF, byte(bestSchemaIdx), byte(tok2Idx)
 			pairScore := pairLen - pairCost
-			if pairScore > bestScore {
+			if pairScore >= bestScore {
+				bestIdx = bestSchemaIdx
 				pairTok2 = tok2Idx
 				bestTransOp = OpcodePrefixTransPair
 				bestLen = pairLen

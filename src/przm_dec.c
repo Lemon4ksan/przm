@@ -306,6 +306,7 @@ int przm_heisenberg_unfoliate_inplace(uint8_t* dst, size_t len, uint8_t stride) 
  * ============================================================================ */
 
 #include "przm_brotli_dict.h"
+#include "przm_compact_dict.h"
 
 PRZM_INLINE const char* get_schema_token(uint32_t dict_id, uint8_t token_idx,
                                          const przm_dictionary_t* ext_dict,
@@ -4124,9 +4125,47 @@ static int64_t decompress_standard_fused(const uint8_t* src, size_t src_len,
         }
 
         if (op == 0xCF) {
-            /* RFC 7932 Transformed Match (0xCF <trans_id> <varint word_id>) */
+            /* RFC 7932 Transformed Match */
             if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
-            uint8_t trans_id = cmds[cmd_ptr++];
+            uint8_t b0 = cmds[cmd_ptr++];
+
+            if (b0 >= 128) {
+                /* Compact 2-byte dictionary token */
+                if (cmd_ptr >= cmd_end) return PRZM_ERR_CORRUPTED_FRAME;
+                uint8_t b1 = cmds[cmd_ptr++];
+                uint16_t packed = (uint16_t)(((uint16_t)(b0 & 0x7F) << 7) | (uint16_t)(b1 & 0x7F));
+
+                const char* word_str = NULL;
+                size_t word_len = 0;
+                uint8_t trans_id = 0;
+
+                if (packed < PRZM_RFC_DICT_WORDS_COUNT) {
+                    word_str = przm_get_rfc_dict_word(packed, &word_len);
+                    trans_id = 0;
+                } else if (packed < PRZM_RFC_DICT_WORDS_COUNT + PRZM_RFC_WORDS_COUNT) {
+                    size_t rfc_idx = packed - PRZM_RFC_DICT_WORDS_COUNT;
+                    word_str = przm_rfc_words[rfc_idx].str;
+                    word_len = przm_rfc_words[rfc_idx].len;
+                    trans_id = 0;
+                } else {
+                    size_t c_idx = packed - (PRZM_RFC_DICT_WORDS_COUNT + PRZM_RFC_WORDS_COUNT);
+                    if (c_idx < PRZM_NUM_COMPACT_RFC_PAIRS) {
+                        uint16_t wid = przm_compact_rfc_pairs[c_idx].word_id;
+                        word_str = przm_get_rfc_dict_word(wid, &word_len);
+                        trans_id = przm_compact_rfc_pairs[c_idx].trans_id;
+                    }
+                }
+
+                if (!word_str || word_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+                if (!przm_check_cap(alloc_size, dst_pos, word_len + 32)) return PRZM_ERR_CORRUPTED_FRAME;
+                size_t out_len = przm_apply_rfc_transform(decode_dst + dst_pos, trans_id, word_str, word_len);
+                if (out_len == 0) return PRZM_ERR_CORRUPTED_FRAME;
+                dst_pos += out_len;
+                continue;
+            }
+
+            /* Standard fallback: b0 is trans_id, followed by varint word_id */
+            uint8_t trans_id = b0;
             int word_id = 0;
             int err = fast_read_varint(cmds, cmd_end, &cmd_ptr, &word_id);
             if (err != PRZM_OK || word_id < 0) return PRZM_ERR_CORRUPTED_FRAME;

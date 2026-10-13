@@ -905,9 +905,47 @@ func (d *frameDecoder) decodeRFCTransform() error {
 	if d.cmdPtr >= d.cmdEnd {
 		return fmt.Errorf("%w: truncated command stream", ErrCorruptedFrame)
 	}
-	transID := d.cmds[d.cmdPtr]
+	b0 := d.cmds[d.cmdPtr]
 	d.cmdPtr++
 
+	if b0 >= 128 {
+		if d.cmdPtr >= d.cmdEnd {
+			return fmt.Errorf("%w: truncated compact RFC token", ErrCorruptedFrame)
+		}
+		b1 := d.cmds[d.cmdPtr]
+		d.cmdPtr++
+
+		packed := (int(b0&0x7F) << 7) | int(b1&0x7F)
+		var word []byte
+		var transID uint8
+		if packed < 13504 {
+			word = przmBrotliWords[packed]
+			transID = 0
+		} else if packed < 14016 {
+			word = rfcTopWordsBytes[packed-13504]
+			transID = 0
+		} else {
+			cIdx := packed - 14016
+			if cIdx < len(kCompactRFCPairs) {
+				pair := kCompactRFCPairs[cIdx]
+				word = przmBrotliWords[pair.wordID]
+				transID = pair.transID
+			} else {
+				return fmt.Errorf("%w: invalid compact RFC pair index %d", ErrCorruptedFrame, cIdx)
+			}
+		}
+		if len(word) == 0 {
+			return fmt.Errorf("%w: invalid compact RFC word", ErrCorruptedFrame)
+		}
+		n, err := applyRFC7932Transform(d.outBuf[d.dstPos:], transID, word)
+		if err != nil {
+			return err
+		}
+		d.dstPos += n
+		return nil
+	}
+
+	transID := b0
 	wordID, newCmdPtr, err := fastReadVarint(d.cmds, d.cmdPtr)
 	if err != nil {
 		return err
