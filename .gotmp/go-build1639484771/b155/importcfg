@@ -1,8 +1,0 @@
-# import config
-packagefile bytes=C:\Users\senya\AppData\Local\go-build\b3\b3c8933b5af35a885f84447f65191f6aff2af0091adb2bd7064a6792888b022d-d
-packagefile fmt=C:\Users\senya\AppData\Local\go-build\9f\9fde0dced106095e048baa7db2f24f8b793d65abf994f01406b10716e77cf77c-d
-packagefile github.com/lemon4ksan/przm=d:\CodingProjects\przm\.gotmp\go-build1639484771\b156\_pkg_.a
-packagefile math/rand=C:\Users\senya\AppData\Local\go-build\87\874b19a337bfbfc95c124abf096f955943b5cd5a4386892bf4a793c8c40b2dad-d
-packagefile strings=C:\Users\senya\AppData\Local\go-build\ea\eaeca0b6afa3370a19d67793b6eeb58a6d35c21e586e7cb2a79869fb3b7b284d-d
-packagefile testing=C:\Users\senya\AppData\Local\go-build\53\53903dcc8c21dcf0886293c4813f6c6cd03e32df5a0383854454777bcc6c0500-d
-packagefile github.com/lemon4ksan/przm/gpu=d:\CodingProjects\przm\.gotmp\go-build1639484771\b153\_pkg_.a
