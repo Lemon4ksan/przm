@@ -1440,7 +1440,7 @@ type DistCodeEntry struct {
 	ExtraBits uint8
 }
 
-var DistTable = [32]DistCodeEntry{
+var DistTable = [49]DistCodeEntry{
 	{1, 0}, {2, 0}, {3, 0}, {4, 0},
 	{5, 1}, {7, 1}, {9, 2}, {13, 2},
 	{17, 3}, {25, 3}, {33, 4}, {49, 4},
@@ -1448,7 +1448,12 @@ var DistTable = [32]DistCodeEntry{
 	{257, 7}, {385, 7}, {513, 8}, {769, 8},
 	{1025, 9}, {1537, 9}, {2049, 10}, {3073, 10},
 	{4097, 11}, {6145, 11}, {8193, 12}, {12289, 12},
-	{16385, 13}, {24577, 13}, {32769, 15}, {65537, 24},
+	{16385, 13}, {24577, 13}, {32769, 14}, {49153, 14},
+	{65537, 15}, {98305, 15}, {131073, 16}, {196609, 16},
+	{262145, 17}, {393217, 17}, {524289, 18}, {786433, 18},
+	{1048577, 19}, {1572865, 19}, {2097153, 20}, {3145729, 20},
+	{4194305, 21}, {6291457, 21}, {8388609, 22}, {12582913, 22},
+	{16777217, 24},
 }
 
 var distCodeLUT [257]uint8
@@ -1462,9 +1467,12 @@ func init() {
 
 func distanceToCodeSlow(d int) (code uint8, extra uint32, nb uint8) {
 	if d <= 4 {
+		if d <= 0 {
+			return 0, 0, 0
+		}
 		return uint8(d - 1), 0, 0
 	}
-	if d <= 32768 {
+	if d <= 16777216 {
 		ud := uint32(d - 1)
 		nb = uint8(bits.Len32(ud) - 2)
 		half := uint8((ud >> nb) & 1)
@@ -1472,10 +1480,7 @@ func distanceToCodeSlow(d int) (code uint8, extra uint32, nb uint8) {
 		base := (uint32(2|half) << nb) + 1
 		return code, uint32(d) - base, nb
 	}
-	if d <= 65536 {
-		return 30, uint32(d) - 32769, 15
-	}
-	return 31, uint32(d) - 65537, 24
+	return 48, uint32(d) - 16777217, 24
 }
 
 // DistanceToCode maps a match distance (1..16777216) to (DistanceCode, ExtraBits, ExtraBitsCount).
@@ -1488,7 +1493,7 @@ func DistanceToCode(d int) (code uint8, extra uint32, nb uint8) {
 		entry := DistTable[c]
 		return c, uint32(d) - entry.Base, entry.ExtraBits
 	}
-	if d <= 32768 {
+	if d <= 16777216 {
 		ud := uint32(d - 1)
 		nb = uint8(bits.Len32(ud) - 2)
 		half := uint8((ud >> nb) & 1)
@@ -1496,15 +1501,12 @@ func DistanceToCode(d int) (code uint8, extra uint32, nb uint8) {
 		base := (uint32(2|half) << nb) + 1
 		return code, uint32(d) - base, nb
 	}
-	if d <= 65536 {
-		return 30, uint32(d) - 32769, 15
-	}
-	return 31, uint32(d) - 65537, 24
+	return 48, uint32(d) - 16777217, 24
 }
 
 // CodeToDistance reconstructs distance d from distance code and extra bits value.
 func CodeToDistance(code uint8, extra uint32) int {
-	if code >= 32 {
+	if code >= 49 {
 		return 0
 	}
 	return int(DistTable[code].Base + extra)
@@ -1553,7 +1555,7 @@ func EncodeDistancePrefix(varints []byte) ([]byte, error) {
 		idx++
 	}
 
-	packedCodes, err := EncodeHuffmanCompact(codes)
+	packedCodes, err := PackStreamLeaf(codes)
 	if err != nil {
 		return nil, err
 	}
@@ -1605,7 +1607,7 @@ func DecodeDistancePrefix(dst []byte, src []byte, scratchTable *CanonicalHuffman
 		return 0, ErrBufferTooSmall
 	}
 	codes := scratchCodes[:matchCount]
-	nCodes, err := DecodeHuffmanCompact(codes, src[13:13+codeStreamLen], scratchTable)
+	nCodes, err := UnpackStream(codes, src[13:13+codeStreamLen], scratchTable)
 	if err != nil || nCodes != matchCount {
 		return 0, ErrCorruptedStream
 	}
@@ -1616,7 +1618,7 @@ func DecodeDistancePrefix(dst []byte, src []byte, scratchTable *CanonicalHuffman
 	dstPos := 0
 	for i := 0; i < matchCount; i++ {
 		code := codes[i]
-		if code >= 32 {
+		if code >= 49 {
 			return 0, ErrCorruptedStream
 		}
 		entry := DistTable[code]
@@ -1683,7 +1685,7 @@ func PackOffsetStream(src []byte, prefMode uint8) ([]byte, error) {
 		return []byte{ModeFlat, 0, 0, 0, 0}, nil
 	}
 	var best []byte
-	if prefMode != ModeFlat && len(src) >= 16 {
+	if prefMode != ModeFlat && len(src) >= 8 {
 		if dp, err := EncodeDistancePrefix(src); err == nil {
 			best = dp
 		}

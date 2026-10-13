@@ -124,16 +124,10 @@ func calcDistPrefixCostPRZM(d int) int32 {
 	if d <= 4 {
 		return 0 // 0 extra bits
 	}
-	if d <= 32768 {
-		ud := uint32(d - 1)
-		k := bits.Len32(ud)
-		nb := k - 2
-		return int32(2 * nb) // nb extra bits (each bit = 2 units)
-	}
-	if d <= 65536 {
-		return 30 // 15 extra bits = 30 units
-	}
-	return 48 // 24 extra bits = 48 units (up to 16MB)
+	ud := uint32(d - 1)
+	k := bits.Len32(ud)
+	nb := k - 2
+	return int32(2 * nb)
 }
 
 // calcOffCostPRZM returns the number of bytes required to serialize offset d in Section 3.
@@ -985,8 +979,8 @@ func compressBlockOptimal(
 			}
 		}
 
-		// Explicit match candidates sorted into 12 distance brackets
-		var bracketBest [12]dpCandidate
+		// Explicit match candidates sorted into 24 distance brackets
+		var bracketBest [24]dpCandidate
 		updateBracket := func(d, l int) {
 			l = min(l, maxL)
 			if d <= 0 || d > windowSize || d == r0 || d == r1 || d == r2 || l < minMatchBase {
@@ -1018,26 +1012,50 @@ func compressBlockOptimal(
 			}
 			b := 0
 			if d >= 4194304 {
-				b = 11
+				b = 23
+			} else if d >= 2097152 {
+				b = 22
 			} else if d >= 1048576 {
-				b = 10
+				b = 21
+			} else if d >= 524288 {
+				b = 20
 			} else if d >= 262144 {
-				b = 9
+				b = 19
+			} else if d >= 131072 {
+				b = 18
 			} else if d >= 65536 {
-				b = 8
+				b = 17
+			} else if d >= 49152 {
+				b = 16
+			} else if d >= 32768 {
+				b = 15
+			} else if d >= 24576 {
+				b = 14
 			} else if d >= 16384 {
-				b = 7
+				b = 13
+			} else if d >= 12288 {
+				b = 12
+			} else if d >= 8192 {
+				b = 11
+			} else if d >= 6144 {
+				b = 10
 			} else if d >= 4096 {
-				b = 6
+				b = 9
+			} else if d >= 2048 {
+				b = 8
 			} else if d >= 1024 {
-				b = 5
+				b = 7
+			} else if d >= 512 {
+				b = 6
 			} else if d >= 256 {
+				b = 5
+			} else if d >= 128 {
 				b = 4
 			} else if d >= 64 {
 				b = 3
-			} else if d >= 16 {
+			} else if d >= 32 {
 				b = 2
-			} else if d >= 4 {
+			} else if d >= 8 {
 				b = 1
 			}
 			lClamped := min(l, dpMaxL)
@@ -1275,6 +1293,7 @@ func compressBlockOptimal(
 				pad.cmdBuf = append(pad.cmdBuf, op, token)
 				*rep2 = *rep1
 				*rep1 = *rep0
+				*rep0 = mDist
 
 			} else {
 				baseLen := mLen - minMatchBase
@@ -1385,7 +1404,7 @@ func compressBlockOptimal(
 			continue
 		}
 
-		for b := range 12 {
+		for b := range 24 {
 			if bracketBest[b].length >= int32(minMatchBase) && candCount < 60 {
 				candidates[candCount] = bracketBest[b]
 				candCount++

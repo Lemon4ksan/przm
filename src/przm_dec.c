@@ -3005,7 +3005,7 @@ static int64_t huffman_compact4x_decode(const uint8_t* src, size_t src_len,
  * Log2 Distance Prefix Codebook Decoder (Entropy-Coded Band + Raw ExtraBits)
  * ---------------------------------------------------------------------------- */
 
-static const uint32_t przm_dist_base[32] = {
+static const uint32_t przm_dist_base[49] = {
     1, 2, 3, 4,
     5, 7, 9, 13,
     17, 25, 33, 49,
@@ -3013,10 +3013,15 @@ static const uint32_t przm_dist_base[32] = {
     257, 385, 513, 769,
     1025, 1537, 2049, 3073,
     4097, 6145, 8193, 12289,
-    16385, 24577, 32769, 65537
+    16385, 24577, 32769, 49153,
+    65537, 98305, 131073, 196609,
+    262145, 393217, 524289, 786433,
+    1048577, 1572865, 2097153, 3145729,
+    4194305, 6291457, 8388609, 12582913,
+    16777217
 };
 
-static const uint8_t przm_dist_extra_bits[32] = {
+static const uint8_t przm_dist_extra_bits[49] = {
     0, 0, 0, 0,
     1, 1, 2, 2,
     3, 3, 4, 4,
@@ -3024,7 +3029,12 @@ static const uint8_t przm_dist_extra_bits[32] = {
     7, 7, 8, 8,
     9, 9, 10, 10,
     11, 11, 12, 12,
-    13, 13, 15, 24
+    13, 13, 14, 14,
+    15, 15, 16, 16,
+    17, 17, 18, 18,
+    19, 19, 20, 20,
+    21, 21, 22, 22,
+    24
 };
 
 static inline uint32_t przm_read_extra_bits(przm_huff_bit_reader_t* r, uint8_t nb) {
@@ -3043,6 +3053,10 @@ static inline uint32_t przm_read_extra_bits(przm_huff_bit_reader_t* r, uint8_t n
     }
 }
 
+static int64_t przm_unpack_stream(const uint8_t* src, size_t src_len,
+                                  uint8_t* dst, size_t dst_cap,
+                                  przm_canonical_huff_table_t* dec_table);
+
 static int64_t distance_prefix_decode(const uint8_t* src, size_t src_len,
                                       uint8_t* dst, size_t dst_cap,
                                       przm_canonical_huff_table_t* dec_table,
@@ -3059,9 +3073,9 @@ static int64_t distance_prefix_decode(const uint8_t* src, size_t src_len,
     if (scratch_cap < (size_t)match_count) return PRZM_ERR_BUFFER_TOO_SMALL;
     if (13 + (size_t)code_stream_len > src_len) return PRZM_ERR_CORRUPTED_FRAME;
 
-    /* 1. Decode distance codes via compact Huffman */
-    int64_t dec_codes = huffman_compact_decode(src + 13, code_stream_len,
-                                               scratch_codes, scratch_cap, dec_table);
+    /* 1. Decode distance codes via stream unpack (supports Compact Huffman, Flat, etc.) */
+    int64_t dec_codes = przm_unpack_stream(src + 13, code_stream_len,
+                                           scratch_codes, scratch_cap, dec_table);
     if (dec_codes < 0 || (uint32_t)dec_codes != match_count) {
         return PRZM_ERR_CORRUPTED_FRAME;
     }
@@ -3074,7 +3088,7 @@ static int64_t distance_prefix_decode(const uint8_t* src, size_t src_len,
     size_t dst_pos = 0;
     for (size_t i = 0; i < (size_t)match_count; i++) {
         uint8_t code = scratch_codes[i];
-        if (code >= 32) return PRZM_ERR_CORRUPTED_FRAME;
+        if (code >= 49) return PRZM_ERR_CORRUPTED_FRAME;
 
         uint8_t nb = przm_dist_extra_bits[code];
         uint32_t extra = 0;

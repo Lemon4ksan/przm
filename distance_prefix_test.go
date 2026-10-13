@@ -22,8 +22,8 @@ import (
 func TestDistancePrefix_CodebookRoundtrip(t *testing.T) {
 	for d := 1; d <= 131072; d++ {
 		code, extra, nb := przm.DistanceToCode(d)
-		if code >= 32 {
-			t.Fatalf("distance %d mapped to code %d >= 32", d, code)
+		if code >= 49 {
+			t.Fatalf("distance %d mapped to code %d >= 49", d, code)
 		}
 		entry := przm.DistTable[code]
 		if entry.ExtraBits != nb {
@@ -41,11 +41,12 @@ func TestDistancePrefix_CodebookRoundtrip(t *testing.T) {
 	}
 	for _, d := range farDistances {
 		code, extra, nb := przm.DistanceToCode(d)
-		if code != 31 {
-			t.Fatalf("far distance %d mapped to code %d != 31", d, code)
+		if code >= 49 {
+			t.Fatalf("far distance %d mapped to code %d >= 49", d, code)
 		}
-		if nb != 24 {
-			t.Fatalf("far distance %d: extraBits %d != 24", d, nb)
+		entry := przm.DistTable[code]
+		if entry.ExtraBits != nb {
+			t.Fatalf("far distance %d: extraBits %d != %d", d, entry.ExtraBits, nb)
 		}
 		recon := przm.CodeToDistance(code, extra)
 		if recon != d {
