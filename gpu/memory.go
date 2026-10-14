@@ -12,12 +12,8 @@ import (
 )
 
 var (
-	cuMemAllocHost     = modCUDA.NewProc("cuMemAllocHost")
-	cuMemFreeHost      = modCUDA.NewProc("cuMemFreeHost")
-	cuPrimaryCtxRetain = modCUDA.NewProc("cuDevicePrimaryCtxRetain")
-	pinnedMu           sync.Mutex
-	pinnedCtx          uintptr
-	cuMemHostAlloc     = modCUDA.NewProc("cuMemHostAlloc")
+	pinnedMu  sync.Mutex
+	pinnedCtx uintptr
 )
 
 func ensureContext() error {

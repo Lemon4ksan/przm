@@ -15,7 +15,6 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"unsafe"
 )
 
@@ -33,39 +32,6 @@ const (
 	cuAttrMultiprocessorCount    = 16
 	cuAttrComputeCapabilityMajor = 75
 	cuAttrComputeCapabilityMinor = 76
-)
-
-var (
-	modCUDA              = syscall.NewLazyDLL("nvcuda.dll")
-	cuInit               = modCUDA.NewProc("cuInit")
-	cuDeviceGet          = modCUDA.NewProc("cuDeviceGet")
-	cuDeviceGetCount     = modCUDA.NewProc("cuDeviceGetCount")
-	cuDeviceGetName      = modCUDA.NewProc("cuDeviceGetName")
-	cuDeviceTotalMem     = modCUDA.NewProc("cuDeviceTotalMem_v2")
-	cuDeviceGetAttribute = modCUDA.NewProc("cuDeviceGetAttribute")
-	cuCtxCreate          = modCUDA.NewProc("cuCtxCreate_v2")
-	cuCtxSetCurrent      = modCUDA.NewProc("cuCtxSetCurrent")
-	cuMemAlloc           = modCUDA.NewProc("cuMemAlloc_v2")
-	cuMemFree            = modCUDA.NewProc("cuMemFree_v2")
-	cuMemcpyHtoDAsync    = modCUDA.NewProc("cuMemcpyHtoDAsync_v2")
-	cuMemcpyDtoHAsync    = modCUDA.NewProc("cuMemcpyDtoHAsync_v2")
-	cuStreamCreate       = modCUDA.NewProc("cuStreamCreate")
-	cuStreamDestroy      = modCUDA.NewProc("cuStreamDestroy_v2")
-	cuStreamSynchronize  = modCUDA.NewProc("cuStreamSynchronize")
-	cuModuleGetFunc      = modCUDA.NewProc("cuModuleGetFunction")
-	cuLaunchKernel       = modCUDA.NewProc("cuLaunchKernel")
-	cuEventCreate        = modCUDA.NewProc("cuEventCreate")
-	cuEventRecord        = modCUDA.NewProc("cuEventRecord")
-	cuEventSynchronize   = modCUDA.NewProc("cuEventSynchronize")
-	cuEventElapsedTime   = modCUDA.NewProc("cuEventElapsedTime")
-	cuEventDestroy       = modCUDA.NewProc("cuEventDestroy_v2")
-	cuPrimaryCtxRelease  = modCUDA.NewProc("cuDevicePrimaryCtxRelease")
-	cuModuleLoadDataEx   = modCUDA.NewProc("cuModuleLoadDataEx")
-	cuModuleUnload       = modCUDA.NewProc("cuModuleUnload")
-	cuMemHostRegister    = modCUDA.NewProc("cuMemHostRegister")
-	cuMemHostUnregister  = modCUDA.NewProc("cuMemHostUnregister")
-	cuStreamWaitEvent    = modCUDA.NewProc("cuStreamWaitEvent")
-	cuMemsetD8Async      = modCUDA.NewProc("cuMemsetD8Async")
 )
 
 var (
