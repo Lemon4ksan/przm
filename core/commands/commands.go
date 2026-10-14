@@ -4,6 +4,8 @@ package commands
 
 import (
 	"encoding/binary"
+
+	"github.com/lemon4ksan/foundation/generic"
 )
 
 // SplitCommands decomposes linear bytecode instructions into opStream, metaStream, and varStream.
@@ -440,4 +442,208 @@ func unpackSubstreamOrVans(src, dst []byte, rawLen int) (int, error) {
 	}
 	copy(dst, src[:rawLen])
 	return rawLen, nil
+}
+
+// DemultiplexCommands reconstructs the canonical command stream from tri-stream inputs.
+func DemultiplexCommands(opStream, meta, vStream []byte, dst []byte, expected int) error {
+	return JoinCommands(dst, opStream, meta, vStream, expected)
+}
+
+var byteSlicePool = generic.NewSlicePool[byte](65536)
+
+func ensureCap(b []byte, req int) []byte {
+	if cap(b) < req {
+		return make([]byte, req)
+	}
+	return b[:req]
+}
+
+// PackageCommandsSection encodes Section 2 via Mode 8 or flat mode 0x09 using pooled buffers.
+func PackageCommandsSection(cmds []byte) []byte {
+	if len(cmds) == 0 {
+		return nil
+	}
+	opBuf := byteSlicePool.Get()
+	defer byteSlicePool.Put(opBuf)
+	metaBuf := byteSlicePool.Get()
+	defer byteSlicePool.Put(metaBuf)
+	varBuf := byteSlicePool.Get()
+	defer byteSlicePool.Put(varBuf)
+	dstBuf := byteSlicePool.Get()
+	defer byteSlicePool.Put(dstBuf)
+
+	opBuf = ensureCap(opBuf, len(cmds))
+	metaBuf = ensureCap(metaBuf, len(cmds))
+	varBuf = ensureCap(varBuf, len(cmds))
+	dstBuf = ensureCap(dstBuf, 13+len(cmds)+64)
+
+	nOp, nM, nV, err := SplitCommands(cmds, opBuf[:len(cmds)], metaBuf[:len(cmds)], varBuf[:len(cmds)])
+	if err == nil {
+		nPack, pErr := PackCommandsMode8(opBuf[:nOp], metaBuf[:nM], varBuf[:nV], len(cmds), dstBuf[:cap(dstBuf)])
+		if pErr == nil && nPack < len(cmds) {
+			out := make([]byte, nPack)
+			copy(out, dstBuf[:nPack])
+			return out
+		}
+	}
+	out := make([]byte, 1+len(cmds))
+	out[0] = 0x09
+	copy(out[1:], cmds)
+	return out
+}
+
+// TrellisEdge defines a parsing transition edge in the Trellis DAG.
+type TrellisEdge struct {
+	From   uint16
+	Length uint16
+	Dist   uint32
+	Kind   uint8 // 0: lit, 1: rep, 2: bracket, 3: stride, 4: explicit
+	Arg    uint8 // k for rep, b for bracket, m for stride
+}
+
+// AppendLEB128 appends uint32 in variable-length LEB128 format.
+func AppendLEB128(buf []byte, v uint32) []byte {
+	for v >= 0x80 {
+		buf = append(buf, byte(v|0x80))
+		v >>= 7
+	}
+	buf = append(buf, byte(v))
+	return buf
+}
+
+// EmitBlockCommands generates linear bytecode tokens from the optimal Trellis path.
+func EmitBlockCommands(edges []TrellisEdge, block []byte, bMin int,
+	cmdsOut, litsOut *[]byte, offsOut *[]uint32) {
+	var pendingLits []byte
+	for _, e := range edges {
+		if e.Kind == 0 {
+			b := block[int(e.From)]
+			pendingLits = append(pendingLits, b)
+			*litsOut = append(*litsOut, b)
+			continue
+		}
+		emitMatchWithLiterals(e, &pendingLits, bMin, cmdsOut, litsOut, offsOut)
+	}
+	if len(pendingLits) > 0 {
+		EmitLiteralRun(pendingLits, cmdsOut, litsOut)
+	}
+}
+
+func emitMatchWithLiterals(e TrellisEdge, pendingLits *[]byte, bMin int,
+	cmdsOut, litsOut *[]byte, offsOut *[]uint32) {
+	switch e.Kind {
+	case 1:
+		emitRepeatMatch(e, pendingLits, bMin, cmdsOut, litsOut)
+	case 2:
+		emitFixedMatch(byte(0xC4+int(e.Arg)), e, pendingLits, bMin, cmdsOut, litsOut)
+	case 3:
+		emitFixedMatch(byte(0xD0+int(e.Arg-1)), e, pendingLits, bMin, cmdsOut, litsOut)
+	case 4:
+		emitExplicitMatch(e, pendingLits, bMin, cmdsOut, litsOut, offsOut)
+	}
+	*pendingLits = nil
+}
+
+func emitRepeatMatch(e TrellisEdge, pendingLits *[]byte, bMin int, cmdsOut, litsOut *[]byte) {
+	nLit := len(*pendingLits)
+	lMatch := int(e.Length)
+	if nLit <= 7 && lMatch <= 3+bMin {
+		op := byte((nLit << 4) | ((lMatch - bMin) << 2) | int(e.Arg))
+		*cmdsOut = append(*cmdsOut, op)
+		return
+	}
+	if nLit > 15 {
+		EmitLiteralRun(*pendingLits, cmdsOut, litsOut)
+		nLit = 0
+	}
+	op := byte(0xC0 | int(e.Arg))
+	if lMatch-bMin < 15 {
+		tok := byte((nLit << 4) | (lMatch - bMin))
+		*cmdsOut = append(*cmdsOut, op, tok)
+		return
+	}
+	tok := byte((nLit << 4) | 15)
+	*cmdsOut = append(*cmdsOut, op, tok)
+	*cmdsOut = AppendLEB128(*cmdsOut, uint32(lMatch-bMin-15))
+}
+
+func emitFixedMatch(op byte, e TrellisEdge, pendingLits *[]byte, bMin int, cmdsOut, litsOut *[]byte) {
+	nLit := len(*pendingLits)
+	lMatch := int(e.Length)
+	if nLit > 15 {
+		EmitLiteralRun(*pendingLits, cmdsOut, litsOut)
+		nLit = 0
+	}
+	tok := byte((nLit << 4) | (lMatch - bMin))
+	*cmdsOut = append(*cmdsOut, op, tok)
+}
+
+func emitExplicitMatch(e TrellisEdge, pendingLits *[]byte, bMin int,
+	cmdsOut, litsOut *[]byte, offsOut *[]uint32) {
+	nLit := len(*pendingLits)
+	lMatch := int(e.Length)
+	if nLit > 15 {
+		EmitLiteralRun(*pendingLits, cmdsOut, litsOut)
+		nLit = 0
+	}
+	*offsOut = append(*offsOut, e.Dist)
+	if lMatch <= 14+bMin {
+		op := byte(0x80 | ((lMatch - bMin) << 4) | nLit)
+		*cmdsOut = append(*cmdsOut, op)
+		return
+	}
+	op := byte(0x80 | (15 << 4) | nLit)
+	*cmdsOut = append(*cmdsOut, op)
+	*cmdsOut = AppendLEB128(*cmdsOut, uint32(lMatch-bMin-15))
+}
+
+// EmitLiteralRun encodes pure literal sequences into standalone tokens.
+func EmitLiteralRun(lits []byte, cmdsOut, litsOut *[]byte) {
+	n := len(lits)
+	if n == 0 {
+		return
+	}
+	if n <= 8 {
+		*cmdsOut = append(*cmdsOut, byte(0xF2+n))
+		return
+	}
+	*cmdsOut = append(*cmdsOut, 0xF0)
+	*cmdsOut = AppendLEB128(*cmdsOut, uint32(n))
+}
+
+// UnpackSection2Commands decodes Section 2 command stream according to container framing mode.
+func UnpackSection2Commands(s2 []byte, op, meta, varBuf, cmds []byte) ([]byte, error) {
+	if len(s2) == 0 {
+		return nil, nil
+	}
+	switch s2[0] {
+	case 0x08:
+		if len(s2) < 13 {
+			return nil, ErrCorruptedFrame
+		}
+		origLen, nOp, nM, nV, err := UnpackCommandsMode8(s2, op, meta, varBuf)
+		if err != nil {
+			return nil, ErrCorruptedFrame
+		}
+		if origLen > len(cmds) {
+			return nil, ErrBufferTooSmall
+		}
+		if err := DemultiplexCommands(op[:nOp], meta[:nM], varBuf[:nV], cmds, origLen); err != nil {
+			return nil, ErrCorruptedFrame
+		}
+		return cmds[:origLen], nil
+	case 0x09:
+		return s2[1:], nil
+	case 0x00:
+		if len(s2) < 5 {
+			return nil, ErrCorruptedFrame
+		}
+		origLen := int(binary.LittleEndian.Uint32(s2[1:5]))
+		if 5+origLen > len(s2) {
+			return nil, ErrCorruptedFrame
+		}
+		return s2[5 : 5+origLen], nil
+	default:
+		return s2, nil
+	}
 }

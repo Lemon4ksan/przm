@@ -1,4 +1,4 @@
-package przm
+package literals
 
 // Character class bitmasks for fast causal classification.
 var (

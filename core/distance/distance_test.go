@@ -1,14 +1,12 @@
-package przm
+package distance
 
 import (
 	"bytes"
-	"encoding/binary"
 	"math/rand"
 	"testing"
 )
 
 func TestDistanceToCodeAndBack(t *testing.T) {
-	// Test direct small distances
 	for d := uint32(1); d <= 4; d++ {
 		c, extra, nb := DistanceToCode(d)
 		if c != uint8(d-1) || extra != 0 || nb != 0 {
@@ -20,12 +18,10 @@ func TestDistanceToCodeAndBack(t *testing.T) {
 		}
 	}
 
-	// Test boundary and mid points for all 49 brackets
 	for c := uint8(0); c < 49; c++ {
-		nb := distExtraBits[c]
-		base := distBase[c]
+		nb := DistExtraBits[c]
+		base := DistBase[c]
 
-		// Minimum distance in bracket
 		minDist := base
 		gotC, extra, gotNb := DistanceToCode(minDist)
 		if gotC != c || extra != 0 || gotNb != nb {
@@ -36,7 +32,6 @@ func TestDistanceToCodeAndBack(t *testing.T) {
 			t.Fatalf("bracket %d minDist roundtrip: got %d, err=%v", c, back, err)
 		}
 
-		// Maximum distance in bracket (if nb <= 22)
 		if nb > 0 && nb <= 22 {
 			maxDist := base + (uint32(1) << nb) - 1
 			gotC, extra, gotNb = DistanceToCode(maxDist)
@@ -76,7 +71,7 @@ func TestBitstreamReaderWriter(t *testing.T) {
 	}
 
 	written := buf[:w.BytesWritten()]
-	r := BitReader{buf: written}
+	r := BitReader{Buf: written}
 
 	for i, tv := range testValues {
 		val, err := r.ReadBits(tv.nb)
@@ -123,27 +118,19 @@ func TestLocalityQueue(t *testing.T) {
 		t.Fatalf("default init mismatch: %v", q.R)
 	}
 
-	// Repeat 0: Identity
 	if d := q.UpdateRepeat(0); d != 1 || q.R != [4]uint32{1, 4, 8, 16} {
 		t.Fatalf("k=0 mismatch: d=%d, queue=%v", d, q.R)
 	}
-
-	// Repeat 1: Swap R0, R1
 	if d := q.UpdateRepeat(1); d != 4 || q.R != [4]uint32{4, 1, 8, 16} {
 		t.Fatalf("k=1 mismatch: d=%d, queue=%v", d, q.R)
 	}
-
-	// Repeat 2: 3-cycle rotation
 	if d := q.UpdateRepeat(2); d != 8 || q.R != [4]uint32{8, 4, 1, 16} {
 		t.Fatalf("k=2 mismatch: d=%d, queue=%v", d, q.R)
 	}
-
-	// Repeat 3: 4-cycle rotation
 	if d := q.UpdateRepeat(3); d != 16 || q.R != [4]uint32{16, 8, 4, 1} {
 		t.Fatalf("k=3 mismatch: d=%d, queue=%v", d, q.R)
 	}
 
-	// Explicit push
 	q.UpdateExplicit(100)
 	if q.R != [4]uint32{100, 16, 8, 4} {
 		t.Fatalf("explicit push mismatch: %v", q.R)
@@ -177,7 +164,6 @@ func TestOffsetModesRoundtrip(t *testing.T) {
 				t.Fatalf("UnpackOffsets failed: %v", err)
 			}
 
-			// Verify unpacked varints match expected distances
 			var pos int
 			for idx, expectedD := range distances {
 				var d uint32
@@ -202,67 +188,6 @@ func TestOffsetModesRoundtrip(t *testing.T) {
 				t.Fatalf("extra trailing varint bytes: read %d, total %d", pos, vLen)
 			}
 		})
-	}
-}
-
-func TestFullFrameWithDistancePrefix(t *testing.T) {
-	// U = 16: "ABCDEFGHABCDEFGH"
-	// Literals: "ABCDEFGH" (8 bytes)
-	// Commands:
-	// 1. 0xFA: 8 literals
-	// 2. 0x84: llit = 0, base = 4 -> lmatch = 4 + 4 = 8, explicit offset from Section 3
-	// Offsets: distance = 8
-	distances := []uint32{8}
-	s3Buf := make([]byte, 256)
-	s3Len, err := PackDistancePrefix(distances, ModeDistancePrefix, true, s3Buf)
-	if err != nil {
-		t.Fatalf("PackDistancePrefix failed: %v", err)
-	}
-
-	frame := make([]byte, 512)
-	pos := 0
-	// 8-byte header
-	frame[pos] = 'P'; pos++
-	frame[pos] = 'R'; pos++
-	frame[pos] = 'Z'; pos++
-	frame[pos] = 'M'; pos++
-	frame[pos] = 0x00; pos++ // flags
-	frame[pos] = 16; pos++   // U = 16
-	frame[pos] = 0; pos++
-	frame[pos] = 0; pos++
-
-	// Section directory: L_cmd = 2, L_off = s3Len (16-bit LE)
-	binary.LittleEndian.PutUint16(frame[pos:pos+2], 2); pos += 2
-	binary.LittleEndian.PutUint16(frame[pos:pos+2], uint16(s3Len)); pos += 2
-
-	// Section 1: 8 bytes
-	frame[pos] = 0; pos++
-	frame[pos] = 16; pos++ // W_log = 16
-	for i := 0; i < 6; i++ {
-		frame[pos] = 0; pos++
-	}
-
-	// Section 2: Commands [0xFA, 0x84]
-	frame[pos] = 0xFA; pos++
-	frame[pos] = 0x84; pos++
-
-	// Section 3: ModeDistancePrefix
-	copy(frame[pos:], s3Buf[:s3Len]); pos += s3Len
-
-	// Section 4: Literals "ABCDEFGH"
-	copy(frame[pos:], "ABCDEFGH"); pos += 8
-
-	dst := make([]byte, 128)
-	n, err := Decompress(frame[:pos], dst)
-	if err != nil {
-		t.Fatalf("Decompress failed: %v", err)
-	}
-	if n != 16 {
-		t.Fatalf("decompressed length mismatch: expected 16, got %d", n)
-	}
-	expected := "ABCDEFGHABCDEFGH"
-	if string(dst[:n]) != expected {
-		t.Fatalf("decompressed content mismatch: expected %q, got %q", expected, string(dst[:n]))
 	}
 }
 
@@ -324,59 +249,4 @@ func TestDistanceZeroAllocations(t *testing.T) {
 	if allocsUnpack != 0.00 {
 		t.Fatalf("UnpackOffsets allocated %f allocs/op (0.00 required!)", allocsUnpack)
 	}
-}
-
-func BenchmarkDistance(b *testing.B) {
-	rng := rand.New(rand.NewSource(123))
-	n := 512
-	distances := make([]uint32, n)
-	codes := make([]uint8, n)
-	for i := 0; i < n; i++ {
-		d := uint32(rng.Intn(1000000) + 1)
-		distances[i] = d
-		c, _, _ := DistanceToCode(d)
-		codes[i] = c
-	}
-	encCodes := make([]byte, 2048)
-	decCodes := make([]uint8, n)
-	packed := make([]byte, 4096)
-	unpackedVarints := make([]byte, 4096)
-
-	encCodesLen, _ := EncodeDistClusteredVans(codes, encCodes)
-	nPacked, _ := PackDistancePrefix(distances, ModeDistancePrefix, true, packed)
-
-	b.Run("DistanceToCode", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			_, _, _ = DistanceToCode(uint32(i%1000000 + 1))
-		}
-	})
-
-	b.Run("VansDistEncode", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			_, _ = EncodeDistClusteredVans(codes, encCodes)
-		}
-	})
-
-	b.Run("VansDistDecode", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			_ = DecodeDistClusteredVans(encCodes[:encCodesLen], decCodes, n)
-		}
-	})
-
-	b.Run("PackPrefix", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			_, _ = PackDistancePrefix(distances, ModeDistancePrefix, true, packed)
-		}
-	})
-
-	b.Run("UnpackPrefix", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			_, _ = UnpackOffsets(packed[:nPacked], unpackedVarints)
-		}
-	})
 }

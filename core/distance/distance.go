@@ -1,12 +1,15 @@
-// Package clean_core provides Distance Offsets, 49-bracket codebook mapping,
+// Package distance provides match distance encoding, decoding, 49-bracket codebook mapping,
 // Clustered V-ANS Mode 12 entropy coding, 4-register locality queue, and offset stream unpacking.
-// Strictly adheres to the Clean Room Specification with zero dynamic memory allocations.
-package przm
+// Strictly conforms to the Clean Room Specification with zero dynamic memory allocation.
+package distance
 
 import (
 	"encoding/binary"
+	"errors"
 	"math/bits"
 	"sync"
+
+	"github.com/lemon4ksan/foundation/generic"
 )
 
 // Offset container mode identifiers.
@@ -19,13 +22,21 @@ const (
 	ModeDistClusteredVANS     byte = 0x0C
 )
 
-// distExtraBits contains the extra bit count for each of the 49 distance brackets.
-var distExtraBits = [49]uint8{
+// Standard error definitions for distance codec.
+var (
+	ErrBufferTooSmall  = errors.New("distance: buffer too small")
+	ErrCorruptedFrame  = errors.New("distance: corrupted frame")
+	ErrOffsetOOB       = errors.New("distance: match offset out of bounds")
+	ErrUnsupportedMode = errors.New("distance: unsupported offset container mode")
+)
+
+// DistExtraBits contains the extra bit count for each of the 49 distance brackets.
+var DistExtraBits = [49]uint8{
 	0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22, 24,
 }
 
-// distBase contains the base distance for each of the 49 distance brackets.
-var distBase = [49]uint32{
+// DistBase contains the base distance for each of the 49 distance brackets.
+var DistBase = [49]uint32{
 	1, 2, 3, 4, 5, 7, 9, 13, 17, 25,
 	33, 49, 65, 97, 129, 193, 257, 385, 513, 769,
 	1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
@@ -33,8 +44,8 @@ var distBase = [49]uint32{
 	1048577, 1572865, 2097153, 3145729, 4194305, 6291457, 8388609, 12582913, 16777217,
 }
 
-// staticDistFreq4 contains the 4 x 64 static frequency table for Mode 12 V-ANS.
-var staticDistFreq4 = [4][64]uint16{
+// StaticDistFreq4 contains the 4 x 64 static frequency table for Mode 12 V-ANS.
+var StaticDistFreq4 = [4][64]uint16{
 	{
 		1, 1, 1, 1, 1, 1, 128, 43, 128, 256, 341, 687, 341, 256, 427, 43,
 		256, 43, 128, 1, 43, 43, 85, 85, 85, 85, 85, 85, 171, 1, 85, 43,
@@ -77,7 +88,7 @@ func initDistModels4() {
 		for c := 0; c < 4; c++ {
 			var cum uint16
 			for s := 0; s < 64; s++ {
-				f := staticDistFreq4[c][s]
+				f := StaticDistFreq4[c][s]
 				distModels4[c].Freq[s] = f
 				distModels4[c].CDF[s] = cum
 				for k := uint16(0); k < f; k++ {
@@ -88,6 +99,17 @@ func initDistModels4() {
 		}
 	})
 }
+
+// Scratchpad provides reusable buffers for zero-allocation distance processing.
+type Scratchpad struct {
+	meta   [2 * 1024 * 1024]byte
+	varBuf [2 * 1024 * 1024]byte
+	cmds   [4 * 1024 * 1024]byte
+}
+
+var scratchPool = generic.NewPool[Scratchpad](func() *Scratchpad {
+	return new(Scratchpad)
+})
 
 // DistanceToCode maps a match distance D to its distance code, extra bits, and extra bit count.
 func DistanceToCode(d uint32) (code uint8, extra uint32, nb uint8) {
@@ -111,7 +133,7 @@ func CodeToDistance(code uint8, extra uint32) (uint32, error) {
 	if code > 48 {
 		return 0, ErrCorruptedFrame
 	}
-	return distBase[code] + extra, nil
+	return DistBase[code] + extra, nil
 }
 
 // ContextDist returns the Markov context class for distance symbol prediction.
@@ -130,15 +152,15 @@ func ContextDist(prev uint8) int {
 
 // BitWriter packs bits MSB-first into a destination byte buffer.
 type BitWriter struct {
-	buf []byte
-	pos int
-	acc uint64
-	cnt uint8
+	Buf []byte
+	Pos int
+	Acc uint64
+	Cnt uint8
 }
 
 // NewBitWriter initializes a bit writer over buf.
 func NewBitWriter(buf []byte) BitWriter {
-	return BitWriter{buf: buf}
+	return BitWriter{Buf: buf}
 }
 
 // WriteBits writes nb bits from val into the writer (MSB-first).
@@ -146,44 +168,49 @@ func (w *BitWriter) WriteBits(val uint32, nb uint8) error {
 	if nb == 0 {
 		return nil
 	}
-	w.acc = (w.acc << nb) | (uint64(val) & ((1 << nb) - 1))
-	w.cnt += nb
-	for w.cnt >= 8 {
-		if w.pos >= len(w.buf) {
+	w.Acc = (w.Acc << nb) | (uint64(val) & ((1 << nb) - 1))
+	w.Cnt += nb
+	for w.Cnt >= 8 {
+		if w.Pos >= len(w.Buf) {
 			return ErrBufferTooSmall
 		}
-		w.cnt -= 8
-		w.buf[w.pos] = byte(w.acc >> w.cnt)
-		w.pos++
+		w.Cnt -= 8
+		w.Buf[w.Pos] = byte(w.Acc >> w.Cnt)
+		w.Pos++
 	}
 	return nil
 }
 
 // Flush flushes any remaining bits in the accumulator, padding with zeros.
 func (w *BitWriter) Flush() error {
-	if w.cnt > 0 {
-		if w.pos >= len(w.buf) {
+	if w.Cnt > 0 {
+		if w.Pos >= len(w.Buf) {
 			return ErrBufferTooSmall
 		}
-		w.buf[w.pos] = byte(w.acc << (8 - w.cnt))
-		w.pos++
-		w.cnt = 0
-		w.acc = 0
+		w.Buf[w.Pos] = byte(w.Acc << (8 - w.Cnt))
+		w.Pos++
+		w.Cnt = 0
+		w.Acc = 0
 	}
 	return nil
 }
 
 // BytesWritten returns the total number of bytes written.
 func (w *BitWriter) BytesWritten() int {
-	return w.pos
+	return w.Pos
 }
 
 // BitReader extracts bits MSB-first from a source byte buffer.
 type BitReader struct {
-	buf []byte
-	pos int
-	acc uint64
-	cnt uint8
+	Buf []byte
+	Pos int
+	Acc uint64
+	Cnt uint8
+}
+
+// NewBitReader initializes a bit reader over buf.
+func NewBitReader(buf []byte) BitReader {
+	return BitReader{Buf: buf}
 }
 
 // ReadBits reads nb bits from the stream MSB-first.
@@ -191,18 +218,18 @@ func (r *BitReader) ReadBits(nb uint8) (uint32, error) {
 	if nb == 0 {
 		return 0, nil
 	}
-	for r.cnt < nb {
-		if r.pos >= len(r.buf) {
+	for r.Cnt < nb {
+		if r.Pos >= len(r.Buf) {
 			return 0, ErrCorruptedFrame
 		}
-		r.acc = (r.acc << 8) | uint64(r.buf[r.pos])
-		r.pos++
-		r.cnt += 8
+		r.Acc = (r.Acc << 8) | uint64(r.Buf[r.Pos])
+		r.Pos++
+		r.Cnt += 8
 	}
-	shift := r.cnt - nb
+	shift := r.Cnt - nb
 	mask := (uint64(1) << nb) - 1
-	val := uint32((r.acc >> shift) & mask)
-	r.cnt -= nb
+	val := uint32((r.Acc >> shift) & mask)
+	r.Cnt -= nb
 	return val, nil
 }
 
@@ -303,6 +330,23 @@ type LocalityQueue struct {
 	R [4]uint32
 }
 
+// NewLocalityQueue constructs a new LocalityQueue with stride configuration.
+func NewLocalityQueue(stride int) LocalityQueue {
+	var q LocalityQueue
+	if stride > 1 {
+		q.R[0] = 1
+		q.R[1] = uint32(stride)
+		q.R[2] = uint32(2 * stride)
+		q.R[3] = uint32(3 * stride)
+		return q
+	}
+	q.R[0] = 1
+	q.R[1] = 4
+	q.R[2] = 8
+	q.R[3] = 16
+	return q
+}
+
 // Init sets the initial distance vector based on flags and stride.
 func (q *LocalityQueue) Init(stride uint32, flagStride bool) {
 	if flagStride && stride > 1 {
@@ -341,6 +385,50 @@ func (q *LocalityQueue) UpdateExplicit(d uint32) {
 	q.R[0] = d
 }
 
+// AdvanceLocalityQueue updates the locality queue with an uncompressed match distance.
+func AdvanceLocalityQueue(q *LocalityQueue, dist uint32) {
+	for k := 0; k < 4; k++ {
+		if q.R[k] == dist {
+			q.UpdateRepeat(k)
+			return
+		}
+	}
+	q.UpdateExplicit(dist)
+}
+
+// DecodeLocalityQueue retrieves distance by repeat opcode [0..3].
+func DecodeLocalityQueue(q *LocalityQueue, code uint8) uint32 {
+	return q.UpdateRepeat(int(code & 3))
+}
+
+// UpdateLRURepeat updates a raw [4]uint32 array on repeat match k.
+func UpdateLRURepeat(r *[4]uint32, k uint8) {
+	d := r[k]
+	switch k {
+	case 0:
+	case 1:
+		r[1] = r[0]
+		r[0] = d
+	case 2:
+		r[2] = r[1]
+		r[1] = r[0]
+		r[0] = d
+	case 3:
+		r[3] = r[2]
+		r[2] = r[1]
+		r[1] = r[0]
+		r[0] = d
+	}
+}
+
+// UpdateLRUExplicit updates a raw [4]uint32 array with explicit distance d.
+func UpdateLRUExplicit(r *[4]uint32, d uint32) {
+	r[3] = r[2]
+	r[2] = r[1]
+	r[1] = r[0]
+	r[0] = d
+}
+
 // writeLEB128 encodes an unsigned 32-bit integer as an LEB128 varint into dst.
 func writeLEB128(dst []byte, pos int, v uint32) (int, error) {
 	for {
@@ -374,23 +462,27 @@ func UnpackOffsets(src, dst []byte) (int, error) {
 		return n, nil
 	}
 	if mode == ModeFlat {
-		if len(src) < 5 {
-			return 0, ErrCorruptedFrame
-		}
-		origLen := int(binary.LittleEndian.Uint32(src[1:5]))
-		if origLen > len(dst) {
-			return 0, ErrBufferTooSmall
-		}
-		if 5+origLen > len(src) {
-			return 0, ErrCorruptedFrame
-		}
-		copy(dst, src[5:5+origLen])
-		return origLen, nil
+		return unpackFlatOffsets(src, dst)
 	}
 	if mode == ModeDistancePrefix || mode == ModeDistancePrefixCompact || mode == ModeDistancePrefixByte {
 		return UnpackDistancePrefix(src, dst)
 	}
 	return 0, ErrUnsupportedMode
+}
+
+func unpackFlatOffsets(src, dst []byte) (int, error) {
+	if len(src) < 5 {
+		return 0, ErrCorruptedFrame
+	}
+	origLen := int(binary.LittleEndian.Uint32(src[1:5]))
+	if origLen > len(dst) {
+		return 0, ErrBufferTooSmall
+	}
+	if 5+origLen > len(src) {
+		return 0, ErrCorruptedFrame
+	}
+	copy(dst, src[5:5+origLen])
+	return origLen, nil
 }
 
 // parsePrefixHeader decodes the header of distance prefix modes (0x06, 0x0A, 0x0B).
@@ -424,10 +516,7 @@ func parsePrefixHeader(src []byte) (origLen, matchCount, codeLen uint32, hSize i
 	default:
 		return 0, 0, 0, 0, ErrUnsupportedMode
 	}
-	if hSize+int(codeLen) > len(src) {
-		return 0, 0, 0, 0, ErrCorruptedFrame
-	}
-	if origLen > 16777216 || matchCount > origLen {
+	if hSize+int(codeLen) > len(src) || origLen > 16777216 || matchCount > origLen {
 		return 0, 0, 0, 0, ErrCorruptedFrame
 	}
 	return origLen, matchCount, codeLen, hSize, nil
@@ -465,14 +554,14 @@ func decodeCodeStream(codeStream []byte, matchCount int, dstCodes []byte) error 
 
 // decodeDistanceVarints reads extra bits and formats output varints.
 func decodeDistanceVarints(codes []byte, matchCount int, extraStream []byte, dst []byte, origLen int) (int, error) {
-	reader := BitReader{buf: extraStream}
+	reader := BitReader{Buf: extraStream}
 	dstPos := 0
 	for i := 0; i < matchCount; i++ {
 		code := codes[i]
 		if code > 48 {
 			return 0, ErrCorruptedFrame
 		}
-		nb := distExtraBits[code]
+		nb := DistExtraBits[code]
 		var extra uint32
 		if nb > 0 {
 			val, err := reader.ReadBits(nb)
@@ -481,7 +570,7 @@ func decodeDistanceVarints(codes []byte, matchCount int, extraStream []byte, dst
 			}
 			extra = val
 		}
-		d := distBase[code] + extra
+		d := DistBase[code] + extra
 		if d == 0 || d > 16777216 {
 			return 0, ErrOffsetOOB
 		}
@@ -546,15 +635,7 @@ func PackDistancePrefix(distances []uint32, mode byte, useVANS bool, dst []byte)
 				return 0, err
 			}
 		}
-		if d <= 0x7F {
-			origVarintLen++
-		} else if d <= 0x3FFF {
-			origVarintLen += 2
-		} else if d <= 0x1FFFFF {
-			origVarintLen += 3
-		} else {
-			origVarintLen += 4
-		}
+		origVarintLen += varintLen(d)
 	}
 	if err := extraWriter.Flush(); err != nil {
 		return 0, err
@@ -575,6 +656,19 @@ func PackDistancePrefix(distances []uint32, mode byte, useVANS bool, dst []byte)
 
 	return assemblePrefixContainer(mode, uint32(origVarintLen), uint32(n), uint32(codeLen),
 		codeBuf[:codeLen], s.varBuf[:extraWriter.BytesWritten()], dst)
+}
+
+func varintLen(d uint32) int {
+	if d <= 0x7F {
+		return 1
+	}
+	if d <= 0x3FFF {
+		return 2
+	}
+	if d <= 0x1FFFFF {
+		return 3
+	}
+	return 4
 }
 
 // assemblePrefixContainer serializes the container header and appends CodeStream and ExtraBitsStream.
@@ -616,4 +710,63 @@ func assemblePrefixContainer(mode byte, origVarintLen, matchCount, codeLen uint3
 	copy(dst[hSize:], codeStream)
 	copy(dst[hSize+len(codeStream):], extraStream)
 	return hSize + len(codeStream) + len(extraStream), nil
+}
+
+// PackageOffsetsSection encodes Section 3 via Distance Prefix or flat mode 0x09.
+func PackageOffsetsSection(offs []uint32, s3Buf []byte) []byte {
+	if len(offs) == 0 {
+		return nil
+	}
+	s3Len, err := PackDistancePrefix(offs, ModeDistancePrefix, true, s3Buf)
+	var rawOffs []byte
+	for _, d := range offs {
+		rawOffs = appendLEB128(rawOffs, d)
+	}
+	if err == nil && s3Len < len(rawOffs) {
+		out := make([]byte, s3Len)
+		copy(out, s3Buf[:s3Len])
+		return out
+	}
+	out := make([]byte, 1+len(rawOffs))
+	out[0] = 0x09
+	copy(out[1:], rawOffs)
+	return out
+}
+
+func appendLEB128(buf []byte, v uint32) []byte {
+	for v >= 0x80 {
+		buf = append(buf, byte(v|0x80))
+		v >>= 7
+	}
+	buf = append(buf, byte(v))
+	return buf
+}
+
+// BracketDistance maps bracket index 0..9 to explicit distance.
+func BracketDistance(b int) uint32 {
+	if b <= 7 {
+		return uint32(b + 1)
+	}
+	if b == 8 {
+		return 16
+	}
+	return 32
+}
+
+// ComputeDiffLatticeDist computes target match distance based on descriptor byte and delta.
+func ComputeDiffLatticeDist(desc byte, delta int8, stride uint32, r *[4]uint32) int64 {
+	mode := (desc >> 6) & 3
+	switch mode {
+	case 0:
+		return int64(r[0]) + int64(delta)
+	case 1:
+		return int64(r[1]) + int64(delta)
+	case 2:
+		return int64(r[2]) + int64(delta)
+	default:
+		if stride > 1 {
+			return int64(r[0]) + int64(delta)*int64(stride)
+		}
+		return int64(uint8(delta)) + 1
+	}
 }

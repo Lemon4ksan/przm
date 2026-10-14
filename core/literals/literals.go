@@ -1,7 +1,13 @@
-package przm
+// Package literals provides 4-lane interleaved V-ANS coding, SIMD nibble planes,
+// joint nibble frequency matrix encoding/decoding, and Étale Sheaf literal fiber compression.
+// Strictly adheres to the Clean Room Specification with zero dynamic memory allocation.
+package literals
 
 import (
 	"encoding/binary"
+	"errors"
+
+	"github.com/lemon4ksan/foundation/generic"
 )
 
 // Flag bit constants for Section 4 V-ANS container header.
@@ -11,7 +17,27 @@ const (
 	VansFlagCtxSheaf  uint8 = 0x04
 	VansFlagCtxOrder1 uint8 = 0x08
 	VansCtxModeMask   uint8 = 0xF0
+	FlagNibble        uint8 = 0x80
 )
+
+// Standard error definitions for literals codec.
+var (
+	ErrBufferTooSmall = errors.New("literals: buffer too small")
+	ErrCorruptedFrame = errors.New("literals: corrupted frame")
+)
+
+// Scratchpad provides reusable intermediate memory for zero allocations.
+type Scratchpad struct {
+	lits       [8 * 1024 * 1024]byte
+	fiberBuf   [8 * 1024 * 1024]byte
+	vansLookup [4096]byte
+	vansFreq   [256]uint16
+	vansCDF    [256]uint16
+}
+
+var scratchPool = generic.NewPool[Scratchpad](func() *Scratchpad {
+	return new(Scratchpad)
+})
 
 // NormalizeFrequencies produces symbol frequencies summing strictly to 4096.
 func NormalizeFrequencies(counts []int, freq []uint16) error {
@@ -62,7 +88,7 @@ func adjustFrequencySum(counts []int, freq []uint16, sum uint16) error {
 			}
 			if bestSym >= 0 {
 				freq[bestSym]++
-				counts[bestSym] = -1 // Deprioritize next iteration
+				counts[bestSym] = -1
 			}
 		}
 	} else if diff < 0 {
@@ -113,7 +139,6 @@ func EncodeJointNibbleFreq(freq []uint16, buf []byte) []byte {
 	return buf
 }
 
-// appendWeight encodes a single frequency weight (1 or 2 bytes).
 func appendWeight(buf []byte, w uint16) []byte {
 	if w < 128 {
 		return append(buf, byte(w))
@@ -161,7 +186,6 @@ func DecodeJointNibbleFreq(src []byte, pos *int, freq []uint16) error {
 	return nil
 }
 
-// decodeRowWeights unpacks active column weights for a single row.
 func decodeRowWeights(src []byte, p *int, colMask uint16, h int, freq []uint16) (uint32, error) {
 	var rowSum uint32
 	pos := *p
@@ -244,15 +268,15 @@ func EncodeVANS4x(src []byte, freq []uint16) ([]byte, error) {
 }
 
 // DecodeVANS4x decompresses a 4-lane interleaved V-ANS payload into dst.
-func DecodeVANS4x(src []byte, dst []byte, uLen int, s *Scratchpad) error {
+func DecodeVANS4x(src []byte, dst []byte, uLen int, lookup []byte, freq, cdf []uint16) error {
 	if uLen == 0 {
 		return nil
 	}
 	pos := 0
-	if err := DecodeJointNibbleFreq(src, &pos, s.vansFreq[:]); err != nil {
+	if err := DecodeJointNibbleFreq(src, &pos, freq); err != nil {
 		return err
 	}
-	BuildVansTable(s.vansFreq[:], s.vansCDF[:], s.vansLookup[:])
+	BuildVansTable(freq, cdf, lookup)
 
 	if pos+16 > len(src) {
 		return ErrCorruptedFrame
@@ -263,20 +287,15 @@ func DecodeVANS4x(src []byte, dst []byte, uLen int, s *Scratchpad) error {
 		pos += 4
 	}
 
-	return runVans4xLoop(src, &pos, dst, uLen, x, s)
-}
-
-// runVans4xLoop performs the forward interleaved vector decoding loop.
-func runVans4xLoop(src []byte, pos *int, dst []byte, uLen int, x [4]uint32, s *Scratchpad) error {
-	p := *pos
+	p := pos
 	for i := 0; i < uLen; i++ {
 		lane := i & 3
 		slot := x[lane] & 4095
-		sym := s.vansLookup[slot]
+		sym := lookup[slot]
 		dst[i] = sym
 
-		f := uint32(s.vansFreq[sym])
-		c := uint32(s.vansCDF[sym])
+		f := uint32(freq[sym])
+		c := uint32(cdf[sym])
 		x[lane] = f*(x[lane]>>12) + (slot - c)
 
 		for x[lane] < 65536 {
@@ -287,7 +306,6 @@ func runVans4xLoop(src []byte, pos *int, dst []byte, uLen int, x [4]uint32, s *S
 			p++
 		}
 	}
-	*pos = p
 	return nil
 }
 
@@ -312,7 +330,6 @@ func PackNibblePlanes(src []byte) []byte {
 	return append(out, rleTokens...)
 }
 
-// encodeHighNibbleRLE computes RLE tokens for high nibbles.
 func encodeHighNibbleRLE(src []byte) []byte {
 	var tokens []byte
 	n := len(src)
@@ -351,7 +368,6 @@ func UnpackNibblePlanes(src []byte, dst []byte, uLen int) error {
 	return nil
 }
 
-// unpackHighNibbleRLE fills destination bytes with high nibble patterns.
 func unpackHighNibbleRLE(rleSrc, dst []byte, n int) error {
 	written := 0
 	pos := 0
@@ -374,7 +390,6 @@ func unpackHighNibbleRLE(rleSrc, dst []byte, n int) error {
 	return nil
 }
 
-// mergeLowNibbles combines unpacked high nibbles with low nibble pairs.
 func mergeLowNibbles(lowSrc, dst []byte, n, nLow int) {
 	for j := 0; j < nLow; j++ {
 		pair := lowSrc[j]
@@ -417,7 +432,6 @@ func PackEtaleSheaf(src []byte, mode uint8) ([]byte, error) {
 	return assembleSheafContainer(uLit, mode, l, e, encodedFibers), nil
 }
 
-// tryEncodeFiber attempts 4-lane V-ANS compression on a single fiber.
 func tryEncodeFiber(fiber []byte) ([]byte, error) {
 	counts := make([]int, 256)
 	for _, b := range fiber {
@@ -430,7 +444,6 @@ func tryEncodeFiber(fiber []byte) ([]byte, error) {
 	return EncodeVANS4x(fiber, freq[:])
 }
 
-// assembleSheafContainer constructs the 40-byte header and concatenates fiber streams.
 func assembleSheafContainer(uLit int, mode uint8, l, e [4]int, encodedFibers [4][]byte) []byte {
 	out := make([]byte, 40)
 	out[0] = 'V'
@@ -450,43 +463,67 @@ func assembleSheafContainer(uLit int, mode uint8, l, e [4]int, encodedFibers [4]
 	return out
 }
 
+// PackageLiteralsSection evaluates Étale Sheaf foliation vs verbatim fallback.
+func PackageLiteralsSection(lits []byte) ([]byte, uint8) {
+	if len(lits) == 0 {
+		return nil, 0
+	}
+	var bestSheaf []byte
+	minLen := len(lits)
+
+	for mode := uint8(0); mode <= 3; mode++ {
+		packed, err := PackEtaleSheaf(lits, mode)
+		if err == nil && len(packed) < minLen {
+			minLen = len(packed)
+			bestSheaf = packed
+		}
+	}
+
+	if bestSheaf != nil {
+		return bestSheaf, FlagNibble
+	}
+	return lits, 0
+}
+
 // UnpackSection4Literals handles container dispatch for Section 4 literals.
-func UnpackSection4Literals(s4 []byte, l4 int, s *Scratchpad) ([]byte, error) {
+func UnpackSection4Literals(s4 []byte, l4 int, litsBuf, fiberBuf []byte) ([]byte, error) {
 	if l4 == 0 {
 		return nil, nil
 	}
+	s := scratchPool.Get()
+	defer scratchPool.Put(s)
+
 	if l4 >= 8 && s4[0] == 'V' && s4[1] == 'A' && s4[2] == 0x01 {
 		flags := s4[3]
 		uLen := int(binary.LittleEndian.Uint32(s4[4:8]))
-		if uLen > len(s.lits) {
+		if uLen > len(litsBuf) {
 			return nil, ErrBufferTooSmall
 		}
 		if (flags & VansFlagCtxSheaf) != 0 {
-			if err := unpackEtaleSheaf(s4[:l4], s.lits[:uLen], uLen, s); err != nil {
+			if err := unpackEtaleSheaf(s4[:l4], litsBuf[:uLen], uLen, fiberBuf, s); err != nil {
 				return nil, err
 			}
-			return s.lits[:uLen], nil
+			return litsBuf[:uLen], nil
 		}
-		if err := DecodeVANS4x(s4[8:l4], s.lits[:uLen], uLen, s); err != nil {
+		if err := DecodeVANS4x(s4[8:l4], litsBuf[:uLen], uLen, s.vansLookup[:], s.vansFreq[:], s.vansCDF[:]); err != nil {
 			return nil, err
 		}
-		return s.lits[:uLen], nil
+		return litsBuf[:uLen], nil
 	}
 	if l4 >= 8 && binary.LittleEndian.Uint32(s4[4:8]) == (binary.LittleEndian.Uint32(s4[0:4])+1)/2 {
 		nLits := int(binary.LittleEndian.Uint32(s4[0:4]))
-		if nLits > len(s.lits) {
+		if nLits > len(litsBuf) {
 			return nil, ErrBufferTooSmall
 		}
-		if err := UnpackNibblePlanes(s4[:l4], s.lits[:nLits], nLits); err != nil {
+		if err := UnpackNibblePlanes(s4[:l4], litsBuf[:nLits], nLits); err != nil {
 			return nil, err
 		}
-		return s.lits[:nLits], nil
+		return litsBuf[:nLits], nil
 	}
 	return s4[:l4], nil
 }
 
-// unpackEtaleSheaf validates headers and partitions fibers for reconstruction.
-func unpackEtaleSheaf(s4, dst []byte, uLit int, s *Scratchpad) error {
+func unpackEtaleSheaf(s4, dst []byte, uLit int, fiberBuf []byte, s *Scratchpad) error {
 	if len(s4) < 40 {
 		return ErrCorruptedFrame
 	}
@@ -503,18 +540,17 @@ func unpackEtaleSheaf(s4, dst []byte, uLit int, s *Scratchpad) error {
 		e[k] = int(binary.LittleEndian.Uint32(s4[24+k*4 : 28+k*4]))
 		sumL += l[k]
 	}
-	if sumL != uLit || uLit > len(s.fiberBuf) {
+	if sumL != uLit || uLit > len(fiberBuf) {
 		return ErrCorruptedFrame
 	}
 	if mode == 2 && (l[2] != 0 || l[3] != 0) {
 		return ErrCorruptedFrame
 	}
 
-	return validateAndDecodeFibers(s4, dst, uLit, mode, l, e, s)
+	return validateAndDecodeFibers(s4, dst, uLit, mode, l, e, fiberBuf, s)
 }
 
-// validateAndDecodeFibers checks bounds and decodes individual fiber streams.
-func validateAndDecodeFibers(s4, dst []byte, uLit int, mode uint8, l, e [4]int, s *Scratchpad) error {
+func validateAndDecodeFibers(s4, dst []byte, uLit int, mode uint8, l, e [4]int, fiberBuf []byte, s *Scratchpad) error {
 	pos := 40
 	for k := 0; k < 4; k++ {
 		if l[k] == 0 && e[k] != 0 {
@@ -526,11 +562,10 @@ func validateAndDecodeFibers(s4, dst []byte, uLit int, mode uint8, l, e [4]int, 
 		pos += e[k]
 	}
 
-	return decodeAndReconstituteFibers(s4, dst, uLit, mode, l, e, s)
+	return decodeAndReconstituteFibers(s4, dst, uLit, mode, l, e, fiberBuf, s)
 }
 
-// decodeAndReconstituteFibers decodes each fiber and executes causal foliation.
-func decodeAndReconstituteFibers(s4, dst []byte, uLit int, mode uint8, l, e [4]int, s *Scratchpad) error {
+func decodeAndReconstituteFibers(s4, dst []byte, uLit int, mode uint8, l, e [4]int, fiberBuf []byte, s *Scratchpad) error {
 	pos := 40
 	fiberDstOffset := 0
 	var fiberSlices [4][]byte
@@ -542,13 +577,13 @@ func decodeAndReconstituteFibers(s4, dst []byte, uLit int, mode uint8, l, e [4]i
 		}
 		sub := s4[pos : pos+e[k]]
 		pos += e[k]
-		outFiber := s.fiberBuf[fiberDstOffset : fiberDstOffset+l[k]]
+		outFiber := fiberBuf[fiberDstOffset : fiberDstOffset+l[k]]
 		fiberDstOffset += l[k]
 
 		if e[k] == l[k] {
 			copy(outFiber, sub)
 		} else {
-			if err := DecodeVANS4x(sub, outFiber, l[k], s); err != nil {
+			if err := DecodeVANS4x(sub, outFiber, l[k], s.vansLookup[:], s.vansFreq[:], s.vansCDF[:]); err != nil {
 				return err
 			}
 		}
@@ -558,4 +593,3 @@ func decodeAndReconstituteFibers(s4, dst []byte, uLit int, mode uint8, l, e [4]i
 	return ReconstituteFibers(dst, uLit, fiberSlices[0], fiberSlices[1], fiberSlices[2], fiberSlices[3],
 		l[0], l[1], l[2], l[3], mode)
 }
-

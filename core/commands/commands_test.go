@@ -217,6 +217,46 @@ func TestCommandsZeroAllocations(t *testing.T) {
 	}
 }
 
+func TestEmitBlockCommandsAndUnpack(t *testing.T) {
+	block := []byte("ABCDEFGHABCDEFGH1234567812345678")
+	edges := []TrellisEdge{
+		{From: 0, Length: 1, Kind: 0},
+		{From: 1, Length: 1, Kind: 0},
+		{From: 2, Length: 1, Kind: 0},
+		{From: 3, Length: 1, Kind: 0},
+		{From: 4, Length: 4, Dist: 4, Kind: 1, Arg: 0},
+		{From: 8, Length: 8, Dist: 8, Kind: 2, Arg: 7},
+		{From: 16, Length: 8, Dist: 16, Kind: 3, Arg: 4},
+		{From: 24, Length: 8, Dist: 8, Kind: 4},
+	}
+
+	var cmdsOut, litsOut []byte
+	var offsOut []uint32
+
+	EmitBlockCommands(edges, block, 4, &cmdsOut, &litsOut, &offsOut)
+	if len(cmdsOut) == 0 {
+		t.Fatalf("expected emitted commands, got 0")
+	}
+
+	packed := PackageCommandsSection(cmdsOut)
+	if len(packed) == 0 {
+		t.Fatalf("expected packaged commands section")
+	}
+
+	var op [1024]byte
+	var meta [1024]byte
+	var varBuf [1024]byte
+	var cmdsUnpacked [1024]byte
+
+	unpacked, err := UnpackSection2Commands(packed, op[:], meta[:], varBuf[:], cmdsUnpacked[:])
+	if err != nil {
+		t.Fatalf("UnpackSection2Commands failed: %v", err)
+	}
+	if !bytes.Equal(cmdsOut, unpacked) {
+		t.Fatalf("unpacked commands mismatch: got %x, want %x", unpacked, cmdsOut)
+	}
+}
+
 func BenchmarkCommands(b *testing.B) {
 	orig := constructComprehensiveCommandStream()
 	op := make([]byte, len(orig))
