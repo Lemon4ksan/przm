@@ -358,14 +358,20 @@ func costExplicit(L int, dist uint32, bMin, nLit int) uint32 {
 	}
 	if L > 14+bMin {
 		if L <= 14+bMin+127 {
-			base += 10
+			base += 3
 		} else {
-			base += 20
+			base += 7
 		}
 	}
 	distCost := distCodeCost[code] + uint32(2*nb)
-	if L == bMin && dist > 1024 {
-		distCost += 6
+	if L == bMin {
+		if dist > 512 {
+			distCost += 8
+		}
+	} else if L == bMin+1 {
+		if dist > 4096 {
+			distCost += 6
+		}
 	}
 	return base + distCost
 }
@@ -488,7 +494,7 @@ func relaxFixedSublengths(i int, kind, arg uint8, d uint32, L, bMin int, curCost
 	distance.UpdateLRUExplicit(&rNext, d)
 	subLens := getParetoSublengths(L, bMin, s.subLens[:])
 	nLit := int(s.nodes[i].nLit)
-	costBase := curCost + 22
+	costBase := curCost + 25
 	if nLit > 15 {
 		costBase += litFlushCost(nLit)
 	}
