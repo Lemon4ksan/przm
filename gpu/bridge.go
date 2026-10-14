@@ -166,8 +166,8 @@ func cstring(b []byte) string {
 }
 
 func roundUpPow2(v int) int {
-	if v <= 65536 {
-		return 65536
+	if v <= 4 {
+		return 4
 	}
 	v--
 	v |= v >> 1
