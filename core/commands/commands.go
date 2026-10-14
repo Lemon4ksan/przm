@@ -55,7 +55,7 @@ func splitExtendedOp(opcode byte, src []byte, sp *int, meta []byte, mp *int, v [
 	if opcode == 0xCE {
 		return splitDiffLattice(src, sp, meta, mp, v, vp)
 	}
-	if opcode == 0xCF {
+	if opcode == 0xCF || (opcode >= 0xEA && opcode <= 0xEF) {
 		return splitRFCTransform(src, sp, meta, mp, v, vp)
 	}
 	if opcode <= 0xD7 {
@@ -278,7 +278,7 @@ func demuxStepExt(op byte, meta []byte, mp *int, vStream []byte, vp *int, dst []
 		}
 		return nil
 	}
-	if op == 0xCF {
+	if op == 0xCF || (op >= 0xEA && op <= 0xEF) {
 		if *mp >= len(meta) || *dp >= len(dst) {
 			return ErrCorruptedFrame
 		}
@@ -626,18 +626,25 @@ func emitMatchWithLiterals(e TrellisEdge, pendingLits *[]byte, bMin int,
 }
 
 func emitRFCWordMatch(e TrellisEdge, pendingLits, cmdsOut, litsOut *[]byte) {
-	if len(*pendingLits) > 0 {
+	nLit := len(*pendingLits)
+	if nLit > 6 {
 		EmitLiteralRun(*pendingLits, cmdsOut, litsOut)
+		*pendingLits = nil
+		nLit = 0
+	}
+	var op byte = 0xCF
+	if nLit > 0 {
+		op = byte(0xEA + nLit - 1)
 		*pendingLits = nil
 	}
 	if e.Arg != 0 {
 		tau := byte(e.Arg)
-		*cmdsOut = append(*cmdsOut, 0xCF, tau)
+		*cmdsOut = append(*cmdsOut, op, tau)
 		*cmdsOut = AppendLEB128(*cmdsOut, e.Dist)
 		return
 	}
 	p := e.Dist
-	*cmdsOut = append(*cmdsOut, 0xCF, byte(0x80|((p>>7)&0x7F)), byte(p&0x7F))
+	*cmdsOut = append(*cmdsOut, op, byte(0x80|((p>>7)&0x7F)), byte(p&0x7F))
 }
 
 func emitDiffLatticeMatch(e TrellisEdge, pendingLits *[]byte, bMin int, cmdsOut, litsOut *[]byte) {
@@ -700,20 +707,34 @@ func emitExplicitMatch(e TrellisEdge, pendingLits *[]byte, bMin int,
 ) {
 	nLit := len(*pendingLits)
 	lMatch := int(e.Length)
-	if nLit > 3 {
+	if nLit > 15 {
 		EmitLiteralRun(*pendingLits, cmdsOut, litsOut)
 		*pendingLits = nil
 		nLit = 0
 	}
 	*offsOut = append(*offsOut, e.Dist)
-	if lMatch-bMin < 15 {
-		op := byte(0x80 | (nLit << 4) | (lMatch - bMin))
+	if nLit <= 3 {
+		if lMatch-bMin < 15 {
+			op := byte(0x80 | (nLit << 4) | (lMatch - bMin))
+			*cmdsOut = append(*cmdsOut, op)
+			return
+		}
+		op := byte(0x80 | (nLit << 4) | 15)
 		*cmdsOut = append(*cmdsOut, op)
+		*cmdsOut = AppendLEB128(*cmdsOut, uint32(lMatch-bMin-15))
 		return
 	}
-	op := byte(0x80 | (nLit << 4) | 15)
-	*cmdsOut = append(*cmdsOut, op)
-	*cmdsOut = AppendLEB128(*cmdsOut, uint32(lMatch-bMin-15))
+	diff := lMatch - bMin
+	if diff < 15 {
+		tok := byte((nLit << 4) | diff)
+		*cmdsOut = append(*cmdsOut, 0xE9, tok)
+		*pendingLits = nil
+		return
+	}
+	tok := byte((nLit << 4) | 15)
+	*cmdsOut = append(*cmdsOut, 0xE9, tok)
+	*cmdsOut = AppendLEB128(*cmdsOut, uint32(diff-15))
+	*pendingLits = nil
 }
 
 // EmitLiteralRun encodes pure literal sequences into standalone tokens.

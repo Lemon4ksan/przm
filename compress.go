@@ -314,7 +314,9 @@ func costExplicit(L int, dist uint32, bMin, nLit int) uint32 {
 	var base uint32 = 9
 	if nLit >= 1 && nLit <= 3 {
 		base = 12
-	} else if nLit > 3 {
+	} else if nLit >= 4 && nLit <= 15 {
+		base = 16
+	} else if nLit > 15 {
 		base = 9 + litFlushCost(nLit)
 	}
 	if L > 14+bMin {
@@ -652,7 +654,10 @@ func relaxDictMatches(i int, s *CompressorScratchpad, src []byte, globalPos, bSi
 	}
 	curCost := s.nodes[i].cost
 	nLit := int(s.nodes[i].nLit)
-	flushCost := litFlushCost(nLit)
+	var flushCost uint32
+	if nLit > 6 {
+		flushCost = litFlushCost(nLit)
+	}
 	cdict.FindStaticDictMatches(src[globalPos:], func(wid uint32, tau uint8, matchLen int) {
 		if matchLen < 5 || i+matchLen > bSize {
 			return

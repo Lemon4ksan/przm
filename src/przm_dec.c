@@ -573,7 +573,7 @@ static int32_t demux_step(uint8_t op, const uint8_t *meta, size_t mlen, size_t *
         if ((desc & 7) == 7) return copy_leb128_raw(var, vlen, vp, dst, dlen, dp);
         return PRZM_OK;
     }
-    if (op == 0xCF) {
+    if (op == 0xCF || (op >= 0xEA && op <= 0xEF)) {
         if (*mp >= mlen || *dp >= dlen) return PRZM_ERR_CORRUPTED_FRAME;
         dst[(*dp)++] = meta[(*mp)++];
         return copy_leb128_raw(var, vlen, vp, dst, dlen, dp);
@@ -658,7 +658,7 @@ static inline int32_t split_step(uint8_t op, const uint8_t *src, size_t slen, si
         if ((desc & 7) == 7) return copy_leb128_raw(src, slen, sp, var, var_cap, vp);
         return PRZM_OK;
     }
-    if (op == 0xCF) {
+    if (op == 0xCF || (op >= 0xEA && op <= 0xEF)) {
         if (*sp >= slen) return PRZM_ERR_CORRUPTED_FRAME;
         if (*mp >= meta_cap) return PRZM_ERR_BUFFER_TOO_SMALL;
         uint8_t b0 = src[(*sp)++];
@@ -1394,7 +1394,14 @@ static int32_t stage_execute_commands(uint8_t *dst, przm_frame_t *f) {
             dst_p += lmatch;
             continue;
         }
-        if (op == 0xCF) {
+        if (op == 0xCF || (op >= 0xEA && op <= 0xEF)) {
+            if (op >= 0xEA) {
+                uint32_t llit = op - 0xEA + 1;
+                if (lit_p + llit > f->lit_len || dst_p + llit > f->u_size) return PRZM_ERR_CORRUPTED_FRAME;
+                memcpy(dst + dst_p, f->lit_buf + lit_p, llit);
+                lit_p += llit; dst_p += llit;
+                if (dst_p == f->u_size) break;
+            }
             int32_t err = exec_rfc_transform(dst, &dst_p, f->u_size, f->cmd_buf, f->cmd_len, &cmd_p);
             if (err != PRZM_OK) return err;
             continue;

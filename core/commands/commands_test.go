@@ -419,29 +419,27 @@ func TestEmitExplicitMatchAllLitAndLengths(t *testing.T) {
 				}
 
 				matchOpIdx := 0
-				if nLit > 3 {
-					if nLit <= 8 {
-						expectedOp := byte(0xF2 + nLit)
-						if len(cmdsOut) < 1 || cmdsOut[0] != expectedOp {
-							t.Fatalf(
-								"bMin=%d, nLit=%d: expected literal run op 0x%02x, got %x",
-								bMin,
-								nLit,
-								expectedOp,
-								cmdsOut,
-							)
-						}
-						matchOpIdx = 1
-					} else {
-						if len(cmdsOut) < 2 || cmdsOut[0] != 0xF0 {
-							t.Fatalf("bMin=%d, nLit=%d: expected 0xF0 literal run op, got %x", bMin, nLit, cmdsOut)
-						}
-						val, nRead := readLEB128Test(cmdsOut[1:])
-						if int(val) != nLit {
-							t.Fatalf("bMin=%d, nLit=%d: LEB128 decoded %d, want %d", bMin, nLit, val, nLit)
-						}
-						matchOpIdx = 1 + nRead
+				if nLit > 15 {
+					if len(pendingLits) != 0 {
+						t.Fatalf("bMin=%d, nLit=%d, lMatch=%d: pendingLits not cleared after flush", bMin, nLit, lMatch)
 					}
+					if len(cmdsOut) < 2 || cmdsOut[0] != 0xF0 {
+						t.Fatalf("bMin=%d, nLit=%d: expected 0xF0 literal run op, got %x", bMin, nLit, cmdsOut)
+					}
+					val, nRead := readLEB128Test(cmdsOut[1:])
+					if int(val) != nLit {
+						t.Fatalf("bMin=%d, nLit=%d: LEB128 decoded %d, want %d", bMin, nLit, val, nLit)
+					}
+					matchOpIdx = 1 + nRead
+				} else if nLit > 3 {
+					if len(cmdsOut) < 2 || cmdsOut[0] != 0xE9 {
+						t.Fatalf("bMin=%d, nLit=%d: expected 0xE9 op, got %x", bMin, nLit, cmdsOut)
+					}
+					tok := cmdsOut[1]
+					if int(tok>>4) != nLit {
+						t.Fatalf("bMin=%d, nLit=%d: expected tok lit %d, got %d", bMin, nLit, nLit, tok>>4)
+					}
+					continue
 				}
 
 				if matchOpIdx >= len(cmdsOut) {

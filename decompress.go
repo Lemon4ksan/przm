@@ -466,7 +466,14 @@ func execExtendedOp(
 		return execBracketMatch(dst, dstP, litP, cmdP, op, f, r)
 	case op == 0xCE:
 		return execDiffLattice(dst, dstP, litP, cmdP, f, r)
-	case op == 0xCF:
+	case op == 0xCF || (op >= 0xEA && op <= 0xEF):
+		if op >= 0xEA {
+			llit := int(op - 0xEA + 1)
+			done, err := copyPendingLiterals(dst, dstP, litP, llit, f)
+			if err != nil || done {
+				return err
+			}
+		}
 		return execRFCTransform(dst, dstP, f.uSize, f.cmdBuf, cmdP, s)
 	case op <= 0xD7:
 		return execStrideMatch(dst, dstP, litP, cmdP, op, f, r)
