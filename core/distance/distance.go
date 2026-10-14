@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 
 	"github.com/lemon4ksan/foundation/generic"
+
+	"github.com/lemon4ksan/przm/core/literals"
 )
 
 // Offset container mode identifiers.
@@ -123,6 +125,7 @@ type Scratchpad struct {
 	meta   [2 * 1024 * 1024]byte
 	varBuf [2 * 1024 * 1024]byte
 	cmds   [4 * 1024 * 1024]byte
+	altBuf [2 * 1024 * 1024]byte
 }
 
 var scratchPool = generic.NewPool[Scratchpad](func() *Scratchpad {
@@ -602,6 +605,9 @@ func decodeCodeStream(codeStream []byte, matchCount int, dstCodes []byte) error 
 	if len(codeStream) > 0 && codeStream[0] == ModeDistClusteredVANS {
 		return DecodeDistClusteredVans(codeStream, dstCodes, matchCount)
 	}
+	if len(codeStream) >= 8 && codeStream[0] == 'V' && codeStream[1] == 'A' && codeStream[2] == 0x01 {
+		return literals.DecodeAdaptiveVANS4x(codeStream, dstCodes[:matchCount], matchCount)
+	}
 	if len(codeStream) > 0 && codeStream[0] == ModeFlatCompact {
 		if len(codeStream)-1 < matchCount {
 			return ErrCorruptedFrame
@@ -719,6 +725,13 @@ func PackDistancePrefix(distances []uint32, mode byte, useVANS bool, dst []byte)
 		codeLen, err = EncodeDistClusteredVans(codes, codeBuf)
 		if err != nil {
 			return 0, err
+		}
+		if n >= 64 {
+			adaptiveLen, aErr := literals.EncodeAdaptiveVANS4x(codes, s.altBuf[:])
+			if aErr == nil && adaptiveLen < codeLen {
+				codeLen = adaptiveLen
+				copy(codeBuf[:codeLen], s.altBuf[:codeLen])
+			}
 		}
 	} else {
 		codeLen = n

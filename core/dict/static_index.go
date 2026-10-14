@@ -129,19 +129,7 @@ func FindStaticDictMatches(src []byte, fn func(wid uint32, tau uint8, length int
 		if bytes.Equal(src[4:l], e.Word[4:l]) {
 			wid := uint32(e.P)
 			fn(wid, 0, l)
-
-			// O(1) Suffix extensions for base Brotli words
-			if wid < 13504 && l < len(src) {
-				if src[l] == ' ' {
-					fn(wid, 1, l+1) // Suffix " "
-				} else if l+1 < len(src) {
-					if src[l] == ',' && src[l+1] == ' ' {
-						fn(wid, 14, l+2) // Suffix ", "
-					} else if src[l] == '.' && src[l+1] == ' ' {
-						fn(wid, 31, l+2) // Suffix ". "
-					}
-				}
-			}
+			probeSuffixes(src, l, wid, fn)
 		}
 	}
 
@@ -166,8 +154,150 @@ func FindStaticDictMatches(src []byte, fn func(wid uint32, tau uint8, length int
 				wid := uint32(e.P)
 				if wid < 13504 {
 					fn(wid, 9, l) // UppercaseFirst
-					if l < len(src) && src[l] == ' ' {
-						fn(wid, 4, l+1) // UppercaseFirst + Suffix " "
+					probeUppercaseFirstSuffixes(src, l, wid, fn)
+				}
+			}
+		}
+	}
+
+	// Space prefix check
+	probeSpacePrefixMatches(src, fn)
+
+	// Dot prefix check
+	probeDotPrefixMatches(src, fn)
+}
+
+func probeSuffixes(src []byte, l int, wid uint32, fn func(uint32, uint8, int)) {
+	if wid >= 13504 || l >= len(src) {
+		return
+	}
+	switch src[l] {
+	case ' ':
+		fn(wid, 1, l+1) // Suffix " "
+	case '.':
+		fn(wid, 20, l+1) // Suffix "."
+		if l+1 < len(src) && src[l+1] == ' ' {
+			fn(wid, 31, l+2) // Suffix ". "
+		}
+	case ',':
+		fn(wid, 76, l+1) // Suffix ","
+		if l+1 < len(src) && src[l+1] == ' ' {
+			fn(wid, 14, l+2) // Suffix ", "
+		}
+	case '\n':
+		fn(wid, 22, l+1) // Suffix "\n"
+	case ':':
+		fn(wid, 51, l+1) // Suffix ":"
+	case '(':
+		fn(wid, 57, l+1) // Suffix "("
+	case '"':
+		fn(wid, 19, l+1) // Suffix "\""
+	case '\'':
+		fn(wid, 36, l+1) // Suffix "'"
+	case ']':
+		fn(wid, 24, l+1) // Suffix "]"
+	}
+}
+
+func probeUppercaseFirstSuffixes(src []byte, l int, wid uint32, fn func(uint32, uint8, int)) {
+	if wid >= 13504 || l >= len(src) {
+		return
+	}
+	switch src[l] {
+	case ' ':
+		fn(wid, 4, l+1) // UppercaseFirst + " "
+	case '.':
+		fn(wid, 79, l+1) // UppercaseFirst + "."
+		if l+1 < len(src) && src[l+1] == ' ' {
+			fn(wid, 88, l+2) // UppercaseFirst + ". "
+		}
+	case ',':
+		fn(wid, 99, l+1) // UppercaseFirst + ","
+		if l+1 < len(src) && src[l+1] == ' ' {
+			fn(wid, 58, l+2) // UppercaseFirst + ", "
+		}
+	case '(':
+		fn(wid, 78, l+1) // UppercaseFirst + "("
+	}
+}
+
+func probeSpacePrefixMatches(src []byte, fn func(uint32, uint8, int)) {
+	if len(src) < 5 || src[0] != ' ' {
+		return
+	}
+	sub := src[1:]
+	prefix := binary.LittleEndian.Uint32(sub[:4])
+	h := (prefix * HashMultiplier32) >> 16
+	idx := staticDictHead[h]
+	depth := 0
+	for idx >= 0 && depth < 32 {
+		e := &staticDictEntries[idx]
+		idx = e.Next
+		depth++
+		if e.Prefix != prefix {
+			continue
+		}
+		l := int(e.Len)
+		if l > len(sub) {
+			continue
+		}
+		if bytes.Equal(sub[4:l], e.Word[4:l]) {
+			wid := uint32(e.P)
+			if wid < 13504 {
+				fn(wid, 6, 1+l) // " " + word
+				if 1+l < len(src) {
+					switch src[1+l] {
+					case ' ':
+						fn(wid, 2, 1+l+1) // " " + word + " "
+					case '.':
+						fn(wid, 71, 1+l+1) // " " + word + "."
+						if 1+l+1 < len(src) && src[1+l+1] == ' ' {
+							fn(wid, 52, 1+l+2) // " " + word + ". "
+						}
+					case ',':
+						fn(wid, 103, 1+l+1) // " " + word + ","
+						if 1+l+1 < len(src) && src[1+l+1] == ' ' {
+							fn(wid, 33, 1+l+2) // " " + word + ", "
+						}
+					case '(':
+						fn(wid, 89, 1+l+1) // " " + word + "("
+					}
+				}
+			}
+		}
+	}
+}
+
+func probeDotPrefixMatches(src []byte, fn func(uint32, uint8, int)) {
+	if len(src) < 5 || src[0] != '.' {
+		return
+	}
+	sub := src[1:]
+	prefix := binary.LittleEndian.Uint32(sub[:4])
+	h := (prefix * HashMultiplier32) >> 16
+	idx := staticDictHead[h]
+	depth := 0
+	for idx >= 0 && depth < 32 {
+		e := &staticDictEntries[idx]
+		idx = e.Next
+		depth++
+		if e.Prefix != prefix {
+			continue
+		}
+		l := int(e.Len)
+		if l > len(sub) {
+			continue
+		}
+		if bytes.Equal(sub[4:l], e.Word[4:l]) {
+			wid := uint32(e.P)
+			if wid < 13504 {
+				fn(wid, 32, 1+l) // "." + word
+				if 1+l < len(src) {
+					switch src[1+l] {
+					case '(':
+						fn(wid, 67, 1+l+1) // "." + word + "("
+					case ' ':
+						fn(wid, 77, 1+l+1) // "." + word + " "
 					}
 				}
 			}
