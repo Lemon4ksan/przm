@@ -415,7 +415,7 @@ func executeCommandStep(
 	if op < 0xC0 {
 		return execFusedExt(dst, dstP, litP, offP, cmdP, op, f, r)
 	}
-	return execExtendedOp(dst, dstP, litP, cmdP, op, f, r, s)
+	return execExtendedOp(dst, dstP, litP, offP, cmdP, op, f, r, s)
 }
 
 func execFusedRepeat(dst []byte, dstP, litP *int, op byte, f *FrameContext, r *[4]uint32) error {
@@ -451,7 +451,14 @@ func execFusedExt(dst []byte, dstP, litP, offP, cmdP *int, op byte, f *FrameCont
 	return finishMatch(dst, dstP, d, uint32(lMatch), f)
 }
 
-func execExtendedOp(dst []byte, dstP, litP, cmdP *int, op byte, f *FrameContext, r *[4]uint32, s *Scratchpad) error {
+func execExtendedOp(
+	dst []byte,
+	dstP, litP, offP, cmdP *int,
+	op byte,
+	f *FrameContext,
+	r *[4]uint32,
+	s *Scratchpad,
+) error {
 	switch {
 	case op <= 0xC3:
 		return execLongRepeat(dst, dstP, litP, cmdP, op, f, r)
@@ -465,9 +472,44 @@ func execExtendedOp(dst []byte, dstP, litP, cmdP *int, op byte, f *FrameContext,
 		return execStrideMatch(dst, dstP, litP, cmdP, op, f, r)
 	case op >= 0xD8 && op <= 0xDF:
 		return execTokenMatch(dst, dstP, op, f)
+	case op == 0xE9:
+		return execExternalDictMatch(dst, dstP, litP, offP, cmdP, f, r)
 	default:
 		return execSpecialOp(dst, dstP, litP, cmdP, op, f)
 	}
+}
+
+func execExternalDictMatch(
+	dst []byte,
+	dstP, litP, offP, cmdP *int,
+	f *FrameContext,
+	r *[4]uint32,
+) error {
+	if *cmdP >= len(f.cmdBuf) {
+		return ErrCorruptedFrame
+	}
+	tok := f.cmdBuf[*cmdP]
+	*cmdP++
+	lLit := int(tok >> 4)
+	base := int(tok & 15)
+	lMatch := base + int(f.bMin)
+	if base == 15 {
+		dl, err := readLEB128(f.cmdBuf, cmdP)
+		if err != nil {
+			return ErrCorruptedFrame
+		}
+		lMatch += int(dl)
+	}
+	done, err := copyPendingLiterals(dst, dstP, litP, lLit, f)
+	if err != nil || done {
+		return err
+	}
+	d, err := readLEB128(f.offBuf, offP)
+	if err != nil {
+		return ErrCorruptedFrame
+	}
+	distance.UpdateLRUExplicit(r, d)
+	return finishMatch(dst, dstP, d, uint32(lMatch), f)
 }
 
 func execLongRepeat(dst []byte, dstP, litP, cmdP *int, op byte, f *FrameContext, r *[4]uint32) error {

@@ -62,8 +62,8 @@ type TrellisNode struct {
 type CompressorScratchpad struct {
 	head4       [MaxHashBuckets]int32
 	head8       [MaxHashBuckets][4]int32
-	head12      [MaxHashBuckets][4]int32
-	head16      [MaxHashBuckets][4]int32
+	head12      [MaxHashBuckets][8]int32
+	head16      [MaxHashBuckets][8]int32
 	head24      [MaxHashBuckets][4]int32
 	prevPos     [MaxWindowHorizon]int32
 	nodes       [MaxBlockHorizon + 1]TrellisNode
@@ -259,12 +259,12 @@ func getParetoSublengths(L, bMin int, out []int) []int {
 
 func calcLitCost(f int, invN float64) uint32 {
 	if f == 0 {
-		return 32
+		return 36
 	}
 	bits := -math.Log2(float64(f) * invN)
-	cost := uint32(bits*2.0 + 0.5)
-	if cost < 2 {
-		return 2
+	cost := uint32(bits*2.6 + 1.2)
+	if cost < 3 {
+		return 3
 	}
 	return cost
 }
@@ -524,7 +524,7 @@ func relaxHash16Matches(
 ) {
 	h16 := hash16(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	for k := 0; k < 4; k++ {
+	for k := 0; k < 8; k++ {
 		cand := s.head16[h16][k]
 		if cand < 0 {
 			break
@@ -550,7 +550,7 @@ func relaxHash12Matches(
 ) {
 	h12 := hash12(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	for k := 0; k < 4; k++ {
+	for k := 0; k < 8; k++ {
 		cand := s.head12[h12][k]
 		if cand < 0 {
 			break
@@ -620,7 +620,7 @@ func relaxHash4Matches(
 }
 
 func relaxExplicitSublengths(i int, d uint32, L, bMin int, curCost uint32, s *CompressorScratchpad) {
-	if d >= 128 {
+	if d > 2048 {
 		for mode := byte(0); mode < 3; mode++ {
 			ref := s.nodes[i].r[mode]
 			diff := int64(d) - int64(ref)
@@ -657,12 +657,12 @@ func relaxDictMatches(i int, s *CompressorScratchpad, src []byte, globalPos, bSi
 		if matchLen < 5 || i+matchLen > bSize {
 			return
 		}
-		var base uint32 = 36
+		var base uint32 = 24
 		if matchLen >= 8 {
-			base = 28
+			base = 18
 		}
 		if tau != 0 {
-			base += 8
+			base += 6
 		}
 		cost := curCost + base + flushCost
 		if cost < s.nodes[i+matchLen].cost {
@@ -723,14 +723,18 @@ func relaxDiffLatticeSublengths(
 	}
 	for _, l := range subLens {
 		diff := l - bMin
-		var cost uint32
+		var costLat uint32
 		if diff < 7 {
-			cost = curCost + 22 + flushCost
+			costLat = curCost + 36 + flushCost
 		} else {
-			cost = curCost + 32 + flushCost
+			costLat = curCost + 50 + flushCost
 		}
-		if cost < s.nodes[i+l].cost {
-			s.nodes[i+l].cost = cost
+		costExp := curCost + costExplicit(l, d, bMin, nLit)
+		if costLat >= costExp {
+			continue
+		}
+		if costLat < s.nodes[i+l].cost {
+			s.nodes[i+l].cost = costLat
 			s.nodes[i+l].r = rNext
 			s.nodes[i+l].nLit = 0
 			s.nodes[i+l].edge = commands.TrellisEdge{
@@ -760,16 +764,12 @@ func insertHash(src []byte, globalPos, winMask int, s *CompressorScratchpad) {
 	}
 	if globalPos+12 <= len(src) {
 		h12 := hash12(src, globalPos)
-		s.head12[h12][3] = s.head12[h12][2]
-		s.head12[h12][2] = s.head12[h12][1]
-		s.head12[h12][1] = s.head12[h12][0]
+		copy(s.head12[h12][1:], s.head12[h12][:7])
 		s.head12[h12][0] = pos
 	}
 	if globalPos+16 <= len(src) {
 		h16 := hash16(src, globalPos)
-		s.head16[h16][3] = s.head16[h16][2]
-		s.head16[h16][2] = s.head16[h16][1]
-		s.head16[h16][1] = s.head16[h16][0]
+		copy(s.head16[h16][1:], s.head16[h16][:7])
 		s.head16[h16][0] = pos
 	}
 	if globalPos+24 <= len(src) {
@@ -957,9 +957,11 @@ func executeCompressionPipeline(
 		s.head4[i] = -1
 		for k := range 4 {
 			s.head8[i][k] = -1
+			s.head24[i][k] = -1
+		}
+		for k := range 8 {
 			s.head12[i][k] = -1
 			s.head16[i][k] = -1
-			s.head24[i][k] = -1
 		}
 	}
 	winSize := 1 << params.wLog
