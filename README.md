@@ -13,7 +13,7 @@
 > **Information in the cosmos is never destroyed; it merely disperses across coordinate charts we fail to perceive. When the observer chooses the intrinsic geometry of the data manifold, the illusion of randomness collapses into deterministic harmony. Compression is not the erasure of substance, but the mathematical revelation of universal symmetry."**
 > — *The PRZM Philosophy on Universal Balance*
 
-## Overview: The v0.8.0 Architecture
+## Overview: The v0.1.0 Architecture
 
 **PRZM** (PrismLZ) is an ultra-high-speed, mathematically unified archival compression system engineered to transcend classical 1D sliding-window limits (such as Zstandard, LZMA, and Brotli) by mapping non-linear digital data distributions onto curved discrete manifolds.
 
@@ -41,7 +41,7 @@ Evaluated against the official 45-file multi-domain corpus spanning executable b
 
 | Compression Engine | Compressed Total (45 Files) | Compression Ratio | Space Saved | Decompression Speed | Heap Allocations |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **PRZM v0.8.0 (Season 23)** | **296,567 B** | **5.01x** | **80.0%** | **4.57–6.16 GB/s** | **0 B/op, 0 allocs/op** |
+| **PRZM v0.1.0** | **296,567 B** | **5.01x** | **80.0%** | **4.57–6.16 GB/s** | **0 B/op, 0 allocs/op** |
 | **Zstandard (Level 19)** | 324,934 B | 4.57x | 78.1% | 1.8–3.2 GB/s | Dynamic buffers |
 | **Brotli (Level 11, HQ)** | 259,103 B | 5.74x | 82.6% | 0.35–0.45 GB/s | Heap allocated |
 
@@ -54,7 +54,7 @@ Across the 45-file test corpus, PRZM outperforms Zstandard at its maximum standa
 
 ```
 Decompression Throughput Comparison:
-  PRZM v0.8.0 : [████████████████████████████████████████] 5,365 MB/s (0 allocs)
+  PRZM v0.1.0 : [████████████████████████████████████████] 5,365 MB/s (0 allocs)
   Zstandard-19: [████████████████] 2,140 MB/s
   Brotli-11   : [███] 390 MB/s
 ```

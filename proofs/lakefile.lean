@@ -3,7 +3,7 @@ open Lake DSL
 
 package «przm» where
   -- PRZM mathematical specification and formal theorem proofs
-  version := v!"0.3.0"
+  version := v!"0.1.0"
   keywords := #["compression", "galois-field", "topology", "clifford-algebra", "lean4"]
 
 lean_lib «PRZM» where

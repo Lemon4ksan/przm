@@ -3,7 +3,7 @@
 ## High-Throughput In-Register Micro-Decompressor via AVX-512 VBMI & Intel GFNI
 
 **Document Version:** 1.0.0  
-**Target Release:** PRZM v0.8.0 The Horizon & Theorem Incubator  
+**Target Release:** PRZM v0.1.0 Core Architecture  
 **Authors:** Team Silicon-GFNI (PRZM Audit Swarm Season 17)  
 **Status:** Approved Architectural Specification & Silicon Prototype  
 

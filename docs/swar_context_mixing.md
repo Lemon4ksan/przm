@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary & Design Rationale
 
-In modern high-performance compression architectures (such as PRZM v0.8.0), dynamic context modeling is paramount for achieving superior entropy coding ratios. However, classical context mixers (e.g., PAQ, LPAQ) incur significant computational overhead:
+In modern high-performance compression architectures (such as PRZM v0.1.0), dynamic context modeling is paramount for achieving superior entropy coding ratios. However, classical context mixers (e.g., PAQ, LPAQ) incur significant computational overhead:
 1. Dynamic memory allocations and pointer chasing across deep tree structures.
 2. High latency floating-point transcendentals (`exp`, `log`, `tanh`) for logistic evaluation.
 3. Cache thrashing caused by large model state arrays.

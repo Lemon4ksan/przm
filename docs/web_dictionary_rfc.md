@@ -3,7 +3,7 @@
 **Status:** Standards Track / Proposed Protocol Specification  
 **Version:** 1.0.0  
 **Authors:** Team Web-Dict (PRZM Swarm Season 17, The Horizon & Theorem Incubator)  
-**Target:** PRZM v0.8.0 Core Architecture  
+**Target:** PRZM v0.1.0 Core Architecture  
 **Obsoletes/Updates:** Extends PRZM GGTC Grammar Layer (Theorem 2) & Cellular Sheaf Framing  
 **Standards Conformance:** RFC 9651 (Structured Field Values for HTTP), RFC 7932 (Brotli Compressed Data Format), W3C Compression Dictionary Transport  
 

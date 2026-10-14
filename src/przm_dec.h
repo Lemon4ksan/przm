@@ -14,6 +14,12 @@
 extern "C" {
 #endif
 
+/* PRZM Version Information */
+#define PRZM_VERSION_MAJOR              0
+#define PRZM_VERSION_MINOR              1
+#define PRZM_VERSION_PATCH              0
+#define PRZM_VERSION_STRING             "0.1.0"
+
 /* PRZM Deterministic Status Codes */
 #define PRZM_OK                         0
 #define PRZM_ERR_CORRUPTED_FRAME       -1

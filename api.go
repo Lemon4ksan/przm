@@ -8,6 +8,9 @@ import (
 	"encoding/binary"
 )
 
+// Version is the semantic version of the PRZM library.
+const Version = "0.1.0"
+
 // Compress compresses an uncompressed byte buffer using Trellis RDO at the given level.
 func Compress(src []byte, level int) ([]byte, error) { return CompressWithDict(src, level, nil) }
 

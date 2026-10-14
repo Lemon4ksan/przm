@@ -1,8 +1,8 @@
 # PRZM Compression Format Specification
 
 ```text
-Document:     PRZM-SPEC-0.8
-Version:      0.8.0
+Document:     PRZM-SPEC-0.1
+Version:      0.1.0
 Status:       Standard Specification
 Identifier:   PRZM (0x4D5A5250 Little-Endian)
 Verification: Formally Proved in Lean 4 (38 Verified Theorems)
