@@ -61,10 +61,11 @@ type TrellisNode struct {
 // CompressorScratchpad holds cache-resident tables and working memory for compression.
 type CompressorScratchpad struct {
 	head4       [MaxHashBuckets]int32
-	head8       [MaxHashBuckets][4]int32
-	head12      [MaxHashBuckets][8]int32
-	head16      [MaxHashBuckets][8]int32
-	head24      [MaxHashBuckets][4]int32
+	head8       [MaxHashBuckets][8]int32
+	head12      [MaxHashBuckets][16]int32
+	head16      [MaxHashBuckets][16]int32
+	head24      [MaxHashBuckets][8]int32
+	head32      [MaxHashBuckets][8]int32
 	prevPos     [MaxWindowHorizon]int32
 	nodes       [MaxBlockHorizon + 1]TrellisNode
 	litCost     [256]uint32
@@ -210,6 +211,15 @@ func hash24(src []byte, p int) uint16 {
 	return uint16((h * HashMultiplier64) >> 48)
 }
 
+func hash32(src []byte, p int) uint16 {
+	v1 := binary.LittleEndian.Uint64(src[p : p+8])
+	v2 := binary.LittleEndian.Uint64(src[p+8 : p+16])
+	v3 := binary.LittleEndian.Uint64(src[p+16 : p+24])
+	v4 := binary.LittleEndian.Uint64(src[p+24 : p+32])
+	h := v1 ^ (v2 * 0xBF58476D1CE4E5B9) ^ (v3 * 0x94D049BB133111EB) ^ (v4 * 0x3C79AC492BA7B653)
+	return uint16((h * HashMultiplier64) >> 48)
+}
+
 var distCodeCost [64]uint32
 
 func init() {
@@ -247,6 +257,12 @@ func getParetoSublengths(L, bMin int, out []int) []int {
 	if candBoundary >= bMin && candBoundary < L-4 {
 		out[n] = candBoundary
 		n++
+	}
+	for _, step := range [...]int{32, 24, 16, 12} {
+		if step < L-4 && step > 8 && step != candBoundary {
+			out[n] = step
+			n++
+		}
 	}
 	for sub := 8; sub >= bMin; sub-- {
 		if sub < L-4 && sub != candBoundary {
@@ -293,7 +309,7 @@ func litFlushCost(nLit int) uint32 {
 
 // costRepeat evaluates parsing cost for match reusing register k.
 func costRepeat(L, k, bMin, nLit int) uint32 {
-	var base uint32 = 48
+	var base uint32 = 36
 	if L <= 3+bMin && nLit <= 7 {
 		base = 14
 	} else if L <= 18+bMin && nLit <= 15 {
@@ -476,6 +492,9 @@ func relaxHashMatches(
 		return
 	}
 	curCost := s.nodes[i].cost
+	if level >= 6 && i+32 <= bSize && globalPos+32 <= len(src) {
+		relaxHash32Matches(i, s, src, globalPos, bSize, maxDist, bMin, curCost)
+	}
 	if level >= 6 && i+24 <= bSize && globalPos+24 <= len(src) {
 		relaxHash24Matches(i, s, src, globalPos, bSize, maxDist, bMin, curCost)
 	}
@@ -491,6 +510,32 @@ func relaxHashMatches(
 	relaxHash4Matches(i, s, src, globalPos, bSize, maxDist, winMask, bMin, depthLimit, curCost)
 }
 
+func relaxHash32Matches(
+	i int,
+	s *CompressorScratchpad,
+	src []byte,
+	globalPos, bSize, maxDist, bMin int,
+	curCost uint32,
+) {
+	h32 := hash32(src, globalPos)
+	maxL := min(bSize-i, MaxMatchLength)
+	for k := 0; k < 8; k++ {
+		cand := s.head32[h32][k]
+		if cand < 0 {
+			break
+		}
+		candPos := int(cand)
+		d := uint32(globalPos - candPos)
+		if d == 0 || d > uint32(maxDist) {
+			continue
+		}
+		L := measureMatchLength(src, globalPos, candPos, maxL)
+		if L >= 32 {
+			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
+		}
+	}
+}
+
 func relaxHash24Matches(
 	i int,
 	s *CompressorScratchpad,
@@ -500,7 +545,7 @@ func relaxHash24Matches(
 ) {
 	h24 := hash24(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	for k := 0; k < 4; k++ {
+	for k := 0; k < 8; k++ {
 		cand := s.head24[h24][k]
 		if cand < 0 {
 			break
@@ -526,7 +571,7 @@ func relaxHash16Matches(
 ) {
 	h16 := hash16(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	for k := 0; k < 8; k++ {
+	for k := 0; k < 16; k++ {
 		cand := s.head16[h16][k]
 		if cand < 0 {
 			break
@@ -552,7 +597,7 @@ func relaxHash12Matches(
 ) {
 	h12 := hash12(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	for k := 0; k < 8; k++ {
+	for k := 0; k < 16; k++ {
 		cand := s.head12[h12][k]
 		if cand < 0 {
 			break
@@ -578,7 +623,7 @@ func relaxHash8Matches(
 ) {
 	h8 := hash8(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	for k := 0; k < 4; k++ {
+	for k := 0; k < 8; k++ {
 		cand := s.head8[h8][k]
 		if cand < 0 {
 			break
@@ -762,27 +807,28 @@ func insertHash(src []byte, globalPos, winMask int, s *CompressorScratchpad) {
 	s.head4[h4] = pos
 	if globalPos+8 <= len(src) {
 		h8 := hash8(src, globalPos)
-		s.head8[h8][3] = s.head8[h8][2]
-		s.head8[h8][2] = s.head8[h8][1]
-		s.head8[h8][1] = s.head8[h8][0]
+		copy(s.head8[h8][1:], s.head8[h8][:7])
 		s.head8[h8][0] = pos
 	}
 	if globalPos+12 <= len(src) {
 		h12 := hash12(src, globalPos)
-		copy(s.head12[h12][1:], s.head12[h12][:7])
+		copy(s.head12[h12][1:], s.head12[h12][:15])
 		s.head12[h12][0] = pos
 	}
 	if globalPos+16 <= len(src) {
 		h16 := hash16(src, globalPos)
-		copy(s.head16[h16][1:], s.head16[h16][:7])
+		copy(s.head16[h16][1:], s.head16[h16][:15])
 		s.head16[h16][0] = pos
 	}
 	if globalPos+24 <= len(src) {
 		h24 := hash24(src, globalPos)
-		s.head24[h24][3] = s.head24[h24][2]
-		s.head24[h24][2] = s.head24[h24][1]
-		s.head24[h24][1] = s.head24[h24][0]
+		copy(s.head24[h24][1:], s.head24[h24][:7])
 		s.head24[h24][0] = pos
+	}
+	if globalPos+32 <= len(src) {
+		h32 := hash32(src, globalPos)
+		copy(s.head32[h32][1:], s.head32[h32][:7])
+		s.head32[h32][0] = pos
 	}
 }
 
@@ -886,6 +932,9 @@ func assembleCompressedFrame(u int, params AnalysisParams, s1, s2, s3, s4 []byte
 	if params.stride > 1 {
 		flags |= FlagStride
 	}
+	if params.bMin == 3 {
+		flags |= FlagMinMatch3
+	}
 	extOffset := len(s2) > 65535 || len(s3) > 65535
 	if extOffset {
 		flags |= FlagExtOffset
@@ -960,11 +1009,12 @@ func executeCompressionPipeline(
 	u := len(src)
 	for i := range s.head4 {
 		s.head4[i] = -1
-		for k := range 4 {
+		for k := range 8 {
 			s.head8[i][k] = -1
 			s.head24[i][k] = -1
+			s.head32[i][k] = -1
 		}
-		for k := range 8 {
+		for k := range 16 {
 			s.head12[i][k] = -1
 			s.head16[i][k] = -1
 		}

@@ -390,12 +390,10 @@ func stageExecuteCommands(dst []byte, f *FrameContext, s *Scratchpad) error {
 		op := f.cmdBuf[cmdP]
 		cmdP++
 		if err := executeCommandStep(op, dst, &dstP, &litP, &offP, &cmdP, f, &r, s); err != nil {
-			println("executeCommandStep failed on op:", op, "err:", err.Error())
 			return err
 		}
 	}
 	if dstP != uSize {
-		println("dstP mismatch: dstP=", dstP, "uSize=", uSize, "cmdP=", cmdP, "len(cmdBuf)=", len(f.cmdBuf))
 		return ErrCorruptedFrame
 	}
 	return nil
