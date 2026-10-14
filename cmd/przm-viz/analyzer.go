@@ -173,7 +173,7 @@ type FrameAnalysis struct {
 	// Literals Analysis
 	TotalLiterals  int     `json:"total_literals"`
 	LiteralEntropy float64 `json:"literal_entropy_bits"`
-	ASCIIPct        float64 `json:"ascii_percentage"`
+	ASCIIPct       float64 `json:"ascii_percentage"`
 
 	// Timeline
 	Timeline []TimelineSegment `json:"timeline"`

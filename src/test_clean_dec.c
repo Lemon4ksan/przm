@@ -887,7 +887,55 @@ static void test_compress_roundtrip(void) {
     printf("[PASS] compress_roundtrip\n");
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc >= 4 && strcmp(argv[1], "--decompress") == 0) {
+        const char *in_path = argv[2];
+        const char *out_path = argv[3];
+        FILE *fin = fopen(in_path, "rb");
+        if (!fin) {
+            fprintf(stderr, "Cannot open input: %s\n", in_path);
+            return 1;
+        }
+        fseek(fin, 0, SEEK_END);
+        long slen = ftell(fin);
+        fseek(fin, 0, SEEK_SET);
+        uint8_t *src = (uint8_t*)malloc(slen);
+        if (fread(src, 1, slen, fin) != (size_t)slen) {
+            fclose(fin);
+            free(src);
+            return 1;
+        }
+        fclose(fin);
+
+        int32_t u_size = przm_get_uncompressed_size(src, slen);
+        if (u_size < 0) {
+            fprintf(stderr, "Failed to get uncompressed size: %d\n", u_size);
+            free(src);
+            return 1;
+        }
+        uint8_t *dst = (uint8_t*)malloc((size_t)u_size + 64);
+        int32_t res = przm_decompress(src, slen, dst, (size_t)u_size + 64);
+        if (res < 0) {
+            fprintf(stderr, "przm_decompress failed: %d\n", res);
+            free(src);
+            free(dst);
+            return 1;
+        }
+
+        FILE *fout = fopen(out_path, "wb");
+        if (!fout) {
+            fprintf(stderr, "Cannot open output: %s\n", out_path);
+            free(src);
+            free(dst);
+            return 1;
+        }
+        fwrite(dst, 1, (size_t)res, fout);
+        fclose(fout);
+        free(src);
+        free(dst);
+        return 0;
+    }
+
     printf("=== Running Clean Room C99 Verification Suite ===\n\n");
     test_get_uncompressed_size();
     test_standard_fused_raw();

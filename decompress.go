@@ -310,8 +310,27 @@ func copyMatch(dst []byte, dstPos int, d, matchLen, uSize uint32, dict []byte) e
 	mLen, dist := int(matchLen), int(d)
 	if dist <= dstPos {
 		srcPos := dstPos - dist
-		for i := range mLen {
-			dst[dstPos+i] = dst[srcPos+i]
+		if dist >= mLen {
+			copy(dst[dstPos:dstPos+mLen], dst[srcPos:srcPos+mLen])
+			return nil
+		}
+		if dist == 1 {
+			c := dst[srcPos]
+			for i := range mLen {
+				dst[dstPos+i] = c
+			}
+			return nil
+		}
+		p := 0
+		if dist >= 8 {
+			for p+8 <= mLen {
+				binary.LittleEndian.PutUint64(dst[dstPos+p:], binary.LittleEndian.Uint64(dst[srcPos+p:]))
+				p += 8
+			}
+		}
+		for p < mLen {
+			dst[dstPos+p] = dst[srcPos+p]
+			p++
 		}
 		return nil
 	}
@@ -804,15 +823,22 @@ func UnpackStream(dst, src, _ []byte) (int, error) {
 	if len(src) == 0 {
 		return 0, nil
 	}
+	switch src[0] {
+	case distance.ModeDistancePrefix,
+		distance.ModeDistancePrefixCompact,
+		distance.ModeDistancePrefixByte,
+		distance.ModeDistClusteredVANS:
+		return distance.UnpackOffsets(src, dst)
+	}
+
 	s := scratchPool.Get()
 	defer scratchPool.Put(s)
 	buf, err := commands.UnpackSection2Commands(src, s.op[:], s.meta[:], s.varBuf[:], dst)
-	if err == nil {
-		return len(buf), nil
+	if err != nil {
+		return distance.UnpackOffsets(src, dst)
 	}
-	nDist, errDist := distance.UnpackOffsets(src, dst)
-	if errDist == nil {
-		return nDist, nil
+	if len(buf) > 0 && len(dst) >= len(buf) && &buf[0] != &dst[0] {
+		copy(dst, buf)
 	}
-	return 0, err
+	return len(buf), nil
 }

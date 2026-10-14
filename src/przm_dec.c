@@ -269,23 +269,31 @@ static inline int is_digit(uint8_t b) {
     return (b >= '0' && b <= '9');
 }
 
+static uint8_t s_sheaf_lut[3][256];
+static int s_sheaf_lut_inited = 0;
+
+static void przm_init_sheaf_luts(void) {
+    if (s_sheaf_lut_inited) return;
+    for (int b = 0; b < 256; b++) {
+        if (is_ws((uint8_t)b)) s_sheaf_lut[0][b] = 0;
+        else if (is_syntax((uint8_t)b)) s_sheaf_lut[0][b] = 1;
+        else if (is_ident((uint8_t)b)) s_sheaf_lut[0][b] = 2;
+        else s_sheaf_lut[0][b] = 3;
+
+        if (b == '"' || b == ':') s_sheaf_lut[1][b] = 0;
+        else if (is_ident((uint8_t)b)) s_sheaf_lut[1][b] = 1;
+        else if (is_digit((uint8_t)b)) s_sheaf_lut[1][b] = 2;
+        else s_sheaf_lut[1][b] = 3;
+
+        if (is_ws((uint8_t)b) || is_syntax((uint8_t)b)) s_sheaf_lut[2][b] = 0;
+        else s_sheaf_lut[2][b] = 1;
+    }
+    s_sheaf_lut_inited = 1;
+}
+
 uint8_t przm_context_classify(uint8_t p1, uint8_t mode) {
-    if (mode == 0) {
-        if (is_ws(p1)) return 0;
-        if (is_syntax(p1)) return 1;
-        if (is_ident(p1)) return 2;
-        return 3;
-    }
-    if (mode == 1) {
-        if (p1 == '"' || p1 == ':') return 0;
-        if (is_ident(p1)) return 1;
-        if (is_digit(p1)) return 2;
-        return 3;
-    }
-    if (mode == 2) {
-        if (is_ws(p1) || is_syntax(p1)) return 0;
-        return 1;
-    }
+    if (!s_sheaf_lut_inited) przm_init_sheaf_luts();
+    if (mode < 3) return s_sheaf_lut[mode][p1];
     return 3;
 }
 
@@ -311,38 +319,37 @@ int32_t przm_reconstitute_fibers(uint8_t *dst, size_t u_lit,
     if (mode > 3) return PRZM_ERR_CORRUPTED_FRAME;
     if (mode == 2 && (l2 != 0 || l3 != 0)) return PRZM_ERR_CORRUPTED_FRAME;
 
-    size_t ptr0 = 0, ptr1 = 0, ptr2 = 0, ptr3 = 0;
+    if (!s_sheaf_lut_inited) przm_init_sheaf_luts();
+
+    const uint8_t *fibers[4] = { f0, f1, f2, f3 };
+    size_t lens[4] = { l0, l1, l2, l3 };
+    size_t ptrs[4] = { 0, 0, 0, 0 };
     uint8_t p1 = 0, p2 = 0;
 
-    for (size_t j = 0; j < u_lit; j++) {
-        uint8_t c = (mode < 3) ? przm_context_classify(p1, mode)
-                               : przm_context_classify_order2(p2, p1);
-        uint8_t b = 0;
-        switch (c) {
-            case 0:
-                if (ptr0 >= l0 || !f0) return PRZM_ERR_CORRUPTED_FRAME;
-                b = f0[ptr0++];
-                break;
-            case 1:
-                if (ptr1 >= l1 || !f1) return PRZM_ERR_CORRUPTED_FRAME;
-                b = f1[ptr1++];
-                break;
-            case 2:
-                if (ptr2 >= l2 || !f2) return PRZM_ERR_CORRUPTED_FRAME;
-                b = f2[ptr2++];
-                break;
-            case 3:
-                if (ptr3 >= l3 || !f3) return PRZM_ERR_CORRUPTED_FRAME;
-                b = f3[ptr3++];
-                break;
-            default:
-                return PRZM_ERR_CORRUPTED_FRAME;
+    if (mode < 3) {
+        const uint8_t *lut = s_sheaf_lut[mode];
+        for (size_t j = 0; j < u_lit; j++) {
+            uint8_t c = lut[p1];
+            size_t idx = ptrs[c];
+            if (idx >= lens[c] || !fibers[c]) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t b = fibers[c][idx];
+            ptrs[c] = idx + 1;
+            dst[j] = b;
+            p1 = b;
         }
-        dst[j] = b;
-        p2 = p1;
-        p1 = b;
+    } else {
+        for (size_t j = 0; j < u_lit; j++) {
+            uint8_t c = przm_context_classify_order2(p2, p1);
+            size_t idx = ptrs[c];
+            if (idx >= lens[c] || !fibers[c]) return PRZM_ERR_CORRUPTED_FRAME;
+            uint8_t b = fibers[c][idx];
+            ptrs[c] = idx + 1;
+            dst[j] = b;
+            p2 = p1;
+            p1 = b;
+        }
     }
-    if (ptr0 != l0 || ptr1 != l1 || ptr2 != l2 || ptr3 != l3) return PRZM_ERR_CORRUPTED_FRAME;
+    if (ptrs[0] != l0 || ptrs[1] != l1 || ptrs[2] != l2 || ptrs[3] != l3) return PRZM_ERR_CORRUPTED_FRAME;
     return PRZM_OK;
 }
 
@@ -1126,7 +1133,7 @@ static inline int32_t copy_match(uint8_t *dst, size_t dst_pos, uint32_t d, uint3
     if (d == 0 || dst_pos + len > u_size) return PRZM_ERR_OFFSET_OOB;
     int64_t s_idx = (int64_t)dst_pos - (int64_t)d;
     if (s_idx >= 0) {
-        if (d >= len && d >= 8) {
+        if (d >= len) {
             memcpy(dst + dst_pos, dst + s_idx, len);
             return PRZM_OK;
         }
@@ -1134,7 +1141,17 @@ static inline int32_t copy_match(uint8_t *dst, size_t dst_pos, uint32_t d, uint3
             memset(dst + dst_pos, dst[s_idx], len);
             return PRZM_OK;
         }
-        for (uint32_t i = 0; i < len; i++) dst[dst_pos + i] = dst[s_idx + i];
+        size_t p = 0;
+        if (d >= 8) {
+            while (p + 8 <= len) {
+                memcpy(dst + dst_pos + p, dst + s_idx + p, 8);
+                p += 8;
+            }
+        }
+        while (p < len) {
+            dst[dst_pos + p] = dst[s_idx + p];
+            p++;
+        }
         return PRZM_OK;
     }
     if (!dict) return PRZM_ERR_OFFSET_OOB;

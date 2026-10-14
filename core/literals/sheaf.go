@@ -153,64 +153,50 @@ func ReconstituteFibers(dst []byte, uLit int, f0, f1, f2, f3 []byte, l0, l1, l2,
 
 // runReconstitutionLoop iterates through causal history, popping from fiber streams.
 func runReconstitutionLoop(dst []byte, uLit int, f0, f1, f2, f3 []byte, l0, l1, l2, l3 int, mode uint8) error {
-	var ptr0, ptr1, ptr2, ptr3 int
+	var ptrs [4]int
+	lens := [4]int{l0, l1, l2, l3}
+	fibers := [4][]byte{f0, f1, f2, f3}
 	var p1, p2 byte
 
-	for j := range uLit {
-		var c uint8
-		if mode < 3 {
-			c = ContextClassify(p1, mode)
-		} else {
-			c = ContextClassifyOrder2(p2, p1)
-		}
-
-		b, err := popFiberByte(c, f0, f1, f2, f3, &ptr0, &ptr1, &ptr2, &ptr3, l0, l1, l2, l3)
-		if err != nil {
-			return err
-		}
-		dst[j] = b
-		p2 = p1
-		p1 = b
+	var lut *[256]uint8
+	switch mode {
+	case 0:
+		lut = &sheafMode0LUT
+	case 1:
+		lut = &sheafMode1LUT
+	case 2:
+		lut = &sheafMode2LUT
 	}
 
-	if ptr0 != l0 || ptr1 != l1 || ptr2 != l2 || ptr3 != l3 {
+	if lut != nil {
+		for j := range uLit {
+			c := lut[p1]
+			idx := ptrs[c]
+			if idx >= lens[c] {
+				return ErrCorruptedFrame
+			}
+			b := fibers[c][idx]
+			ptrs[c] = idx + 1
+			dst[j] = b
+			p1 = b
+		}
+	} else {
+		for j := range uLit {
+			c := ContextClassifyOrder2(p2, p1)
+			idx := ptrs[c]
+			if idx >= lens[c] {
+				return ErrCorruptedFrame
+			}
+			b := fibers[c][idx]
+			ptrs[c] = idx + 1
+			dst[j] = b
+			p2 = p1
+			p1 = b
+		}
+	}
+
+	if ptrs[0] != l0 || ptrs[1] != l1 || ptrs[2] != l2 || ptrs[3] != l3 {
 		return ErrCorruptedFrame
 	}
 	return nil
-}
-
-// popFiberByte extracts a byte from the designated fiber with boundary checks.
-func popFiberByte(c uint8, f0, f1, f2, f3 []byte, p0, p1, p2, p3 *int, l0, l1, l2, l3 int) (byte, error) {
-	switch c {
-	case 0:
-		if *p0 >= l0 {
-			return 0, ErrCorruptedFrame
-		}
-		b := f0[*p0]
-		*p0++
-		return b, nil
-	case 1:
-		if *p1 >= l1 {
-			return 0, ErrCorruptedFrame
-		}
-		b := f1[*p1]
-		*p1++
-		return b, nil
-	case 2:
-		if *p2 >= l2 {
-			return 0, ErrCorruptedFrame
-		}
-		b := f2[*p2]
-		*p2++
-		return b, nil
-	case 3:
-		if *p3 >= l3 {
-			return 0, ErrCorruptedFrame
-		}
-		b := f3[*p3]
-		*p3++
-		return b, nil
-	default:
-		return 0, ErrCorruptedFrame
-	}
 }

@@ -10,7 +10,6 @@ package literals
 import (
 	"encoding/binary"
 	"errors"
-	"slices"
 	"sync/atomic"
 
 	"github.com/lemon4ksan/foundation/generic"
@@ -266,38 +265,72 @@ func BuildVansTable(freq, cdf []uint16, lookup []byte) {
 	}
 }
 
-// EncodeVANS4x compresses input literals into a 4-lane interleaved V-ANS stream.
-func EncodeVANS4x(src []byte, freq []uint16) ([]byte, error) {
-	var cdf [256]uint16
-	var lookup [4096]byte
-	BuildVansTable(freq, cdf[:], lookup[:])
+// EncodeVANS4xDirect encodes src into dst using scratchpad without heap allocations.
+func EncodeVANS4xDirect(src, dst []byte, freq []uint16, s *Scratchpad) (int, error) {
+	uLen := len(src)
+	if len(dst) < 8+64 {
+		return 0, ErrBufferTooSmall
+	}
+	dst[0] = 'V'
+	dst[1] = 'A'
+	dst[2] = 0x01
+	dst[3] = 0x00
+	binary.LittleEndian.PutUint32(dst[4:8], uint32(uLen))
+
+	BuildVansTable(freq, s.vansCDF[:], s.vansLookup[:])
 
 	x := [4]uint32{65536, 65536, 65536, 65536}
-	var streamBuf []byte
+	streamBuf := s.fiberBuf[:]
+	streamLen := 0
 
-	for i, s := range slices.Backward(src) {
+	for i := len(src) - 1; i >= 0; i-- {
+		sByte := src[i]
 		lane := i & 3
 
-		f := uint32(freq[s])
-		c := uint32(cdf[s])
+		f := uint32(freq[sByte])
+		c := uint32(s.vansCDF[sByte])
 		if f == 0 {
-			return nil, ErrCorruptedFrame
+			return 0, ErrCorruptedFrame
 		}
 
 		for x[lane] > 4096*f-1 {
-			streamBuf = append(streamBuf, byte(x[lane]&0xFF))
+			if streamLen >= len(streamBuf) {
+				return 0, ErrBufferTooSmall
+			}
+			streamBuf[streamLen] = byte(x[lane] & 0xFF)
+			streamLen++
 			x[lane] >>= 8
 		}
 		x[lane] = (x[lane]/f)*4096 + c + (x[lane] % f)
 	}
 
-	out := EncodeJointNibbleFreq(freq, nil)
+	freqBuf := EncodeJointNibbleFreq(freq, dst[:8])
+	pos := len(freqBuf)
+	if pos+16+streamLen > len(dst) {
+		return 0, ErrBufferTooSmall
+	}
 	for j := range 4 {
-		out = binary.LittleEndian.AppendUint32(out, x[j])
+		binary.LittleEndian.PutUint32(dst[pos:pos+4], x[j])
+		pos += 4
 	}
-	for _, s := range slices.Backward(streamBuf) {
-		out = append(out, s)
+	for k := streamLen - 1; k >= 0; k-- {
+		dst[pos] = streamBuf[k]
+		pos++
 	}
+	return pos, nil
+}
+
+// EncodeVANS4x compresses input literals into a 4-lane interleaved V-ANS stream.
+func EncodeVANS4x(src []byte, freq []uint16) ([]byte, error) {
+	s := getScratch()
+	defer putScratch(s)
+	dst := make([]byte, 8+600+16+len(src)*2)
+	n, err := EncodeVANS4xDirect(src, dst, freq, s)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, n-8)
+	copy(out, dst[8:n])
 	return out, nil
 }
 
@@ -306,9 +339,39 @@ func DecodeVans4x(src, dst []byte, uLen int) error {
 	if uLen == 0 {
 		return nil
 	}
-	s := scratchPool.Get()
-	defer scratchPool.Put(s)
+	s := getScratch()
+	defer putScratch(s)
 	return DecodeVANS4x(src, dst, uLen, s.vansLookup[:], s.vansFreq[:], s.vansCDF[:])
+}
+
+// EncodeAdaptiveVANS4x compresses src with adaptive 4-lane V-ANS into dst with 8-byte container header.
+func EncodeAdaptiveVANS4x(src, dst []byte) (int, error) {
+	uLen := len(src)
+	if uLen == 0 {
+		return 0, nil
+	}
+	s := getScratch()
+	defer putScratch(s)
+
+	var counts [256]int
+	for _, b := range src {
+		counts[b]++
+	}
+	if err := NormalizeFrequencies(counts[:], s.vansFreq[:]); err != nil {
+		return 0, err
+	}
+	return EncodeVANS4xDirect(src, dst, s.vansFreq[:], s)
+}
+
+// DecodeAdaptiveVANS4x decompresses an adaptive 4-lane V-ANS container into dst.
+func DecodeAdaptiveVANS4x(src, dst []byte, expLen int) error {
+	if len(src) < 8 {
+		return ErrCorruptedFrame
+	}
+	if expLen > len(dst) {
+		return ErrBufferTooSmall
+	}
+	return DecodeVans4x(src[8:], dst, expLen)
 }
 
 // DecodeVANS4x decompresses a 4-lane interleaved V-ANS payload into dst.
@@ -332,7 +395,62 @@ func DecodeVANS4x(src, dst []byte, uLen int, lookup []byte, freq, cdf []uint16) 
 	}
 
 	p := pos
-	for i := range uLen {
+	x0, x1, x2, x3 := x[0], x[1], x[2], x[3]
+	i := 0
+	for i+4 <= uLen {
+		slot0 := x0 & 4095
+		sym0 := lookup[slot0]
+		dst[i] = sym0
+		x0 = uint32(freq[sym0])*(x0>>12) + (slot0 - uint32(cdf[sym0]))
+		for x0 < 65536 {
+			if p >= len(src) {
+				return ErrCorruptedFrame
+			}
+			x0 = (x0 << 8) | uint32(src[p])
+			p++
+		}
+
+		slot1 := x1 & 4095
+		sym1 := lookup[slot1]
+		dst[i+1] = sym1
+		x1 = uint32(freq[sym1])*(x1>>12) + (slot1 - uint32(cdf[sym1]))
+		for x1 < 65536 {
+			if p >= len(src) {
+				return ErrCorruptedFrame
+			}
+			x1 = (x1 << 8) | uint32(src[p])
+			p++
+		}
+
+		slot2 := x2 & 4095
+		sym2 := lookup[slot2]
+		dst[i+2] = sym2
+		x2 = uint32(freq[sym2])*(x2>>12) + (slot2 - uint32(cdf[sym2]))
+		for x2 < 65536 {
+			if p >= len(src) {
+				return ErrCorruptedFrame
+			}
+			x2 = (x2 << 8) | uint32(src[p])
+			p++
+		}
+
+		slot3 := x3 & 4095
+		sym3 := lookup[slot3]
+		dst[i+3] = sym3
+		x3 = uint32(freq[sym3])*(x3>>12) + (slot3 - uint32(cdf[sym3]))
+		for x3 < 65536 {
+			if p >= len(src) {
+				return ErrCorruptedFrame
+			}
+			x3 = (x3 << 8) | uint32(src[p])
+			p++
+		}
+
+		i += 4
+	}
+
+	x[0], x[1], x[2], x[3] = x0, x1, x2, x3
+	for i < uLen {
 		lane := i & 3
 		slot := x[lane] & 4095
 		sym := lookup[slot]
@@ -349,6 +467,7 @@ func DecodeVANS4x(src, dst []byte, uLen int, lookup []byte, freq, cdf []uint16) 
 			x[lane] = (x[lane] << 8) | uint32(src[p])
 			p++
 		}
+		i++
 	}
 	return nil
 }

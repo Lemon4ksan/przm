@@ -55,6 +55,7 @@ type TrellisNode struct {
 	cost uint32
 	r    [4]uint32
 	edge commands.TrellisEdge
+	nLit uint16
 }
 
 // CompressorScratchpad holds cache-resident tables and working memory for compression.
@@ -228,13 +229,25 @@ func computeBlockLiteralCosts(block []byte, litCost []uint32) {
 	}
 }
 
+func litFlushCost(nLit int) uint32 {
+	if nLit == 0 {
+		return 0
+	}
+	if nLit <= 8 {
+		return 16
+	}
+	return 32
+}
+
 // costRepeat evaluates parsing cost for match reusing register k.
-func costRepeat(L, k, bMin int) uint32 {
+func costRepeat(L, k, bMin, nLit int) uint32 {
 	var base uint32 = 48
-	if L <= 3+bMin {
-		base = 16
-	} else if L <= 18+bMin {
-		base = 32
+	if L <= 3+bMin && nLit <= 7 {
+		base = 14
+	} else if L <= 18+bMin && nLit <= 15 {
+		base = 28
+	} else if nLit > 15 {
+		base += litFlushCost(nLit)
 	}
 	bonus := uint32(4 - k)
 	if base > bonus+3 {
@@ -244,12 +257,15 @@ func costRepeat(L, k, bMin int) uint32 {
 }
 
 // costExplicit evaluates base opcode cost plus distance prefix bits.
-func costExplicit(L int, dist uint32, bMin int) uint32 {
+func costExplicit(L int, dist uint32, bMin, nLit int) uint32 {
 	var base uint32 = 46
 	if L <= 14+bMin {
 		base = 16
 	} else if L <= 14+bMin+127 {
 		base = 30
+	}
+	if nLit > 3 {
+		base += litFlushCost(nLit)
 	}
 	_, _, nb := distance.DistanceToCode(dist)
 	return base + uint32(2*nb)
@@ -278,6 +294,7 @@ func relaxLiteral(i int, s *CompressorScratchpad, block []byte) {
 	if nextCost < s.nodes[i+1].cost {
 		s.nodes[i+1].cost = nextCost
 		s.nodes[i+1].r = s.nodes[i].r
+		s.nodes[i+1].nLit = s.nodes[i].nLit + 1
 		s.nodes[i+1].edge = commands.TrellisEdge{From: uint16(i), Length: 1, Kind: 0}
 	}
 }
@@ -306,11 +323,13 @@ func relaxRepeatSublengths(i, k int, d uint32, L, bMin int, curCost uint32, s *C
 	rNext := s.nodes[i].r
 	distance.UpdateLRURepeat(&rNext, uint8(k))
 	subLens := getParetoSublengths(L, bMin, s.subLens[:])
+	nLit := int(s.nodes[i].nLit)
 	for _, l := range subLens {
-		cost := curCost + costRepeat(l, k, bMin)
+		cost := curCost + costRepeat(l, k, bMin, nLit)
 		if cost < s.nodes[i+l].cost {
 			s.nodes[i+l].cost = cost
 			s.nodes[i+l].r = rNext
+			s.nodes[i+l].nLit = 0
 			s.nodes[i+l].edge = commands.TrellisEdge{
 				From:   uint16(i),
 				Length: uint16(l),
@@ -369,11 +388,16 @@ func relaxFixedSublengths(i int, kind, arg uint8, d uint32, L, bMin int, curCost
 	rNext := s.nodes[i].r
 	distance.UpdateLRUExplicit(&rNext, d)
 	subLens := getParetoSublengths(L, bMin, s.subLens[:])
+	nLit := int(s.nodes[i].nLit)
+	costBase := curCost + 22
+	if nLit > 15 {
+		costBase += litFlushCost(nLit)
+	}
 	for _, l := range subLens {
-		cost := curCost + 22
-		if cost < s.nodes[i+l].cost {
-			s.nodes[i+l].cost = cost
+		if costBase < s.nodes[i+l].cost {
+			s.nodes[i+l].cost = costBase
 			s.nodes[i+l].r = rNext
+			s.nodes[i+l].nLit = 0
 			s.nodes[i+l].edge = commands.TrellisEdge{From: uint16(i), Length: uint16(l), Dist: d, Kind: kind, Arg: arg}
 		}
 	}
@@ -444,11 +468,13 @@ func relaxExplicitSublengths(i int, d uint32, L, bMin int, curCost uint32, s *Co
 	rNext := s.nodes[i].r
 	distance.UpdateLRUExplicit(&rNext, d)
 	subLens := getParetoSublengths(L, bMin, s.subLens[:])
+	nLit := int(s.nodes[i].nLit)
 	for _, l := range subLens {
-		cost := curCost + costExplicit(l, d, bMin)
+		cost := curCost + costExplicit(l, d, bMin, nLit)
 		if cost < s.nodes[i+l].cost {
 			s.nodes[i+l].cost = cost
 			s.nodes[i+l].r = rNext
+			s.nodes[i+l].nLit = 0
 			s.nodes[i+l].edge = commands.TrellisEdge{From: uint16(i), Length: uint16(l), Dist: d, Kind: 4}
 		}
 	}
@@ -460,14 +486,21 @@ func relaxDictMatches(i int, s *CompressorScratchpad, src []byte, globalPos, bSi
 		return
 	}
 	curCost := s.nodes[i].cost
+	nLit := int(s.nodes[i].nLit)
+	flushCost := litFlushCost(nLit)
 	cdict.FindStaticDictMatches(src[globalPos:], func(p uint32, matchLen int) {
-		if matchLen < 10 || i+matchLen > bSize {
+		if matchLen < 5 || i+matchLen > bSize {
 			return
 		}
-		cost := curCost + 80
+		var base uint32 = 36
+		if matchLen >= 8 {
+			base = 28
+		}
+		cost := curCost + base + flushCost
 		if cost < s.nodes[i+matchLen].cost {
 			s.nodes[i+matchLen].cost = cost
 			s.nodes[i+matchLen].r = s.nodes[i].r
+			s.nodes[i+matchLen].nLit = 0
 			s.nodes[i+matchLen].edge = commands.TrellisEdge{
 				From:   uint16(i),
 				Length: uint16(matchLen),
@@ -531,17 +564,23 @@ func relaxDiffLatticeSublengths(
 	rNext := s.nodes[i].r
 	distance.UpdateLRUExplicit(&rNext, d)
 	subLens := getParetoSublengths(L, bMin, s.subLens[:])
+	nLit := int(s.nodes[i].nLit)
+	var flushCost uint32
+	if nLit > 6 {
+		flushCost = litFlushCost(nLit)
+	}
 	for _, l := range subLens {
 		diff := l - bMin
 		var cost uint32
 		if diff < 7 {
-			cost = curCost + 36
+			cost = curCost + 36 + flushCost
 		} else {
-			cost = curCost + 48
+			cost = curCost + 48 + flushCost
 		}
 		if cost < s.nodes[i+l].cost {
 			s.nodes[i+l].cost = cost
 			s.nodes[i+l].r = rNext
+			s.nodes[i+l].nLit = 0
 			s.nodes[i+l].edge = commands.TrellisEdge{
 				From:   uint16(i),
 				Length: uint16(l),
@@ -570,9 +609,11 @@ func insertHash(src []byte, globalPos, winMask int, s *CompressorScratchpad) {
 func initBlockNodes(s *CompressorScratchpad, bSize int, initialR [4]uint32) {
 	for i := 0; i <= bSize; i++ {
 		s.nodes[i].cost = InfinityCost
+		s.nodes[i].nLit = 0
 	}
 	s.nodes[0].cost = 0
 	s.nodes[0].r = initialR
+	s.nodes[0].nLit = 0
 }
 
 // solveBlockTrellis runs DAG shortest-path relaxation over the 64 KiB block.
@@ -587,19 +628,18 @@ func solveBlockTrellis(
 	computeBlockLiteralCosts(block, s.litCost[:])
 	for i := range bSize {
 		globalPos := blockStart + i
+		if s.nodes[i].cost != InfinityCost {
+			relaxLiteral(i, s, block)
+			relaxRepeat(i, s, src, globalPos, bSize, bMin)
+			relaxBrackets(i, s, src, globalPos, bSize, bMin)
+			relaxStride(i, s, src, globalPos, bSize, stride, bMin)
+			relaxHashMatches(i, s, src, globalPos, bSize, maxDist, winMask, bMin, depthLimit, level)
+			relaxDictMatches(i, s, src, globalPos, bSize, bMin)
+			relaxDiffLattice(i, s, src, globalPos, bSize, stride, bMin)
+		}
 		if i+4 <= bSize {
 			insertHash(src, globalPos, winMask, s)
 		}
-		if s.nodes[i].cost == InfinityCost {
-			continue
-		}
-		relaxLiteral(i, s, block)
-		relaxRepeat(i, s, src, globalPos, bSize, bMin)
-		relaxBrackets(i, s, src, globalPos, bSize, bMin)
-		relaxStride(i, s, src, globalPos, bSize, stride, bMin)
-		relaxHashMatches(i, s, src, globalPos, bSize, maxDist, winMask, bMin, depthLimit, level)
-		relaxDictMatches(i, s, src, globalPos, bSize, bMin)
-		relaxDiffLattice(i, s, src, globalPos, bSize, stride, bMin)
 	}
 }
 

@@ -10,6 +10,8 @@ import (
 	"encoding/binary"
 
 	"github.com/lemon4ksan/foundation/generic"
+
+	"github.com/lemon4ksan/przm/core/literals"
 )
 
 // SplitCommands decomposes linear bytecode instructions into opStream, metaStream, and varStream.
@@ -367,17 +369,34 @@ var mode8TmpPool = generic.NewPool[mode8TmpBufType](func() *mode8TmpBufType {
 })
 
 func packSubstream(sub, tmp, dst []byte) (int, error) {
+	flatLen := 1 + len(sub)
+	bestLen := flatLen
+	useMeta8 := false
+	useAdaptive := false
+
 	if len(sub) >= 24 && len(sub) <= len(tmp) {
 		encLen, err := EncodeVansMeta8(sub, tmp)
-		if err == nil && encLen < 1+len(sub) {
-			if encLen > len(dst) {
-				return 0, ErrBufferTooSmall
-			}
+		if err == nil && encLen < bestLen {
+			bestLen = encLen
+			useMeta8 = true
 			copy(dst, tmp[:encLen])
-			return encLen, nil
 		}
 	}
-	flatLen := 1 + len(sub)
+
+	if len(sub) >= 16 && len(sub) <= len(tmp) {
+		encLen, err := literals.EncodeAdaptiveVANS4x(sub, tmp)
+		if err == nil && encLen < bestLen {
+			bestLen = encLen
+			useAdaptive = true
+			useMeta8 = false
+			copy(dst, tmp[:encLen])
+		}
+	}
+
+	if useMeta8 || useAdaptive {
+		return bestLen, nil
+	}
+
 	if flatLen > len(dst) {
 		return 0, ErrBufferTooSmall
 	}
@@ -456,15 +475,23 @@ func unpackSubstreamOrVans(src, dst []byte, rawLen int) (int, error) {
 	if len(src) == 0 {
 		return 0, nil
 	}
-	if len(src) >= 24 && src[0] == 'V' && src[1] == 'A' && src[2] == 0x01 && (src[3]&0x40) != 0 {
+	if len(src) >= 8 && src[0] == 'V' && src[1] == 'A' && src[2] == 0x01 {
 		expLen := int(binary.LittleEndian.Uint32(src[4:8]))
 		if expLen > len(dst) {
 			return 0, ErrBufferTooSmall
 		}
-		if err := DecodeVansMeta8(src, dst, expLen); err != nil {
-			return 0, err
+		if (src[3] & 0x40) != 0 {
+			if err := DecodeVansMeta8(src, dst, expLen); err != nil {
+				return 0, err
+			}
+			return expLen, nil
 		}
-		return expLen, nil
+		if src[3] == 0 {
+			if err := literals.DecodeAdaptiveVANS4x(src, dst, expLen); err != nil {
+				return 0, err
+			}
+			return expLen, nil
+		}
 	}
 	if src[0] == 0x09 {
 		n := len(src) - 1
@@ -603,12 +630,14 @@ func emitRFCWordMatch(e TrellisEdge, pendingLits, cmdsOut, litsOut *[]byte) {
 		EmitLiteralRun(*pendingLits, cmdsOut, litsOut)
 		*pendingLits = nil
 	}
-	p := e.Dist
-	if p >= 128 {
-		*cmdsOut = append(*cmdsOut, 0xCF, byte(0x80|((p>>7)&0x7F)), byte(p&0x7F))
-	} else {
-		*cmdsOut = append(*cmdsOut, 0xCF, byte(p))
+	if e.Arg != 0 {
+		tau := byte(e.Arg)
+		*cmdsOut = append(*cmdsOut, 0xCF, tau)
+		*cmdsOut = AppendLEB128(*cmdsOut, e.Dist)
+		return
 	}
+	p := e.Dist
+	*cmdsOut = append(*cmdsOut, 0xCF, byte(0x80|((p>>7)&0x7F)), byte(p&0x7F))
 }
 
 func emitDiffLatticeMatch(e TrellisEdge, pendingLits *[]byte, bMin int, cmdsOut, litsOut *[]byte) {

@@ -145,6 +145,27 @@ func BenchmarkDecompressRoundtrip(b *testing.B) {
 	}
 }
 
+func BenchmarkDecompressLarge(b *testing.B) {
+	pattern := []byte(
+		"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ",
+	)
+	src := bytes.Repeat(pattern, 8000) // ~1 MiB
+	comp, err := Compress(src, 6)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	dst := make([]byte, len(src)+128)
+	b.SetBytes(int64(len(src)))
+
+	for b.Loop() {
+		_, err := Decompress(comp, dst)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestExtOffsetSectionsEndToEnd(t *testing.T) {
 	s1 := []byte{0x00, 16, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 
