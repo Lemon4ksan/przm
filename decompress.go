@@ -371,10 +371,12 @@ func stageExecuteCommands(dst []byte, f *FrameContext, s *Scratchpad) error {
 		op := f.cmdBuf[cmdP]
 		cmdP++
 		if err := executeCommandStep(op, dst, &dstP, &litP, &offP, &cmdP, f, &r, s); err != nil {
+			println("executeCommandStep failed on op:", op, "err:", err.Error())
 			return err
 		}
 	}
 	if dstP != uSize {
+		println("dstP mismatch: dstP=", dstP, "uSize=", uSize, "cmdP=", cmdP, "len(cmdBuf)=", len(f.cmdBuf))
 		return ErrCorruptedFrame
 	}
 	return nil
@@ -437,7 +439,7 @@ func execExtendedOp(dst []byte, dstP, litP, cmdP *int, op byte, f *FrameContext,
 	case op <= 0xCD:
 		return execBracketMatch(dst, dstP, litP, cmdP, op, f, r)
 	case op == 0xCE:
-		return execDiffLattice(dst, dstP, cmdP, f, r)
+		return execDiffLattice(dst, dstP, litP, cmdP, f, r)
 	case op == 0xCF:
 		return execRFCTransform(dst, dstP, f.uSize, f.cmdBuf, cmdP, s)
 	case op <= 0xD7:
@@ -488,7 +490,7 @@ func execBracketMatch(dst []byte, dstP, litP, cmdP *int, op byte, f *FrameContex
 	return finishMatch(dst, dstP, d, uint32(int(tok&15)+int(f.bMin)), f)
 }
 
-func execDiffLattice(dst []byte, dstP, cmdP *int, f *FrameContext, r *[4]uint32) error {
+func execDiffLattice(dst []byte, dstP, litP, cmdP *int, f *FrameContext, r *[4]uint32) error {
 	if *cmdP+2 > len(f.cmdBuf) {
 		return ErrCorruptedFrame
 	}
@@ -500,8 +502,15 @@ func execDiffLattice(dst []byte, dstP, cmdP *int, f *FrameContext, r *[4]uint32)
 	if d <= 0 {
 		return ErrCorruptedFrame
 	}
-	distance.UpdateLRUExplicit(r, uint32(d))
+	lLit := int((desc >> 3) & 7)
 	lMatch := int(desc&7) + int(f.bMin)
+	if lLit == 7 {
+		extra, err := readLEB128(f.cmdBuf, cmdP)
+		if err != nil {
+			return ErrCorruptedFrame
+		}
+		lLit += int(extra)
+	}
 	if (desc & 7) == 7 {
 		extra, err := readLEB128(f.cmdBuf, cmdP)
 		if err != nil {
@@ -509,6 +518,11 @@ func execDiffLattice(dst []byte, dstP, cmdP *int, f *FrameContext, r *[4]uint32)
 		}
 		lMatch += int(extra)
 	}
+	done, err := copyPendingLiterals(dst, dstP, litP, lLit, f)
+	if err != nil || done {
+		return err
+	}
+	distance.UpdateLRUExplicit(r, uint32(d))
 	return finishMatch(dst, dstP, uint32(d), uint32(lMatch), f)
 }
 

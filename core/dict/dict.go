@@ -60,16 +60,24 @@ func readLEB128Internal(b []byte, pos *int) (uint32, error) {
 	return 0, ErrCorrupted
 }
 
+var topRFCWordsBytes [512][]byte
+
+func init() {
+	for i := range tables.TopRFCWords {
+		topRFCWordsBytes[i] = []byte(tables.TopRFCWords[i])
+	}
+}
+
 // resolveWordByWid fetches word bytes from the base dictionary or top RFC words.
 func resolveWordByWid(wid uint32) []byte {
 	if wid < 13504 {
 		return tables.LookupBrotliWord(wid)
 	}
 	idx := int(wid - 13504)
-	if idx >= len(tables.TopRFCWords) {
+	if idx >= len(topRFCWordsBytes) {
 		return nil
 	}
-	return []byte(tables.TopRFCWords[idx])
+	return topRFCWordsBytes[idx]
 }
 
 // resolveCompactPair extracts wid and tau from a compact RFC pair index.
@@ -112,7 +120,7 @@ func resolveExtendedWord(p uint32) ([]byte, uint32, error) {
 		return LookupBrotliWord(p), 0, nil
 	}
 	if p < 14016 {
-		return []byte(TopRFCWords[p-13504]), 0, nil
+		return topRFCWordsBytes[p-13504], 0, nil
 	}
 	wPtr, tau, err := resolveCompactPair(p - 14016)
 	if err != nil || len(wPtr) == 0 || tau > 120 {

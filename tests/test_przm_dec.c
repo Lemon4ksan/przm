@@ -596,6 +596,151 @@ static void test_distance_prefix_frame_decompression(void) {
     printf("[PASS] distance_prefix_frame_decompression\n");
 }
 
+static void test_distance_prefix_compact_and_byte_frames(void) {
+    printf("[RUN] distance_prefix_compact_and_byte_frames\n");
+    uint8_t code = 5;
+    uint8_t code_enc[64];
+    size_t code_enc_len = test_vans_encode_dist4(&code, 1, code_enc, sizeof(code_enc));
+    assert(code_enc_len >= 5);
+    uint8_t extra_bits[1] = {0x80};
+
+    // 1. Test Mode 0x0A (Compact: 7-byte header)
+    {
+        uint8_t s3[256];
+        size_t s3_pos = 0;
+        s3[s3_pos++] = 0x0A;
+        // L_varint = 1 (uint16 LE)
+        s3[s3_pos++] = 1; s3[s3_pos++] = 0;
+        // N_matches = 1 (uint16 LE)
+        s3[s3_pos++] = 1; s3[s3_pos++] = 0;
+        // L_code = code_enc_len (uint16 LE)
+        s3[s3_pos++] = (uint8_t)code_enc_len; s3[s3_pos++] = 0;
+        memcpy(s3 + s3_pos, code_enc, code_enc_len); s3_pos += code_enc_len;
+        memcpy(s3 + s3_pos, extra_bits, sizeof(extra_bits)); s3_pos += sizeof(extra_bits);
+
+        uint8_t frame[512];
+        size_t pos = 0;
+        frame[pos++] = 'P'; frame[pos++] = 'R'; frame[pos++] = 'Z'; frame[pos++] = 'M';
+        frame[pos++] = 0x00; // flags
+        frame[pos++] = 16; frame[pos++] = 0; frame[pos++] = 0; // U = 16
+        frame[pos++] = 2; frame[pos++] = 0; // L_cmd = 2
+        frame[pos++] = (uint8_t)(s3_pos & 0xFF); frame[pos++] = (uint8_t)((s3_pos >> 8) & 0xFF);
+        // Section 1
+        frame[pos++] = 0; frame[pos++] = 16; frame[pos++] = 0; frame[pos++] = 0;
+        frame[pos++] = 0; frame[pos++] = 0;  frame[pos++] = 0; frame[pos++] = 0;
+        // Section 2
+        frame[pos++] = 0xFA; frame[pos++] = 0x84;
+        // Section 3
+        memcpy(frame + pos, s3, s3_pos); pos += s3_pos;
+        // Section 4
+        memcpy(frame + pos, "ABCDEFGH", 8); pos += 8;
+
+        uint8_t dst[128];
+        memset(dst, 0, sizeof(dst));
+        int32_t res = przm_decompress(frame, pos, dst, sizeof(dst));
+        assert(res == 16);
+        assert(memcmp(dst, "ABCDEFGHABCDEFGH", 16) == 0);
+    }
+
+    // 2. Test Mode 0x0B (Byte: 4-byte header)
+    {
+        uint8_t s3[256];
+        size_t s3_pos = 0;
+        s3[s3_pos++] = 0x0B;
+        // L_varint = 1 (uint8)
+        s3[s3_pos++] = 1;
+        // N_matches = 1 (uint8)
+        s3[s3_pos++] = 1;
+        // L_code = code_enc_len (uint8)
+        s3[s3_pos++] = (uint8_t)code_enc_len;
+        memcpy(s3 + s3_pos, code_enc, code_enc_len); s3_pos += code_enc_len;
+        memcpy(s3 + s3_pos, extra_bits, sizeof(extra_bits)); s3_pos += sizeof(extra_bits);
+
+        uint8_t frame[512];
+        size_t pos = 0;
+        frame[pos++] = 'P'; frame[pos++] = 'R'; frame[pos++] = 'Z'; frame[pos++] = 'M';
+        frame[pos++] = 0x00; // flags
+        frame[pos++] = 16; frame[pos++] = 0; frame[pos++] = 0; // U = 16
+        frame[pos++] = 2; frame[pos++] = 0; // L_cmd = 2
+        frame[pos++] = (uint8_t)(s3_pos & 0xFF); frame[pos++] = (uint8_t)((s3_pos >> 8) & 0xFF);
+        // Section 1
+        frame[pos++] = 0; frame[pos++] = 16; frame[pos++] = 0; frame[pos++] = 0;
+        frame[pos++] = 0; frame[pos++] = 0;  frame[pos++] = 0; frame[pos++] = 0;
+        // Section 2
+        frame[pos++] = 0xFA; frame[pos++] = 0x84;
+        // Section 3
+        memcpy(frame + pos, s3, s3_pos); pos += s3_pos;
+        // Section 4
+        memcpy(frame + pos, "ABCDEFGH", 8); pos += 8;
+
+        uint8_t dst[128];
+        memset(dst, 0, sizeof(dst));
+        int32_t res = przm_decompress(frame, pos, dst, sizeof(dst));
+        assert(res == 16);
+        assert(memcmp(dst, "ABCDEFGHABCDEFGH", 16) == 0);
+    }
+    printf("[PASS] distance_prefix_compact_and_byte_frames\n");
+}
+
+static void test_ext_offset_frame_decompression(void) {
+    printf("[RUN] ext_offset_frame_decompression\n");
+    // Test FLAG_EXT_OFFSET (0x08) with 24-bit section directory offsets
+    uint8_t frame[512];
+    size_t pos = 0;
+    frame[pos++] = 'P'; frame[pos++] = 'R'; frame[pos++] = 'Z'; frame[pos++] = 'M';
+    frame[pos++] = 0x08; // FLAG_EXT_OFFSET
+    frame[pos++] = 16; frame[pos++] = 0; frame[pos++] = 0; // U = 16
+
+    // Directory: 3 bytes L_cmd (2), 3 bytes L_off (0)
+    frame[pos++] = 2; frame[pos++] = 0; frame[pos++] = 0; // L_cmd = 2
+    frame[pos++] = 0; frame[pos++] = 0; frame[pos++] = 0; // L_off = 0
+
+    // Section 1: 8 bytes
+    frame[pos++] = 0; frame[pos++] = 16; frame[pos++] = 0; frame[pos++] = 0;
+    frame[pos++] = 0; frame[pos++] = 0;  frame[pos++] = 0; frame[pos++] = 0;
+
+    // Section 2: Opcode 0xF0: raw literal run with LEB128 count 16
+    frame[pos++] = 0xF0;
+    frame[pos++] = 16;
+
+    // Section 4: 16 literals
+    memcpy(frame + pos, "0123456789ABCDEF", 16); pos += 16;
+
+    uint8_t dst[128];
+    memset(dst, 0, sizeof(dst));
+    int32_t res = przm_decompress(frame, pos, dst, sizeof(dst));
+    assert(res == 16);
+    assert(memcmp(dst, "0123456789ABCDEF", 16) == 0);
+
+    // Also test FLAG_EXT_OFFSET combined with FLAG_STRIDE (flags = 0x01 | 0x08 = 0x09)
+    {
+        pos = 0;
+        frame[pos++] = 'P'; frame[pos++] = 'R'; frame[pos++] = 'Z'; frame[pos++] = 'M';
+        frame[pos++] = 0x09; // FLAG_STRIDE | FLAG_EXT_OFFSET
+        frame[pos++] = 16; frame[pos++] = 0; frame[pos++] = 0; // U = 16
+        frame[pos++] = 3; // Stride byte: stride = 4 (stride-1 = 3)
+        // Directory starts after stride byte:
+        frame[pos++] = 2; frame[pos++] = 0; frame[pos++] = 0; // L_cmd = 2
+        frame[pos++] = 0; frame[pos++] = 0; frame[pos++] = 0; // L_off = 0
+
+        // Section 1
+        frame[pos++] = 0; frame[pos++] = 16; frame[pos++] = 0; frame[pos++] = 0;
+        frame[pos++] = 0; frame[pos++] = 0;  frame[pos++] = 0; frame[pos++] = 0;
+
+        // Section 2
+        frame[pos++] = 0xF0; frame[pos++] = 16;
+
+        // Section 4
+        memcpy(frame + pos, "0123456789ABCDEF", 16); pos += 16;
+
+        memset(dst, 0, sizeof(dst));
+        res = przm_decompress(frame, pos, dst, sizeof(dst));
+        assert(res == 16);
+        assert(memcmp(dst, "0123456789ABCDEF", 16) == 0);
+    }
+    printf("[PASS] ext_offset_frame_decompression\n");
+}
+
 static void test_corrupted_and_truncated_frames(void) {
     printf("[RUN] corrupted_and_truncated_frames\n");
     uint8_t dst[256];
@@ -887,7 +1032,201 @@ static void test_compress_roundtrip(void) {
     printf("[PASS] compress_roundtrip\n");
 }
 
-int main(void) {
+static void test_mode8_and_explicit_matches(void) {
+    printf("[RUN] mode8_and_explicit_matches\n");
+    // Target text: 57 bytes: 3 repetitions of "PRZM_EXPLICIT_TEST_" (19 bytes each)
+    // 1. Literal run of 19 bytes: opcode 0xF0, LEB128(19)
+    // 2. Explicit match: length = 19, dist = 19.
+    //    bMin = 4, lMatch = 19 -> lMatch - bMin = 15 >= 15.
+    //    Opcode = 0x80 | (0 << 4) | 15 = 0x8F, extra LEB128 = 0.
+    // 3. Explicit match: length = 19, dist = 19.
+    //    Opcode = 0x8F, extra LEB128 = 0.
+    //
+    // Command stream: [0xF0, 19, 0x8F, 0x00, 0x8F, 0x00] (6 bytes)
+    // Mode 8 framing:
+    // opStream:   [0xF0, 0x8F, 0x8F] (3 bytes) -> Mode 9: [0x09, 0xF0, 0x8F, 0x8F] (4 bytes)
+    // metaStream: [] (0 bytes)                 -> Mode 9: [0x09] (1 byte)
+    // varStream:  [19, 0x00, 0x00] (3 bytes)   -> Mode 9: [0x09, 19, 0x00, 0x00] (4 bytes)
+    // Total Mode 8 Section 2 length = 13 + 4 + 1 + 4 = 22 bytes.
+    // Section 3 (offsets): distance 19 (LEB128: 19), distance 19 (LEB128: 19) -> [19, 19] (2 bytes)
+    // Section 4 (literals): "PRZM_EXPLICIT_TEST_" (19 bytes)
+    // Total U = 57 bytes.
+
+    uint8_t op_enc[4] = {0x09, 0xF0, 0x8F, 0x8F};
+    uint8_t meta_enc[1] = {0x09};
+    uint8_t var_enc[4] = {0x09, 19, 0x00, 0x00};
+    size_t l_cmd = 13 + sizeof(op_enc) + sizeof(meta_enc) + sizeof(var_enc); // 22 bytes
+    size_t l_off = 2;
+
+    uint8_t frame[256];
+    size_t pos = 0;
+    frame[pos++] = 'P'; frame[pos++] = 'R'; frame[pos++] = 'Z'; frame[pos++] = 'M';
+    frame[pos++] = 0x00; // flags
+    frame[pos++] = 57; frame[pos++] = 0; frame[pos++] = 0; // U = 57
+    // Section directory: L_cmd, L_off
+    frame[pos++] = (uint8_t)(l_cmd & 0xFF);
+    frame[pos++] = (uint8_t)((l_cmd >> 8) & 0xFF);
+    frame[pos++] = (uint8_t)(l_off & 0xFF);
+    frame[pos++] = (uint8_t)((l_off >> 8) & 0xFF);
+
+    // Section 1: 8 bytes
+    frame[pos++] = 0; frame[pos++] = 16; frame[pos++] = 0; frame[pos++] = 0;
+    frame[pos++] = 0; frame[pos++] = 0;  frame[pos++] = 0; frame[pos++] = 0;
+
+    // Section 2: Mode 8 container
+    frame[pos++] = 0x08; // Mode 8
+    // origLen = 6
+    frame[pos++] = 6; frame[pos++] = 0; frame[pos++] = 0; frame[pos++] = 0;
+    // L_op = 4
+    frame[pos++] = (uint8_t)sizeof(op_enc); frame[pos++] = 0; frame[pos++] = 0; frame[pos++] = 0;
+    // L_m = 1
+    frame[pos++] = (uint8_t)sizeof(meta_enc); frame[pos++] = 0; frame[pos++] = 0; frame[pos++] = 0;
+
+    memcpy(frame + pos, op_enc, sizeof(op_enc)); pos += sizeof(op_enc);
+    memcpy(frame + pos, meta_enc, sizeof(meta_enc)); pos += sizeof(meta_enc);
+    memcpy(frame + pos, var_enc, sizeof(var_enc)); pos += sizeof(var_enc);
+
+    // Section 3: offsets [19, 19]
+    frame[pos++] = 19;
+    frame[pos++] = 19;
+
+    // Section 4: literals
+    const char *lit_str = "PRZM_EXPLICIT_TEST_";
+    memcpy(frame + pos, lit_str, 19); pos += 19;
+
+    uint8_t dst[256];
+    memset(dst, 0, sizeof(dst));
+    int32_t res = przm_decompress(frame, pos, dst, sizeof(dst));
+    assert(res == 57);
+    assert(memcmp(dst, "PRZM_EXPLICIT_TEST_PRZM_EXPLICIT_TEST_PRZM_EXPLICIT_TEST_", 57) == 0);
+
+    // Also test short explicit match with inline literals (nLit = 2, lMatch = 4, bMin = 4):
+    // "12345678" -> U = 8
+    // 2 literals: "12" (opcode 0xF4)
+    // Explicit match with 2 inline literals ("34") and match length = 4 (offset = 0 < 15, copying "1234"):
+    // Opcode = 0x80 | (2 << 4) | 0 = 0xA0. dist = 4.
+    // Total decompressed: "12" + "34" + "1234" = "12341234".
+    {
+        uint8_t f2[128];
+        size_t p2 = 0;
+        f2[p2++] = 'P'; f2[p2++] = 'R'; f2[p2++] = 'Z'; f2[p2++] = 'M';
+        f2[p2++] = 0x00;
+        f2[p2++] = 8; f2[p2++] = 0; f2[p2++] = 0; // U = 8
+        f2[p2++] = 2; f2[p2++] = 0; // L_cmd = 2
+        f2[p2++] = 1; f2[p2++] = 0; // L_off = 1
+        // S1
+        f2[p2++] = 0; f2[p2++] = 16; f2[p2++] = 0; f2[p2++] = 0;
+        f2[p2++] = 0; f2[p2++] = 0;  f2[p2++] = 0; f2[p2++] = 0;
+        // S2 (commands: 0xF4 for 2 literals "12", 0xA0 for 2 inline literals "34" + match of 4)
+        f2[p2++] = 0xF4;
+        f2[p2++] = 0xA0;
+        // S3 (offset 4)
+        f2[p2++] = 4;
+        // S4 (literals: "1234" - 4 literals)
+        memcpy(f2 + p2, "1234", 4); p2 += 4;
+
+        memset(dst, 0, sizeof(dst));
+        int32_t r2 = przm_decompress(f2, p2, dst, sizeof(dst));
+        assert(r2 == 8);
+        assert(memcmp(dst, "12341234", 8) == 0);
+    }
+
+    printf("[PASS] mode8_and_explicit_matches\n");
+}
+
+int main(int argc, char **argv) {
+    if (argc >= 3) {
+        const char *in_path = argv[1];
+        const char *out_path = argv[2];
+        if (argc >= 4 && strcmp(argv[1], "--decompress") == 0) {
+            in_path = argv[2];
+            out_path = argv[3];
+        }
+        FILE *in = fopen(in_path, "rb");
+        if (!in) {
+            fprintf(stderr, "Cannot open input file: %s\n", in_path);
+            return 1;
+        }
+        fseek(in, 0, SEEK_END);
+        long in_size = ftell(in);
+        fseek(in, 0, SEEK_SET);
+        if (in_size < 0) {
+            fclose(in);
+            return 1;
+        }
+        uint8_t *comp_buf = (uint8_t *)malloc((size_t)in_size);
+        if (!comp_buf && in_size > 0) {
+            fclose(in);
+            return 1;
+        }
+        if (in_size > 0 && fread(comp_buf, 1, (size_t)in_size, in) != (size_t)in_size) {
+            free(comp_buf);
+            fclose(in);
+            return 1;
+        }
+        fclose(in);
+
+        int32_t u_size = przm_get_uncompressed_size(comp_buf, (size_t)in_size);
+        if (u_size < 0) {
+            free(comp_buf);
+            return 1;
+        }
+
+        size_t dst_cap = (size_t)u_size + 128;
+        uint8_t *dst = (uint8_t *)malloc(dst_cap);
+        if (!dst && u_size > 0) {
+            free(comp_buf);
+            return 1;
+        }
+
+        int32_t res = przm_decompress(comp_buf, (size_t)in_size, dst, dst_cap);
+        free(comp_buf);
+        if (res < 0 || res != u_size) {
+            fprintf(stderr, "przm_decompress error: %d (u_size=%d)\n", res, u_size);
+            free(dst);
+            return 1;
+        }
+
+        FILE *out = fopen(out_path, "wb");
+        if (!out) {
+            fprintf(stderr, "Cannot open output file: %s\n", out_path);
+            free(dst);
+            return 1;
+        }
+        if (u_size > 0 && fwrite(dst, 1, (size_t)u_size, out) != (size_t)u_size) {
+            free(dst);
+            fclose(out);
+            return 1;
+        }
+        fclose(out);
+        free(dst);
+        return 0;
+    }
+
+    if (argc == 2) {
+        FILE *in = fopen(argv[1], "rb");
+        if (!in) return 1;
+        fseek(in, 0, SEEK_END);
+        long in_size = ftell(in);
+        fseek(in, 0, SEEK_SET);
+        if (in_size < 0) { fclose(in); return 1; }
+        uint8_t *comp_buf = (uint8_t *)malloc((size_t)in_size);
+        if (!comp_buf && in_size > 0) { fclose(in); return 1; }
+        if (in_size > 0 && fread(comp_buf, 1, (size_t)in_size, in) != (size_t)in_size) {
+            free(comp_buf); fclose(in); return 1;
+        }
+        fclose(in);
+        int32_t u_size = przm_get_uncompressed_size(comp_buf, (size_t)in_size);
+        if (u_size < 0) { free(comp_buf); return 1; }
+        size_t dst_cap = (size_t)u_size + 128;
+        uint8_t *dst = (uint8_t *)malloc(dst_cap);
+        if (!dst && u_size > 0) { free(comp_buf); return 1; }
+        int32_t res = przm_decompress(comp_buf, (size_t)in_size, dst, dst_cap);
+        free(comp_buf);
+        free(dst);
+        return (res >= 0 && res == u_size) ? 0 : 1;
+    }
+
     printf("=== Running Clean Room C99 Verification Suite ===\n\n");
     test_get_uncompressed_size();
     test_standard_fused_raw();
@@ -899,6 +1238,8 @@ int main(void) {
     test_distance_to_code_and_back();
     test_vans_dist4_roundtrip();
     test_distance_prefix_frame_decompression();
+    test_distance_prefix_compact_and_byte_frames();
+    test_ext_offset_frame_decompression();
     test_foliation_classification();
     test_foliation_roundtrip();
     test_nibble_planes();
@@ -906,6 +1247,7 @@ int main(void) {
     test_dictionary_decompression();
     test_corrupted_and_truncated_frames();
     test_compress_roundtrip();
+    test_mode8_and_explicit_matches();
     printf("\n>>> ALL CLEAN ROOM C99 TESTS PASSED SUCCESSFULLY! <<<\n");
     return 0;
 }

@@ -1,16 +1,9 @@
-# Audit Swarm Bug Tracker — Season 22: Core Decoupling
+# PRZM Defect Registry — Season 23
 
-| Bug ID | Severity | Subsystem | Description | Reported By | Status |
+| Bug ID | Subsystem | Severity | Description | Status | Assigned Team |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| BUG-S22-01 | High | Dict / Decompress | String-to-byte heap allocation escape in RFC dictionary transforms (`[]byte(topRFCWords[...])`) | `team_zero_inquisitor` | Fixed |
-| BUG-S22-02 | Critical | Dict / Decompress | Out-of-bounds buffer overrun on adversarial varint `wid >= 14016` in Go and C99 | `team_zero_inquisitor` | Fixed |
-| BUG-S22-03 | High | Commands / Decompress | Missing extended opcode parity `0xE0..0xE9` (delta-repeat, delta-explicit, external dict match) | `team_zero_inquisitor` | Fixed |
-| BUG-S22-04 | High | Decompress | Zero-distance match evasion bug (`d == 0` allowed uninitialized memory duplication) | `team_zero_inquisitor` | Fixed |
-| BUG-S22-05 | Medium | Commands / Mode 8 | Truncated Mode 8 V-ANS frame validation bypass on length < 24 | `team_zero_inquisitor` | Fixed |
-| BUG-S22-06 | Medium | Core / Allocations | High-iteration GC sweep `sync.Pool` eviction causing scratchpad reallocation artifact | `team_zero_inquisitor` | Fixed |
-| BUG-S22-07 | Critical | Decompress | Subpackage error desynchronization (`errors.New` instances in subpackages failed `errors.Is` checks in root) | `team_zero_inquisitor` | Fixed |
-| BUG-S22-08 | High | Decompress | Scratchpad lifecycle race in `stageFinalize` (`putScratch` called before `stageFinalize` finished reading) | `team_zero_inquisitor` | Fixed |
-| BUG-S22-09 | Medium | API | `Decode(nil)` returned `ErrCorruptedFrame` instead of graceful `nil, nil` | `team_facade_zenith` | Fixed |
-| BUG-S22-10 | Medium | Core Distance & Literals | GC sweeps purging `sync.Pool` under sustained decompression load in subpackages | `team_zero_inquisitor` | Fixed |
-
-
+| **BUG-2301** | `core/commands` | **CRITICAL** | `emitExplicitMatch` inverts `nLit` and `lMatch - bMin` bitfields, overflows opcodes into `0xC0..0xFF` when $lMatch - bMin \ge 4$. | **CLOSED / VERIFIED (Season 23)** | `team_command_matrix` |
+| **BUG-2302** | `core/commands` | **CRITICAL** | `PackCommandsMode8` copies raw slices without calling `EncodeVansMeta8`; condition `nPack < len(cmds)` is never true, causing 100% of command streams to fall back to `0x09` flat mode. | **CLOSED / VERIFIED (Season 23)** | `team_command_matrix` |
+| **BUG-2303** | `compress.go` / `src/przm_comp.c` | **CRITICAL** | Flag bitmasks mismatch in `src/przm_comp.c` (`FLAG_EXT_OFFSET 0x02` vs `0x08`, `FLAG_MIN_MATCH_3 0x20` vs `0x40`), and `assembleCompressedFrame` fails to set `FlagExtOffset (0x08)` for sections > 65535 B. | **CLOSED / VERIFIED (Season 23)** | `team_distance_framing` |
+| **BUG-2304** | `core/distance` | **MAJOR** | `PackageOffsetsSection` only uses `0x06` or `0x09`, ignoring compact modes `0x0A` (7B) and `0x0B` (4B) supported by decoders. | **CLOSED / VERIFIED (Season 23)** | `team_distance_framing` |
+| **BUG-2305** | `compress.go` / `core/dict` | **MAJOR** | Static dictionary stub `_ = dict` leaves RFC 7932 122 KB Brotli dictionary, `CompactPairs[2048]`, and `DiffLattice (0xCE)` completely inactive during compression. | **CLOSED / VERIFIED (Season 23)** | `team_dict_trellis` |

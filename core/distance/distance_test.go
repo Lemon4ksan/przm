@@ -332,3 +332,164 @@ func BenchmarkDistancePrefix(b *testing.B) {
 		}
 	})
 }
+
+func TestSelectPrefixMode(t *testing.T) {
+	// All <= 255 -> ModeDistancePrefixByte (0x0B)
+	if m := SelectPrefixMode(255, 255, 255); m != ModeDistancePrefixByte {
+		t.Fatalf("expected ModeDistancePrefixByte, got 0x%02X", m)
+	}
+	// origVarintLen > 255 -> ModeDistancePrefixCompact (0x0A)
+	if m := SelectPrefixMode(256, 50, 50); m != ModeDistancePrefixCompact {
+		t.Fatalf("expected ModeDistancePrefixCompact, got 0x%02X", m)
+	}
+	// matchCount > 255 -> ModeDistancePrefixCompact (0x0A)
+	if m := SelectPrefixMode(50, 256, 50); m != ModeDistancePrefixCompact {
+		t.Fatalf("expected ModeDistancePrefixCompact, got 0x%02X", m)
+	}
+	// codeLen > 255 -> ModeDistancePrefixCompact (0x0A)
+	if m := SelectPrefixMode(50, 50, 256); m != ModeDistancePrefixCompact {
+		t.Fatalf("expected ModeDistancePrefixCompact, got 0x%02X", m)
+	}
+	// All <= 65535 -> ModeDistancePrefixCompact (0x0A)
+	if m := SelectPrefixMode(65535, 65535, 65535); m != ModeDistancePrefixCompact {
+		t.Fatalf("expected ModeDistancePrefixCompact, got 0x%02X", m)
+	}
+	// origVarintLen > 65535 -> ModeDistancePrefix (0x06)
+	if m := SelectPrefixMode(65536, 100, 100); m != ModeDistancePrefix {
+		t.Fatalf("expected ModeDistancePrefix, got 0x%02X", m)
+	}
+	// matchCount > 65535 -> ModeDistancePrefix (0x06)
+	if m := SelectPrefixMode(100, 65536, 100); m != ModeDistancePrefix {
+		t.Fatalf("expected ModeDistancePrefix, got 0x%02X", m)
+	}
+	// codeLen > 65535 -> ModeDistancePrefix (0x06)
+	if m := SelectPrefixMode(100, 100, 65536); m != ModeDistancePrefix {
+		t.Fatalf("expected ModeDistancePrefix, got 0x%02X", m)
+	}
+}
+
+func verifyUnpackOffsetsLossless(t *testing.T, packed []byte, expected []uint32) {
+	t.Helper()
+	unpackedVarints := make([]byte, len(expected)*5+64)
+	vLen, err := UnpackOffsets(packed, unpackedVarints)
+	if err != nil {
+		t.Fatalf("UnpackOffsets failed: %v", err)
+	}
+
+	pos := 0
+	for idx, expectedD := range expected {
+		var d uint32
+		var shift int
+		for {
+			if pos >= vLen {
+				t.Fatalf("premature EOF reading varint for dist %d", idx)
+			}
+			b := unpackedVarints[pos]
+			pos++
+			d |= uint32(b&0x7F) << shift
+			if (b & 0x80) == 0 {
+				break
+			}
+			shift += 7
+		}
+		if d != expectedD {
+			t.Fatalf("dist %d mismatch: expected %d, got %d", idx, expectedD, d)
+		}
+	}
+	if pos != vLen {
+		t.Fatalf("extra trailing varint bytes: read %d, total %d", pos, vLen)
+	}
+}
+
+func TestPackageOffsetsSectionModes(t *testing.T) {
+	// 1. Empty slice returns nil
+	if res := PackageOffsetsSection(nil, nil); res != nil {
+		t.Fatalf("expected nil for empty offsets, got %v", res)
+	}
+
+	// 2. Small stream (70 matches of distance 1000, all fields <= 255) -> Expect ModeDistancePrefixByte (0x0B)
+	{
+		offs := make([]uint32, 70)
+		for i := range offs {
+			offs[i] = 1000
+		}
+		s3Buf := make([]byte, 1024)
+		packed := PackageOffsetsSection(offs, s3Buf)
+		if packed == nil {
+			t.Fatal("PackageOffsetsSection returned nil")
+		}
+		if packed[0] != ModeDistancePrefixByte {
+			t.Fatalf("expected small stream mode 0x0B, got 0x%02X", packed[0])
+		}
+		verifyUnpackOffsetsLossless(t, packed, offs)
+	}
+
+	// 3. Medium stream by count (1000 matches of distance 1000, <= 65535, > 255) -> Expect ModeDistancePrefixCompact (0x0A)
+	{
+		offs := make([]uint32, 1000)
+		for i := range offs {
+			offs[i] = 1000
+		}
+		s3Buf := make([]byte, 16384)
+		packed := PackageOffsetsSection(offs, s3Buf)
+		if packed == nil {
+			t.Fatal("PackageOffsetsSection returned nil")
+		}
+		if packed[0] != ModeDistancePrefixCompact {
+			t.Fatalf("expected medium stream mode 0x0A, got 0x%02X", packed[0])
+		}
+		verifyUnpackOffsetsLossless(t, packed, offs)
+	}
+
+	// 4. Medium stream by origVarintLen (200 matches of distance 1000 -> origVarintLen = 400 > 255, matchCount = 200 <= 255) -> Expect ModeDistancePrefixCompact (0x0A)
+	{
+		offs := make([]uint32, 200)
+		for i := range offs {
+			offs[i] = 1000
+		}
+		s3Buf := make([]byte, 16384)
+		packed := PackageOffsetsSection(offs, s3Buf)
+		if packed == nil {
+			t.Fatal("PackageOffsetsSection returned nil")
+		}
+		if packed[0] != ModeDistancePrefixCompact {
+			t.Fatalf("expected medium stream (large varint) mode 0x0A, got 0x%02X", packed[0])
+		}
+		verifyUnpackOffsetsLossless(t, packed, offs)
+	}
+
+	// 5. Large stream (> 65535 matches of distance 1000) -> Expect ModeDistancePrefix (0x06)
+	{
+		offs := make([]uint32, 70000)
+		for i := range offs {
+			offs[i] = 1000
+		}
+		s3Buf := make([]byte, 500000)
+		packed := PackageOffsetsSection(offs, s3Buf)
+		if packed == nil {
+			t.Fatal("PackageOffsetsSection returned nil")
+		}
+		if packed[0] != ModeDistancePrefix {
+			t.Fatalf("expected large stream mode 0x06, got 0x%02X", packed[0])
+		}
+		verifyUnpackOffsetsLossless(t, packed, offs)
+	}
+}
+
+func TestPackageOffsetsSectionFallback(t *testing.T) {
+	// Offset sequence where prefix encoding overhead exceeds raw LEB128
+	// 10 small alternating distances: raw LEB128 is 10 bytes, while prefix header + VANS header >= 9 + 5 = 14 bytes
+	offs := make([]uint32, 10)
+	for i := range offs {
+		offs[i] = uint32((i % 4) + 1)
+	}
+	s3Buf := make([]byte, 1024)
+	packed := PackageOffsetsSection(offs, s3Buf)
+	if packed == nil {
+		t.Fatal("PackageOffsetsSection returned nil")
+	}
+	if packed[0] != ModeFlatCompact {
+		t.Fatalf("expected fallback to ModeFlatCompact (0x09), got 0x%02X", packed[0])
+	}
+	verifyUnpackOffsetsLossless(t, packed, offs)
+}

@@ -18,13 +18,14 @@
 #define MAX_MATCH_LEN       1024
 #define INFINITY_COST       0x3FFFFFFFU
 
-#define FLAG_STRIDE         0x01
-#define FLAG_EXT_OFFSET     0x02
-#define FLAG_UNCOMPRESSED   0x04
-#define FLAG_DICT_REF       0x10
-#define FLAG_MIN_MATCH_3    0x20
-#define FLAG_NORM           0x40
-#define FLAG_NIBBLE         0x80
+#define FLAG_STRIDE        0x01
+#define FLAG_DELTA_MASK    0x02
+#define FLAG_UNCOMPRESSED  0x04
+#define FLAG_EXT_OFFSET    0x08
+#define FLAG_DICT_REF      0x10
+#define FLAG_NORM          0x20
+#define FLAG_MIN_MATCH_3   0x40
+#define FLAG_NIBBLE        0x80
 
 typedef struct {
     uint16_t from;
@@ -541,7 +542,9 @@ static size_t assemble_container(const uint8_t *src, size_t u, uint32_t stride, 
     // Section 4: raw literals
     size_t s4_len = lit_len;
 
-    size_t comp_size = 8 + 4 + 8 + s2_len + s3_len + s4_len + ((stride > 1) ? 1 : 0);
+    int ext_offset = (s2_len > 65535 || s3_len > 65535);
+    size_t dir_len = ext_offset ? 6 : 4;
+    size_t comp_size = 8 + dir_len + 8 + s2_len + s3_len + s4_len + ((stride > 1) ? 1 : 0);
     if (comp_size >= u || uncompressed) {
         if (dst_cap < 8 + u) return 0;
         dst[0] = 'P'; dst[1] = 'R'; dst[2] = 'Z'; dst[3] = 'M';
@@ -557,16 +560,28 @@ static size_t assemble_container(const uint8_t *src, size_t u, uint32_t stride, 
     size_t p = 0;
     dst[p++] = 'P'; dst[p++] = 'R'; dst[p++] = 'Z'; dst[p++] = 'M';
     uint8_t flags = (stride > 1) ? FLAG_STRIDE : 0;
+    if (ext_offset) {
+        flags |= FLAG_EXT_OFFSET;
+    }
     dst[p++] = flags;
     dst[p++] = (uint8_t)(u & 0xFF);
     dst[p++] = (uint8_t)((u >> 8) & 0xFF);
     dst[p++] = (uint8_t)((u >> 16) & 0xFF);
 
     if (stride > 1) dst[p++] = (uint8_t)(stride - 1);
-    dst[p++] = (uint8_t)(s2_len & 0xFF);
-    dst[p++] = (uint8_t)((s2_len >> 8) & 0xFF);
-    dst[p++] = (uint8_t)(s3_len & 0xFF);
-    dst[p++] = (uint8_t)((s3_len >> 8) & 0xFF);
+    if (ext_offset) {
+        dst[p++] = (uint8_t)(s2_len & 0xFF);
+        dst[p++] = (uint8_t)((s2_len >> 8) & 0xFF);
+        dst[p++] = (uint8_t)((s2_len >> 16) & 0xFF);
+        dst[p++] = (uint8_t)(s3_len & 0xFF);
+        dst[p++] = (uint8_t)((s3_len >> 8) & 0xFF);
+        dst[p++] = (uint8_t)((s3_len >> 16) & 0xFF);
+    } else {
+        dst[p++] = (uint8_t)(s2_len & 0xFF);
+        dst[p++] = (uint8_t)((s2_len >> 8) & 0xFF);
+        dst[p++] = (uint8_t)(s3_len & 0xFF);
+        dst[p++] = (uint8_t)((s3_len >> 8) & 0xFF);
+    }
 
     memcpy(dst + p, s1, 8); p += 8;
     if (s2_len > 0) {

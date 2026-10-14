@@ -360,24 +360,68 @@ func copyLEB128Raw(src []byte, sp *int, dst []byte, dp *int) error {
 	return ErrCorruptedFrame
 }
 
-// PackCommandsMode8 serializes opStream, metaStream, and varStream into a 13-byte Mode 8 frame.
-func PackCommandsMode8(op, meta, v []byte, origLen int, dst []byte) (int, error) {
-	totalLen := 13 + len(op) + len(meta) + len(v)
-	if totalLen > len(dst) {
+type mode8TmpBufType [2 * 1024 * 1024]byte
+
+var mode8TmpPool = generic.NewPool[mode8TmpBufType](func() *mode8TmpBufType {
+	return new(mode8TmpBufType)
+})
+
+func packSubstream(sub, tmp, dst []byte) (int, error) {
+	if len(sub) >= 24 && len(sub) <= len(tmp) {
+		encLen, err := EncodeVansMeta8(sub, tmp)
+		if err == nil && encLen < 1+len(sub) {
+			if encLen > len(dst) {
+				return 0, ErrBufferTooSmall
+			}
+			copy(dst, tmp[:encLen])
+			return encLen, nil
+		}
+	}
+	flatLen := 1 + len(sub)
+	if flatLen > len(dst) {
 		return 0, ErrBufferTooSmall
 	}
+	dst[0] = 0x09
+	copy(dst[1:], sub)
+	return flatLen, nil
+}
+
+// PackCommandsMode8 serializes opStream, metaStream, and varStream into a 13-byte Mode 8 frame.
+func PackCommandsMode8(op, meta, v []byte, origLen int, dst []byte) (int, error) {
+	if len(dst) < 13 {
+		return 0, ErrBufferTooSmall
+	}
+
+	tmpBuf := mode8TmpPool.Get()
+	pos := 13
+	lOp, err := packSubstream(op, tmpBuf[:], dst[pos:])
+	if err != nil {
+		mode8TmpPool.Put(tmpBuf)
+		return 0, err
+	}
+	pos += lOp
+
+	lM, err := packSubstream(meta, tmpBuf[:], dst[pos:])
+	if err != nil {
+		mode8TmpPool.Put(tmpBuf)
+		return 0, err
+	}
+	pos += lM
+
+	lVar, err := packSubstream(v, tmpBuf[:], dst[pos:])
+	if err != nil {
+		mode8TmpPool.Put(tmpBuf)
+		return 0, err
+	}
+	pos += lVar
+	mode8TmpPool.Put(tmpBuf)
+
 	dst[0] = 0x08
 	binary.LittleEndian.PutUint32(dst[1:5], uint32(origLen))
-	binary.LittleEndian.PutUint32(dst[5:9], uint32(len(op)))
-	binary.LittleEndian.PutUint32(dst[9:13], uint32(len(meta)))
+	binary.LittleEndian.PutUint32(dst[5:9], uint32(lOp))
+	binary.LittleEndian.PutUint32(dst[9:13], uint32(lM))
 
-	pos := 13
-	copy(dst[pos:], op)
-	pos += len(op)
-	copy(dst[pos:], meta)
-	pos += len(meta)
-	copy(dst[pos:], v)
-	return totalLen, nil
+	return pos, nil
 }
 
 // UnpackCommandsMode8 parses a Mode 8 frame, extracting origLen and substreams into op, meta, v.
@@ -501,8 +545,8 @@ type TrellisEdge struct {
 	From   uint16
 	Length uint16
 	Dist   uint32
-	Kind   uint8 // 0: lit, 1: rep, 2: bracket, 3: stride, 4: explicit
-	Arg    uint8 // k for rep, b for bracket, m for stride
+	Kind   uint8 // 0: lit, 1: rep, 2: bracket, 3: stride, 4: explicit, 5: rfc, 6: difflattice
+	Arg    uint8 // k for rep, b for bracket, m for stride, mode for difflattice
 }
 
 // AppendLEB128 appends uint32 in variable-length LEB128 format.
@@ -546,8 +590,46 @@ func emitMatchWithLiterals(e TrellisEdge, pendingLits *[]byte, bMin int,
 		emitFixedMatch(byte(0xD0+int(e.Arg-1)), e, pendingLits, bMin, cmdsOut, litsOut)
 	case 4:
 		emitExplicitMatch(e, pendingLits, bMin, cmdsOut, litsOut, offsOut)
+	case 5:
+		emitRFCWordMatch(e, pendingLits, cmdsOut, litsOut)
+	case 6:
+		emitDiffLatticeMatch(e, pendingLits, bMin, cmdsOut, litsOut)
 	}
 	*pendingLits = nil
+}
+
+func emitRFCWordMatch(e TrellisEdge, pendingLits, cmdsOut, litsOut *[]byte) {
+	if len(*pendingLits) > 0 {
+		EmitLiteralRun(*pendingLits, cmdsOut, litsOut)
+		*pendingLits = nil
+	}
+	p := e.Dist
+	if p >= 128 {
+		*cmdsOut = append(*cmdsOut, 0xCF, byte(0x80|((p>>7)&0x7F)), byte(p&0x7F))
+	} else {
+		*cmdsOut = append(*cmdsOut, 0xCF, byte(p))
+	}
+}
+
+func emitDiffLatticeMatch(e TrellisEdge, pendingLits *[]byte, bMin int, cmdsOut, litsOut *[]byte) {
+	nLit := len(*pendingLits)
+	if nLit > 6 {
+		EmitLiteralRun(*pendingLits, cmdsOut, litsOut)
+		*pendingLits = nil
+		nLit = 0
+	}
+	mode := e.Arg
+	delta := byte(e.Dist)
+	lMatch := int(e.Length)
+	diff := lMatch - bMin
+	if diff < 7 {
+		desc := (mode << 6) | (byte(nLit) << 3) | byte(diff)
+		*cmdsOut = append(*cmdsOut, 0xCE, desc, delta)
+	} else {
+		desc := (mode << 6) | (byte(nLit) << 3) | 7
+		*cmdsOut = append(*cmdsOut, 0xCE, desc, delta)
+		*cmdsOut = AppendLEB128(*cmdsOut, uint32(diff-7))
+	}
 }
 
 func emitRepeatMatch(e TrellisEdge, pendingLits *[]byte, bMin int, cmdsOut, litsOut *[]byte) {
@@ -589,17 +671,18 @@ func emitExplicitMatch(e TrellisEdge, pendingLits *[]byte, bMin int,
 ) {
 	nLit := len(*pendingLits)
 	lMatch := int(e.Length)
-	if nLit > 15 {
+	if nLit > 3 {
 		EmitLiteralRun(*pendingLits, cmdsOut, litsOut)
+		*pendingLits = nil
 		nLit = 0
 	}
 	*offsOut = append(*offsOut, e.Dist)
-	if lMatch <= 14+bMin {
-		op := byte(0x80 | ((lMatch - bMin) << 4) | nLit)
+	if lMatch-bMin < 15 {
+		op := byte(0x80 | (nLit << 4) | (lMatch - bMin))
 		*cmdsOut = append(*cmdsOut, op)
 		return
 	}
-	op := byte(0x80 | (15 << 4) | nLit)
+	op := byte(0x80 | (nLit << 4) | 15)
 	*cmdsOut = append(*cmdsOut, op)
 	*cmdsOut = AppendLEB128(*cmdsOut, uint32(lMatch-bMin-15))
 }

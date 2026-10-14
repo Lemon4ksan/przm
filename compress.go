@@ -11,6 +11,7 @@ import (
 	"github.com/lemon4ksan/foundation/generic"
 
 	"github.com/lemon4ksan/przm/core/commands"
+	cdict "github.com/lemon4ksan/przm/core/dict"
 	"github.com/lemon4ksan/przm/core/distance"
 	"github.com/lemon4ksan/przm/core/literals"
 )
@@ -439,6 +440,105 @@ func relaxExplicitSublengths(i int, d uint32, L, bMin int, curCost uint32, s *Co
 	}
 }
 
+// relaxDictMatches probes static RFC 7932 dictionary words.
+func relaxDictMatches(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, bMin int) {
+	if i+4 > bSize || globalPos+4 > len(src) {
+		return
+	}
+	curCost := s.nodes[i].cost
+	cdict.FindStaticDictMatches(src[globalPos:], func(p uint32, matchLen int) {
+		if matchLen < 10 || i+matchLen > bSize {
+			return
+		}
+		cost := curCost + 80
+		if cost < s.nodes[i+matchLen].cost {
+			s.nodes[i+matchLen].cost = cost
+			s.nodes[i+matchLen].r = s.nodes[i].r
+			s.nodes[i+matchLen].edge = commands.TrellisEdge{
+				From:   uint16(i),
+				Length: uint16(matchLen),
+				Dist:   p,
+				Kind:   5,
+			}
+		}
+	})
+}
+
+// relaxDiffLattice probes difference lattice matches (opcode 0xCE) around repeat registers.
+func relaxDiffLattice(i int, s *CompressorScratchpad, src []byte, globalPos, bSize int, stride uint32, bMin int) {
+	curCost := s.nodes[i].cost
+	deltas := [...]int8{-4, -3, -2, -1, 1, 2, 3, 4}
+	for mode := byte(0); mode < 3; mode++ {
+		for _, delta := range deltas {
+			d := distance.ComputeDiffLatticeDist(mode<<6, delta, stride, &s.nodes[i].r)
+			if d <= 0 || globalPos < int(d) {
+				continue
+			}
+			maxL := min(bSize-i, 13+bMin)
+			if maxL < bMin {
+				continue
+			}
+			L := measureMatchLength(src, globalPos, globalPos-int(d), maxL)
+			if L < bMin {
+				continue
+			}
+			relaxDiffLatticeSublengths(i, mode, delta, uint32(d), L, bMin, curCost, s)
+		}
+	}
+	if stride > 1 {
+		strideDeltas := [...]int8{-2, -1, 1, 2}
+		for _, delta := range strideDeltas {
+			d := distance.ComputeDiffLatticeDist(3<<6, delta, stride, &s.nodes[i].r)
+			if d <= 0 || globalPos < int(d) {
+				continue
+			}
+			maxL := min(bSize-i, 13+bMin)
+			if maxL < bMin {
+				continue
+			}
+			L := measureMatchLength(src, globalPos, globalPos-int(d), maxL)
+			if L < bMin {
+				continue
+			}
+			relaxDiffLatticeSublengths(i, 3, delta, uint32(d), L, bMin, curCost, s)
+		}
+	}
+}
+
+func relaxDiffLatticeSublengths(
+	i int,
+	mode byte,
+	delta int8,
+	d uint32,
+	L, bMin int,
+	curCost uint32,
+	s *CompressorScratchpad,
+) {
+	rNext := s.nodes[i].r
+	distance.UpdateLRUExplicit(&rNext, d)
+	subLens := getParetoSublengths(L, bMin, s.subLens[:])
+	for _, l := range subLens {
+		diff := l - bMin
+		var cost uint32
+		if diff < 7 {
+			cost = curCost + 36
+		} else {
+			cost = curCost + 48
+		}
+		if cost < s.nodes[i+l].cost {
+			s.nodes[i+l].cost = cost
+			s.nodes[i+l].r = rNext
+			s.nodes[i+l].edge = commands.TrellisEdge{
+				From:   uint16(i),
+				Length: uint16(l),
+				Dist:   uint32(byte(delta)),
+				Kind:   6,
+				Arg:    mode,
+			}
+		}
+	}
+}
+
 // insertHash updates 4-byte and 8-byte hash indices at the current position.
 func insertHash(src []byte, globalPos, i int, s *CompressorScratchpad) {
 	pos := int32(globalPos)
@@ -484,6 +584,8 @@ func solveBlockTrellis(
 		relaxBrackets(i, s, src, globalPos, bSize, bMin)
 		relaxStride(i, s, src, globalPos, bSize, stride, bMin)
 		relaxHashMatches(i, s, src, globalPos, bSize, maxDist, bMin, depthLimit, level)
+		relaxDictMatches(i, s, src, globalPos, bSize, bMin)
+		relaxDiffLattice(i, s, src, globalPos, bSize, stride, bMin)
 	}
 }
 
@@ -521,6 +623,9 @@ func packageSections(
 func assembleContainer(src []byte, params AnalysisParams, s1, s2, s3, s4 []byte, flagNibble uint8) []byte {
 	u := len(src)
 	dirLen := 4
+	if len(s2) > 65535 || len(s3) > 65535 {
+		dirLen = 6
+	}
 	compSize := 8 + dirLen + len(s1) + len(s2) + len(s3) + len(s4)
 	if params.stride > 1 {
 		compSize++
@@ -546,8 +651,21 @@ func assembleCompressedFrame(u int, params AnalysisParams, s1, s2, s3, s4 []byte
 	if params.stride > 1 {
 		flags |= FlagStride
 	}
+	extOffset := len(s2) > 65535 || len(s3) > 65535
+	if extOffset {
+		flags |= FlagExtOffset
+	}
 
-	out := make([]byte, 0, 8+len(s1)+len(s2)+len(s3)+len(s4)+64)
+	dirLen := 4
+	if extOffset {
+		dirLen = 6
+	}
+	headerLen := 8 + dirLen
+	if params.stride > 1 {
+		headerLen++
+	}
+
+	out := make([]byte, 0, headerLen+len(s1)+len(s2)+len(s3)+len(s4)+64)
 	out = append(out, 'P', 'R', 'Z', 'M', flags)
 	out = append(out, byte(u&0xFF), byte((u>>8)&0xFF), byte((u>>16)&0xFF))
 
@@ -555,8 +673,15 @@ func assembleCompressedFrame(u int, params AnalysisParams, s1, s2, s3, s4 []byte
 		out = append(out, byte(params.stride-1))
 	}
 
-	out = binary.LittleEndian.AppendUint16(out, uint16(len(s2)))
-	out = binary.LittleEndian.AppendUint16(out, uint16(len(s3)))
+	if extOffset {
+		out = append(out,
+			byte(len(s2)&0xFF), byte((len(s2)>>8)&0xFF), byte((len(s2)>>16)&0xFF),
+			byte(len(s3)&0xFF), byte((len(s3)>>8)&0xFF), byte((len(s3)>>16)&0xFF),
+		)
+	} else {
+		out = binary.LittleEndian.AppendUint16(out, uint16(len(s2)))
+		out = binary.LittleEndian.AppendUint16(out, uint16(len(s3)))
+	}
 
 	out = append(out, s1...)
 	out = append(out, s2...)

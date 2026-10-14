@@ -25,6 +25,7 @@ const (
 	ModeDistancePrefixCompact byte = 0x0A
 	ModeDistancePrefixByte    byte = 0x0B
 	ModeDistClusteredVANS     byte = 0x0C
+	ModeDistancePrefixAuto    byte = 0xFF
 )
 
 // Standard error definitions for distance codec.
@@ -724,8 +725,23 @@ func PackDistancePrefix(distances []uint32, mode byte, useVANS bool, dst []byte)
 		copy(codeBuf[:n], codes)
 	}
 
+	if mode == 0 || mode == ModeDistancePrefixAuto {
+		mode = SelectPrefixMode(uint32(origVarintLen), uint32(n), uint32(codeLen))
+	}
+
 	return assemblePrefixContainer(mode, uint32(origVarintLen), uint32(n), uint32(codeLen),
 		codeBuf[:codeLen], s.varBuf[:extraWriter.BytesWritten()], dst)
+}
+
+// SelectPrefixMode determines the most compact distance prefix container mode (0x0B, 0x0A, or 0x06).
+func SelectPrefixMode(origVarintLen, matchCount, codeLen uint32) byte {
+	if origVarintLen <= 255 && matchCount <= 255 && codeLen <= 255 {
+		return ModeDistancePrefixByte
+	}
+	if origVarintLen <= 65535 && matchCount <= 65535 && codeLen <= 65535 {
+		return ModeDistancePrefixCompact
+	}
+	return ModeDistancePrefix
 }
 
 func varintLen(d uint32) int {
@@ -738,7 +754,10 @@ func varintLen(d uint32) int {
 	if d <= 0x1FFFFF {
 		return 3
 	}
-	return 4
+	if d <= 0x0FFFFFFF {
+		return 4
+	}
+	return 5
 }
 
 // assemblePrefixContainer serializes the container header and appends CodeStream and ExtraBitsStream.
@@ -758,6 +777,9 @@ func assemblePrefixContainer(mode byte, origVarintLen, matchCount, codeLen uint3
 		binary.LittleEndian.PutUint32(dst[9:13], codeLen)
 	case ModeDistancePrefixCompact:
 		hSize = 7
+		if origVarintLen > 65535 || matchCount > 65535 || codeLen > 65535 {
+			return 0, ErrBufferTooSmall
+		}
 		if len(dst) < hSize+len(codeStream)+len(extraStream) {
 			return 0, ErrBufferTooSmall
 		}
@@ -767,6 +789,9 @@ func assemblePrefixContainer(mode byte, origVarintLen, matchCount, codeLen uint3
 		binary.LittleEndian.PutUint16(dst[5:7], uint16(codeLen))
 	case ModeDistancePrefixByte:
 		hSize = 4
+		if origVarintLen > 255 || matchCount > 255 || codeLen > 255 {
+			return 0, ErrBufferTooSmall
+		}
 		if len(dst) < hSize+len(codeStream)+len(extraStream) {
 			return 0, ErrBufferTooSmall
 		}
@@ -788,19 +813,25 @@ func PackageOffsetsSection(offs []uint32, s3Buf []byte) []byte {
 	if len(offs) == 0 {
 		return nil
 	}
-	s3Len, err := PackDistancePrefix(offs, ModeDistancePrefix, true, s3Buf)
-	var rawOffs []byte
-	for _, d := range offs {
-		rawOffs = appendLEB128(rawOffs, d)
+	if len(s3Buf) == 0 {
+		s3Buf = make([]byte, 16+len(offs)*5)
 	}
-	if err == nil && s3Len < len(rawOffs) {
+	s3Len, err := PackDistancePrefix(offs, ModeDistancePrefixAuto, true, s3Buf)
+	rawLen := 0
+	for _, d := range offs {
+		rawLen += varintLen(d)
+	}
+	if err == nil && s3Len < rawLen {
 		out := make([]byte, s3Len)
 		copy(out, s3Buf[:s3Len])
 		return out
 	}
-	out := make([]byte, 1+len(rawOffs))
-	out[0] = 0x09
-	copy(out[1:], rawOffs)
+	out := make([]byte, 1+rawLen)
+	out[0] = ModeFlatCompact
+	rawOffs := out[1:1]
+	for _, d := range offs {
+		rawOffs = appendLEB128(rawOffs, d)
+	}
 	return out
 }
 
