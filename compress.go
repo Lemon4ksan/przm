@@ -7,6 +7,7 @@ package przm
 import (
 	"encoding/binary"
 	"math"
+	"math/bits"
 
 	"github.com/lemon4ksan/foundation/generic"
 
@@ -19,7 +20,7 @@ import (
 // Constants for Trellis RDO and Match Finder.
 const (
 	MaxBlockHorizon   = 65536
-	MaxWindowHorizon  = 262144
+	MaxWindowHorizon  = 16777216
 	WindowHorizonMask = MaxWindowHorizon - 1
 	MaxHashBuckets    = 65536
 	HashMultiplier32  = uint32(0x1E35A7BD)
@@ -166,8 +167,14 @@ func selectWindowLog(u int) uint32 {
 		return 14
 	case u <= 65536:
 		return 16
-	default:
+	case u <= 262144:
 		return 18
+	case u <= 1048576:
+		return 20
+	case u <= 4194304:
+		return 22
+	default:
+		return 24
 	}
 }
 
@@ -248,9 +255,16 @@ func costExplicit(L int, dist uint32, bMin int) uint32 {
 	return base + uint32(2*nb)
 }
 
-// measureMatchLength computes contiguous byte match length between two positions.
+// measureMatchLength computes contiguous byte match length between two positions using 64-bit SWAR.
 func measureMatchLength(src []byte, p1, p2, maxLen int) int {
 	l := 0
+	for l+8 <= maxLen {
+		diff := binary.LittleEndian.Uint64(src[p1+l:]) ^ binary.LittleEndian.Uint64(src[p2+l:])
+		if diff != 0 {
+			return l + (bits.TrailingZeros64(diff) >> 3)
+		}
+		l += 8
+	}
 	for l < maxLen && src[p1+l] == src[p2+l] {
 		l++
 	}
@@ -370,7 +384,7 @@ func relaxHashMatches(
 	i int,
 	s *CompressorScratchpad,
 	src []byte,
-	globalPos, bSize, maxDist, bMin, depthLimit, level int,
+	globalPos, bSize, maxDist, winMask, bMin, depthLimit, level int,
 ) {
 	if i+4 > bSize {
 		return
@@ -379,7 +393,7 @@ func relaxHashMatches(
 	if level >= 6 && i+8 <= bSize {
 		relaxHash8Match(i, s, src, globalPos, bSize, maxDist, bMin, curCost)
 	}
-	relaxHash4Matches(i, s, src, globalPos, bSize, maxDist, bMin, depthLimit, curCost)
+	relaxHash4Matches(i, s, src, globalPos, bSize, maxDist, winMask, bMin, depthLimit, curCost)
 }
 
 func relaxHash8Match(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, maxDist, bMin int, curCost uint32) {
@@ -404,7 +418,7 @@ func relaxHash4Matches(
 	i int,
 	s *CompressorScratchpad,
 	src []byte,
-	globalPos, bSize, maxDist, bMin, depthLimit int,
+	globalPos, bSize, maxDist, winMask, bMin, depthLimit int,
 	curCost uint32,
 ) {
 	h4 := hash4(src, globalPos)
@@ -421,7 +435,7 @@ func relaxHash4Matches(
 		if L >= 4 {
 			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
 		}
-		cand = s.prevPos[candPos&WindowHorizonMask]
+		cand = s.prevPos[candPos&winMask]
 		depth++
 	}
 }
@@ -540,9 +554,9 @@ func relaxDiffLatticeSublengths(
 }
 
 // insertHash updates 4-byte and 8-byte hash indices at the current position.
-func insertHash(src []byte, globalPos, i int, s *CompressorScratchpad) {
+func insertHash(src []byte, globalPos, winMask int, s *CompressorScratchpad) {
 	pos := int32(globalPos)
-	maskPos := globalPos & WindowHorizonMask
+	maskPos := globalPos & winMask
 	h4 := hash4(src, globalPos)
 	s.prevPos[maskPos] = s.head4[h4]
 	s.head4[h4] = pos
@@ -564,7 +578,7 @@ func initBlockNodes(s *CompressorScratchpad, bSize int, initialR [4]uint32) {
 // solveBlockTrellis runs DAG shortest-path relaxation over the 64 KiB block.
 func solveBlockTrellis(
 	src []byte,
-	blockStart, bSize, maxDist int,
+	blockStart, bSize, maxDist, winMask int,
 	stride uint32,
 	bMin, depthLimit, level int,
 	s *CompressorScratchpad,
@@ -574,7 +588,7 @@ func solveBlockTrellis(
 	for i := range bSize {
 		globalPos := blockStart + i
 		if i+4 <= bSize {
-			insertHash(src, globalPos, i, s)
+			insertHash(src, globalPos, winMask, s)
 		}
 		if s.nodes[i].cost == InfinityCost {
 			continue
@@ -583,7 +597,7 @@ func solveBlockTrellis(
 		relaxRepeat(i, s, src, globalPos, bSize, bMin)
 		relaxBrackets(i, s, src, globalPos, bSize, bMin)
 		relaxStride(i, s, src, globalPos, bSize, stride, bMin)
-		relaxHashMatches(i, s, src, globalPos, bSize, maxDist, bMin, depthLimit, level)
+		relaxHashMatches(i, s, src, globalPos, bSize, maxDist, winMask, bMin, depthLimit, level)
 		relaxDictMatches(i, s, src, globalPos, bSize, bMin)
 		relaxDiffLattice(i, s, src, globalPos, bSize, stride, bMin)
 	}
@@ -697,6 +711,11 @@ func compressInternal(src []byte, opts Options) ([]byte, error) {
 		level = 6
 	}
 	params := AnalyzeInput(src)
+	if opts.WindowLog >= 10 && opts.WindowLog <= 24 {
+		params.wLog = uint32(opts.WindowLog)
+	} else if opts.WindowBits >= 10 && opts.WindowBits <= 24 {
+		params.wLog = uint32(opts.WindowBits)
+	}
 	if params.uncompressed {
 		return assembleContainer(src, params, nil, nil, nil, nil, 0), nil
 	}
@@ -724,7 +743,10 @@ func executeCompressionPipeline(
 	for i := range s.head8 {
 		s.head8[i] = -1
 	}
-	for i := range s.prevPos {
+	winSize := 1 << params.wLog
+	winMask := winSize - 1
+	clearLen := min(u, winSize)
+	for i := range clearLen {
 		s.prevPos[i] = -1
 	}
 
@@ -739,14 +761,14 @@ func executeCompressionPipeline(
 		initialR = [4]uint32{1, params.stride, 2 * params.stride, 3 * params.stride}
 	}
 
-	maxDist := 1 << params.wLog
+	maxDist := winSize
 	depthLimit := selectSearchDepth(level)
 	pos := 0
 
 	for pos < u {
 		bSize := min(u-pos, MaxBlockHorizon)
 		initBlockNodes(s, bSize, initialR)
-		solveBlockTrellis(src, pos, bSize, maxDist, params.stride, int(params.bMin), depthLimit, level, s)
+		solveBlockTrellis(src, pos, bSize, maxDist, winMask, params.stride, int(params.bMin), depthLimit, level, s)
 		edges := backtrackEdges(s, bSize)
 		commands.EmitBlockCommands(edges, src[pos:pos+bSize], int(params.bMin), &allCmds, &allLits, &allOffs)
 		initialR = s.nodes[bSize].r

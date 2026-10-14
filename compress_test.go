@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"slices"
 	"testing"
 
 	"github.com/lemon4ksan/przm/core/commands"
@@ -114,8 +115,8 @@ func BenchmarkCompress(b *testing.B) {
 	src := bytes.Repeat(pattern, 100) // ~12 KiB
 
 	b.SetBytes(int64(len(src)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		_, err := Compress(src, 6)
 		if err != nil {
 			b.Fatal(err)
@@ -135,8 +136,8 @@ func BenchmarkDecompressRoundtrip(b *testing.B) {
 
 	dst := make([]byte, len(src)+128)
 	b.SetBytes(int64(len(src)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		_, err := Decompress(comp, dst)
 		if err != nil {
 			b.Fatal(err)
@@ -241,7 +242,7 @@ func TestExtOffsetSectionsEndToEnd(t *testing.T) {
 		if n != uSize {
 			t.Fatalf("decompressed len mismatch: got %d, want %d", n, uSize)
 		}
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if dst[i] != 'Z' {
 				t.Fatalf("byte %d mismatch: got %d, want %d", i, dst[i], 'Z')
 			}
@@ -318,13 +319,7 @@ func TestCompressRFCStaticDictionaryMatchesAndParity(t *testing.T) {
 		t.Fatalf("UnpackSection2Commands failed: %v", err)
 	}
 
-	has0xCF := false
-	for _, b := range rawCmds {
-		if b == 0xCF {
-			has0xCF = true
-			break
-		}
-	}
+	has0xCF := slices.Contains(rawCmds, 0xCF)
 	if !has0xCF {
 		t.Fatalf("expected compressed frame to contain opcode 0xCF, got commands: %x", rawCmds)
 	}
@@ -375,7 +370,7 @@ func TestCompressDiffLatticeMatchesAndParity(t *testing.T) {
 	// Periodic stride pattern with correlated offset deltas
 	row := []byte("ABCDEFGH12345678")
 	var src []byte
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		src = append(src, row...)
 		if i%3 == 0 {
 			src = append(src, "ABCDEF"...)

@@ -216,7 +216,7 @@ func TestEtaleSheafContainerRoundtrip(t *testing.T) {
 
 func BenchmarkContextClassify(b *testing.B) {
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		_ = ContextClassify(byte(i), uint8(i&3))
 	}
 }
@@ -224,8 +224,7 @@ func BenchmarkContextClassify(b *testing.B) {
 func BenchmarkDecomposeFibers(b *testing.B) {
 	src := bytes.Repeat([]byte("function computeHash(key, seed) { return (key ^ seed) * 0x9e3779b9; }\n"), 16)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = DecomposeFibers(src, 1)
 	}
 }
@@ -235,8 +234,8 @@ func BenchmarkReconstituteFibers(b *testing.B) {
 	fibers, _ := DecomposeFibers(src, 1)
 	dst := make([]byte, len(src))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		_ = ReconstituteFibers(dst, len(src),
 			fibers[0], fibers[1], fibers[2], fibers[3],
 			len(fibers[0]), len(fibers[1]), len(fibers[2]), len(fibers[3]),

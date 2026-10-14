@@ -173,7 +173,7 @@ type FrameAnalysis struct {
 	// Literals Analysis
 	TotalLiterals  int     `json:"total_literals"`
 	LiteralEntropy float64 `json:"literal_entropy_bits"`
-	AsciiPct       float64 `json:"ascii_percentage"`
+	ASCIIPct        float64 `json:"ascii_percentage"`
 
 	// Timeline
 	Timeline []TimelineSegment `json:"timeline"`
@@ -408,7 +408,7 @@ func analyzeSingleFrame(src []byte, frameIdx int) (*FrameAnalysis, error) {
 		})
 		fa.TotalLiterals = len(litRaw)
 		fa.LiteralEntropy = calcShannonEntropy(litRaw)
-		fa.AsciiPct = calcAsciiPct(litRaw)
+		fa.ASCIIPct = calcASCIIPct(litRaw)
 	}
 
 	// Deep Disassembly of Command Stream
@@ -494,7 +494,7 @@ func calcShannonEntropy(data []byte) float64 {
 	return entropy
 }
 
-func calcAsciiPct(data []byte) float64 {
+func calcASCIIPct(data []byte) float64 {
 	if len(data) == 0 {
 		return 0.0
 	}
