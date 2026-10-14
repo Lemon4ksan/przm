@@ -128,7 +128,7 @@ func TestCompressWithRawDictRoundtrip(t *testing.T) {
 
 func TestDefaultOptionsAndFallback(t *testing.T) {
 	opts := DefaultOptions()
-	if opts.Level != 6 || opts.Threads != 1 || opts.WindowBits != 18 {
+	if opts.Level != 6 || opts.Threads != 1 || opts.WindowBits != 0 {
 		t.Fatalf("DefaultOptions unexpected: %+v", opts)
 	}
 

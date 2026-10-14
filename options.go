@@ -97,8 +97,8 @@ func DefaultOptions() Options {
 	return Options{
 		Level:      6,
 		Threads:    1,
-		WindowBits: 18,
-		WindowLog:  18,
+		WindowBits: 0,
+		WindowLog:  0,
 	}
 }
 

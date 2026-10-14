@@ -37,6 +37,7 @@ type Scratchpad struct {
 	vansLookup [4096]byte
 	vansFreq   [256]uint16
 	vansCDF    [256]uint16
+	vansDecTab [4096]uint32
 }
 
 var scratchPool = generic.NewPool[Scratchpad](func() *Scratchpad {
@@ -265,6 +266,24 @@ func BuildVansTable(freq, cdf []uint16, lookup []byte) {
 	}
 }
 
+// BuildVansDecTab creates packed 32-bit decoding table from symbol frequencies.
+// Each slot entry packs: (freq-1)<<20 | diff<<8 | sym.
+func BuildVansDecTab(freq []uint16, decTab []uint32) {
+	cum := uint32(0)
+	for s := range 256 {
+		f := uint32(freq[s])
+		if f == 0 {
+			continue
+		}
+		fMinus1 := (f - 1) & 0xFFF
+		symVal := uint32(byte(s))
+		for j := uint32(0); j < f; j++ {
+			decTab[cum+j] = (fMinus1 << 20) | (j << 8) | symVal
+		}
+		cum += f
+	}
+}
+
 // EncodeVANS4xDirect encodes src into dst using scratchpad without heap allocations.
 func EncodeVANS4xDirect(src, dst []byte, freq []uint16, s *Scratchpad) (int, error) {
 	uLen := len(src)
@@ -341,10 +360,10 @@ func DecodeVans4x(src, dst []byte, uLen int) error {
 	}
 	s := getScratch()
 	defer putScratch(s)
-	return DecodeVANS4x(src, dst, uLen, s.vansLookup[:], s.vansFreq[:], s.vansCDF[:])
+	return DecodeVANS4xDirect(src, dst, uLen, s)
 }
 
-// EncodeAdaptiveVANS4x compresses src with adaptive 4-lane V-ANS into dst with 8-byte container header.
+// DecodeAdaptiveVANS4x compresses src with adaptive 4-lane V-ANS into dst with 8-byte container header.
 func EncodeAdaptiveVANS4x(src, dst []byte) (int, error) {
 	uLen := len(src)
 	if uLen == 0 {
@@ -374,6 +393,19 @@ func DecodeAdaptiveVANS4x(src, dst []byte, expLen int) error {
 	return DecodeVans4x(src[8:], dst, expLen)
 }
 
+// DecodeVANS4xDirect decompresses a 4-lane interleaved V-ANS payload using the provided Scratchpad.
+func DecodeVANS4xDirect(src, dst []byte, uLen int, s *Scratchpad) error {
+	if uLen == 0 {
+		return nil
+	}
+	pos := 0
+	if err := DecodeJointNibbleFreq(src, &pos, s.vansFreq[:]); err != nil {
+		return err
+	}
+	BuildVansDecTab(s.vansFreq[:], s.vansDecTab[:])
+	return runVans4xLoop(src, dst, uLen, pos, s.vansDecTab[:])
+}
+
 // DecodeVANS4x decompresses a 4-lane interleaved V-ANS payload into dst.
 func DecodeVANS4x(src, dst []byte, uLen int, lookup []byte, freq, cdf []uint16) error {
 	if uLen == 0 {
@@ -385,6 +417,13 @@ func DecodeVANS4x(src, dst []byte, uLen int, lookup []byte, freq, cdf []uint16) 
 	}
 	BuildVansTable(freq, cdf, lookup)
 
+	s := getScratch()
+	defer putScratch(s)
+	BuildVansDecTab(freq, s.vansDecTab[:])
+	return runVans4xLoop(src, dst, uLen, pos, s.vansDecTab[:])
+}
+
+func runVans4xLoop(src, dst []byte, uLen, pos int, decTab []uint32) error {
 	if pos+16 > len(src) {
 		return ErrCorruptedFrame
 	}
@@ -397,49 +436,47 @@ func DecodeVANS4x(src, dst []byte, uLen int, lookup []byte, freq, cdf []uint16) 
 	p := pos
 	x0, x1, x2, x3 := x[0], x[1], x[2], x[3]
 	i := 0
+	srcLen := len(src)
+
 	for i+4 <= uLen {
-		slot0 := x0 & 4095
-		sym0 := lookup[slot0]
-		dst[i] = sym0
-		x0 = uint32(freq[sym0])*(x0>>12) + (slot0 - uint32(cdf[sym0]))
+		e0 := decTab[x0&4095]
+		dst[i] = byte(e0)
+		x0 = ((e0>>20)+1)*(x0>>12) + ((e0 >> 8) & 0xFFF)
 		for x0 < 65536 {
-			if p >= len(src) {
+			if p >= srcLen {
 				return ErrCorruptedFrame
 			}
 			x0 = (x0 << 8) | uint32(src[p])
 			p++
 		}
 
-		slot1 := x1 & 4095
-		sym1 := lookup[slot1]
-		dst[i+1] = sym1
-		x1 = uint32(freq[sym1])*(x1>>12) + (slot1 - uint32(cdf[sym1]))
+		e1 := decTab[x1&4095]
+		dst[i+1] = byte(e1)
+		x1 = ((e1>>20)+1)*(x1>>12) + ((e1 >> 8) & 0xFFF)
 		for x1 < 65536 {
-			if p >= len(src) {
+			if p >= srcLen {
 				return ErrCorruptedFrame
 			}
 			x1 = (x1 << 8) | uint32(src[p])
 			p++
 		}
 
-		slot2 := x2 & 4095
-		sym2 := lookup[slot2]
-		dst[i+2] = sym2
-		x2 = uint32(freq[sym2])*(x2>>12) + (slot2 - uint32(cdf[sym2]))
+		e2 := decTab[x2&4095]
+		dst[i+2] = byte(e2)
+		x2 = ((e2>>20)+1)*(x2>>12) + ((e2 >> 8) & 0xFFF)
 		for x2 < 65536 {
-			if p >= len(src) {
+			if p >= srcLen {
 				return ErrCorruptedFrame
 			}
 			x2 = (x2 << 8) | uint32(src[p])
 			p++
 		}
 
-		slot3 := x3 & 4095
-		sym3 := lookup[slot3]
-		dst[i+3] = sym3
-		x3 = uint32(freq[sym3])*(x3>>12) + (slot3 - uint32(cdf[sym3]))
+		e3 := decTab[x3&4095]
+		dst[i+3] = byte(e3)
+		x3 = ((e3>>20)+1)*(x3>>12) + ((e3 >> 8) & 0xFFF)
 		for x3 < 65536 {
-			if p >= len(src) {
+			if p >= srcLen {
 				return ErrCorruptedFrame
 			}
 			x3 = (x3 << 8) | uint32(src[p])
@@ -452,16 +489,12 @@ func DecodeVANS4x(src, dst []byte, uLen int, lookup []byte, freq, cdf []uint16) 
 	x[0], x[1], x[2], x[3] = x0, x1, x2, x3
 	for i < uLen {
 		lane := i & 3
-		slot := x[lane] & 4095
-		sym := lookup[slot]
-		dst[i] = sym
-
-		f := uint32(freq[sym])
-		c := uint32(cdf[sym])
-		x[lane] = f*(x[lane]>>12) + (slot - c)
+		e := decTab[x[lane]&4095]
+		dst[i] = byte(e)
+		x[lane] = ((e>>20)+1)*(x[lane]>>12) + ((e >> 8) & 0xFFF)
 
 		for x[lane] < 65536 {
-			if p >= len(src) {
+			if p >= srcLen {
 				return ErrCorruptedFrame
 			}
 			x[lane] = (x[lane] << 8) | uint32(src[p])
@@ -626,24 +659,34 @@ func assembleSheafContainer(uLit int, mode uint8, l, e [4]int, encodedFibers [4]
 	return out
 }
 
-// PackageLiteralsSection evaluates Étale Sheaf foliation vs verbatim fallback.
+// PackageLiteralsSection evaluates single-stream V-ANS vs Étale Sheaf foliation vs verbatim fallback.
 func PackageLiteralsSection(lits []byte) ([]byte, uint8) {
 	if len(lits) == 0 {
 		return nil, 0
 	}
-	var bestSheaf []byte
-	minLen := len(lits)
+	uLit := len(lits)
+	var bestPacked []byte
+	minLen := uLit
+
+	vansDst := make([]byte, 8+600+16+uLit*2)
+	n, err := EncodeAdaptiveVANS4x(lits, vansDst)
+	if err == nil && n < minLen {
+		minLen = n
+		bestPacked = vansDst[:n]
+	}
 
 	for mode := uint8(0); mode <= 3; mode++ {
 		packed, err := PackEtaleSheaf(lits, mode)
 		if err == nil && len(packed) < minLen {
 			minLen = len(packed)
-			bestSheaf = packed
+			bestPacked = packed
 		}
 	}
 
-	if bestSheaf != nil {
-		return bestSheaf, FlagNibble
+	if bestPacked != nil {
+		out := make([]byte, len(bestPacked))
+		copy(out, bestPacked)
+		return out, FlagNibble
 	}
 	return lits, 0
 }
@@ -668,13 +711,11 @@ func UnpackSection4Literals(s4 []byte, l4 int, litsBuf, fiberBuf []byte) ([]byte
 			}
 			return litsBuf[:uLen], nil
 		}
-		if err := DecodeVANS4x(
+		if err := DecodeVANS4xDirect(
 			s4[8:l4],
 			litsBuf[:uLen],
 			uLen,
-			s.vansLookup[:],
-			s.vansFreq[:],
-			s.vansCDF[:],
+			s,
 		); err != nil {
 			return nil, err
 		}
@@ -768,7 +809,7 @@ func decodeAndReconstituteFibers(
 		if e[k] == l[k] {
 			copy(outFiber, sub)
 		} else {
-			if err := DecodeVANS4x(sub, outFiber, l[k], s.vansLookup[:], s.vansFreq[:], s.vansCDF[:]); err != nil {
+			if err := DecodeVANS4xDirect(sub, outFiber, l[k], s); err != nil {
 				return err
 			}
 		}

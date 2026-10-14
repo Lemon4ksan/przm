@@ -103,10 +103,11 @@ func insertStaticEntry(word []byte, p uint16) {
 	staticDictHead[h] = entryIdx
 }
 
-// FindStaticDictMatches searches for static RFC 7932 dictionary matches at the start of src.
-// For each matching word of length L, it invokes fn with parameter p and length L.
+// FindStaticDictMatches searches for static RFC 7932 dictionary matches at the start of src,
+// including O(1) syntax suffixes and UppercaseFirst transforms.
+// For each matching word of length L, it invokes fn with word ID, transform tau, and matched length.
 // Zero dynamic allocations.
-func FindStaticDictMatches(src []byte, fn func(p uint32, length int)) {
+func FindStaticDictMatches(src []byte, fn func(wid uint32, tau uint8, length int)) {
 	if len(src) < 4 {
 		return
 	}
@@ -126,7 +127,50 @@ func FindStaticDictMatches(src []byte, fn func(p uint32, length int)) {
 			continue
 		}
 		if bytes.Equal(src[4:l], e.Word[4:l]) {
-			fn(uint32(e.P), l)
+			wid := uint32(e.P)
+			fn(wid, 0, l)
+
+			// O(1) Suffix extensions for base Brotli words
+			if wid < 13504 && l < len(src) {
+				if src[l] == ' ' {
+					fn(wid, 1, l+1) // Suffix " "
+				} else if l+1 < len(src) {
+					if src[l] == ',' && src[l+1] == ' ' {
+						fn(wid, 14, l+2) // Suffix ", "
+					} else if src[l] == '.' && src[l+1] == ' ' {
+						fn(wid, 31, l+2) // Suffix ". "
+					}
+				}
+			}
+		}
+	}
+
+	// UppercaseFirst check: if src starts with an uppercase ASCII letter
+	if src[0] >= 'A' && src[0] <= 'Z' {
+		lowerPrefix := prefix | 0x20
+		lowerH := (lowerPrefix * HashMultiplier32) >> 16
+		idx = staticDictHead[lowerH]
+		depth = 0
+		for idx >= 0 && depth < 32 {
+			e := &staticDictEntries[idx]
+			idx = e.Next
+			depth++
+			if e.Prefix != lowerPrefix {
+				continue
+			}
+			l := int(e.Len)
+			if l > len(src) {
+				continue
+			}
+			if src[0] == e.Word[0]-32 && bytes.Equal(src[1:l], e.Word[1:l]) {
+				wid := uint32(e.P)
+				if wid < 13504 {
+					fn(wid, 9, l) // UppercaseFirst
+					if l < len(src) && src[l] == ' ' {
+						fn(wid, 4, l+1) // UppercaseFirst + Suffix " "
+					}
+				}
+			}
 		}
 	}
 }

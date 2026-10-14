@@ -61,7 +61,8 @@ type TrellisNode struct {
 // CompressorScratchpad holds cache-resident tables and working memory for compression.
 type CompressorScratchpad struct {
 	head4       [MaxHashBuckets]int32
-	head8       [MaxHashBuckets]int32
+	head8       [MaxHashBuckets][4]int32
+	head12      [MaxHashBuckets][4]int32
 	prevPos     [MaxWindowHorizon]int32
 	nodes       [MaxBlockHorizon + 1]TrellisNode
 	litCost     [256]uint32
@@ -187,6 +188,33 @@ func hash8(src []byte, p int) uint16 {
 	return uint16((binary.LittleEndian.Uint64(src[p:p+8]) * HashMultiplier64) >> 48)
 }
 
+func hash12(src []byte, p int) uint16 {
+	v1 := binary.LittleEndian.Uint64(src[p : p+8])
+	v2 := binary.LittleEndian.Uint64(src[p+4 : p+12])
+	return uint16(((v1 ^ (v2 * 0xBF58476D1CE4E5B9)) * HashMultiplier64) >> 48)
+}
+
+var distCodeCost [64]uint32
+
+func init() {
+	for c := range 64 {
+		sumF := 0
+		for ctx := range 4 {
+			sumF += int(distance.StaticDistFreq4[ctx][c])
+		}
+		avgF := float64(sumF) / 4.0
+		if avgF <= 0 {
+			avgF = 1.0
+		}
+		bits := math.Log2(4096.0 / avgF)
+		cost := uint32(bits*2.0 + 0.5)
+		if cost < 6 {
+			cost = 6
+		}
+		distCodeCost[c] = cost
+	}
+}
+
 // getParetoSublengths generates candidate match lengths for trellis search.
 func getParetoSublengths(L, bMin int, out []int) []int {
 	n := 0
@@ -234,9 +262,9 @@ func litFlushCost(nLit int) uint32 {
 		return 0
 	}
 	if nLit <= 8 {
-		return 16
+		return 10
 	}
-	return 32
+	return 22
 }
 
 // costRepeat evaluates parsing cost for match reusing register k.
@@ -258,17 +286,25 @@ func costRepeat(L, k, bMin, nLit int) uint32 {
 
 // costExplicit evaluates base opcode cost plus distance prefix bits.
 func costExplicit(L int, dist uint32, bMin, nLit int) uint32 {
-	var base uint32 = 46
-	if L <= 14+bMin {
-		base = 16
-	} else if L <= 14+bMin+127 {
-		base = 30
+	code, _, nb := distance.DistanceToCode(dist)
+	var base uint32 = 9
+	if nLit >= 1 && nLit <= 3 {
+		base = 12
+	} else if nLit > 3 {
+		base = 9 + litFlushCost(nLit)
 	}
-	if nLit > 3 {
-		base += litFlushCost(nLit)
+	if L > 14+bMin {
+		if L <= 14+bMin+127 {
+			base += 14
+		} else {
+			base += 28
+		}
 	}
-	_, _, nb := distance.DistanceToCode(dist)
-	return base + uint32(2*nb)
+	distCost := distCodeCost[code] + uint32(2*nb)
+	if L == bMin && dist > 1024 {
+		distCost += 6
+	}
+	return base + distCost
 }
 
 // measureMatchLength computes contiguous byte match length between two positions using 64-bit SWAR.
@@ -414,27 +450,64 @@ func relaxHashMatches(
 		return
 	}
 	curCost := s.nodes[i].cost
-	if level >= 6 && i+8 <= bSize {
-		relaxHash8Match(i, s, src, globalPos, bSize, maxDist, bMin, curCost)
+	if level >= 6 && i+12 <= bSize && globalPos+12 <= len(src) {
+		relaxHash12Matches(i, s, src, globalPos, bSize, maxDist, bMin, curCost)
+	}
+	if level >= 4 && i+8 <= bSize && globalPos+8 <= len(src) {
+		relaxHash8Matches(i, s, src, globalPos, bSize, maxDist, bMin, curCost)
 	}
 	relaxHash4Matches(i, s, src, globalPos, bSize, maxDist, winMask, bMin, depthLimit, curCost)
 }
 
-func relaxHash8Match(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, maxDist, bMin int, curCost uint32) {
-	h8 := hash8(src, globalPos)
-	cand8 := s.head8[h8]
-	if cand8 < 0 {
-		return
-	}
-	candPos8 := int(cand8)
-	d8 := uint32(globalPos - candPos8)
-	if d8 == 0 || d8 > uint32(maxDist) {
-		return
-	}
+func relaxHash12Matches(
+	i int,
+	s *CompressorScratchpad,
+	src []byte,
+	globalPos, bSize, maxDist, bMin int,
+	curCost uint32,
+) {
+	h12 := hash12(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	L8 := measureMatchLength(src, globalPos, candPos8, maxL)
-	if L8 >= 8 {
-		relaxExplicitSublengths(i, d8, L8, bMin, curCost, s)
+	for k := 0; k < 4; k++ {
+		cand := s.head12[h12][k]
+		if cand < 0 {
+			break
+		}
+		candPos := int(cand)
+		d := uint32(globalPos - candPos)
+		if d == 0 || d > uint32(maxDist) {
+			continue
+		}
+		L := measureMatchLength(src, globalPos, candPos, maxL)
+		if L >= 12 {
+			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
+		}
+	}
+}
+
+func relaxHash8Matches(
+	i int,
+	s *CompressorScratchpad,
+	src []byte,
+	globalPos, bSize, maxDist, bMin int,
+	curCost uint32,
+) {
+	h8 := hash8(src, globalPos)
+	maxL := min(bSize-i, MaxMatchLength)
+	for k := 0; k < 4; k++ {
+		cand := s.head8[h8][k]
+		if cand < 0 {
+			break
+		}
+		candPos := int(cand)
+		d := uint32(globalPos - candPos)
+		if d == 0 || d > uint32(maxDist) {
+			continue
+		}
+		L := measureMatchLength(src, globalPos, candPos, maxL)
+		if L >= 8 {
+			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
+		}
 	}
 }
 
@@ -488,13 +561,16 @@ func relaxDictMatches(i int, s *CompressorScratchpad, src []byte, globalPos, bSi
 	curCost := s.nodes[i].cost
 	nLit := int(s.nodes[i].nLit)
 	flushCost := litFlushCost(nLit)
-	cdict.FindStaticDictMatches(src[globalPos:], func(p uint32, matchLen int) {
+	cdict.FindStaticDictMatches(src[globalPos:], func(wid uint32, tau uint8, matchLen int) {
 		if matchLen < 5 || i+matchLen > bSize {
 			return
 		}
 		var base uint32 = 36
 		if matchLen >= 8 {
 			base = 28
+		}
+		if tau != 0 {
+			base += 8
 		}
 		cost := curCost + base + flushCost
 		if cost < s.nodes[i+matchLen].cost {
@@ -504,8 +580,9 @@ func relaxDictMatches(i int, s *CompressorScratchpad, src []byte, globalPos, bSi
 			s.nodes[i+matchLen].edge = commands.TrellisEdge{
 				From:   uint16(i),
 				Length: uint16(matchLen),
-				Dist:   p,
+				Dist:   wid,
 				Kind:   5,
+				Arg:    tau,
 			}
 		}
 	})
@@ -592,7 +669,7 @@ func relaxDiffLatticeSublengths(
 	}
 }
 
-// insertHash updates 4-byte and 8-byte hash indices at the current position.
+// insertHash updates multi-scale hash tables at the current position.
 func insertHash(src []byte, globalPos, winMask int, s *CompressorScratchpad) {
 	pos := int32(globalPos)
 	maskPos := globalPos & winMask
@@ -601,7 +678,17 @@ func insertHash(src []byte, globalPos, winMask int, s *CompressorScratchpad) {
 	s.head4[h4] = pos
 	if globalPos+8 <= len(src) {
 		h8 := hash8(src, globalPos)
-		s.head8[h8] = pos
+		s.head8[h8][3] = s.head8[h8][2]
+		s.head8[h8][2] = s.head8[h8][1]
+		s.head8[h8][1] = s.head8[h8][0]
+		s.head8[h8][0] = pos
+	}
+	if globalPos+12 <= len(src) {
+		h12 := hash12(src, globalPos)
+		s.head12[h12][3] = s.head12[h12][2]
+		s.head12[h12][2] = s.head12[h12][1]
+		s.head12[h12][1] = s.head12[h12][0]
+		s.head12[h12][0] = pos
 	}
 }
 
@@ -779,9 +866,10 @@ func executeCompressionPipeline(
 	u := len(src)
 	for i := range s.head4 {
 		s.head4[i] = -1
-	}
-	for i := range s.head8 {
-		s.head8[i] = -1
+		for k := range 4 {
+			s.head8[i][k] = -1
+			s.head12[i][k] = -1
+		}
 	}
 	winSize := 1 << params.wLog
 	winMask := winSize - 1

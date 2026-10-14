@@ -47,6 +47,7 @@ typedef struct {
     uint8_t vans_lookup[4096];
     uint16_t vans_freq[256];
     uint16_t vans_cdf[256];
+    uint32_t vans_dec_tab[4096];
     uint8_t word_scratch[128];
     uint8_t meta_lookup[8][4096];
     uint16_t meta_cdf[8][256];
@@ -183,31 +184,71 @@ static int32_t vans_read_joint_nibbles(const uint8_t *src, size_t slen, size_t *
     return PRZM_OK;
 }
 
-static void vans_build_tables(const uint16_t *freq, uint16_t *cdf, uint8_t *lookup) {
-    uint16_t cum = 0;
+static void vans_build_dec_tab(const uint16_t *freq, uint32_t *dec_tab) {
+    uint32_t cum = 0;
     for (int s = 0; s < 256; s++) {
-        cdf[s] = cum;
-        for (uint16_t k = 0; k < freq[s]; k++) {
-            lookup[cum + k] = (uint8_t)s;
+        uint32_t f = freq[s];
+        if (f == 0) continue;
+        uint32_t f_minus_1 = (f - 1) & 0xFFF;
+        uint32_t sym = (uint32_t)(uint8_t)s;
+        for (uint32_t j = 0; j < f; j++) {
+            dec_tab[cum + j] = (f_minus_1 << 20) | (j << 8) | sym;
         }
-        cum += freq[s];
+        cum += f;
     }
 }
 
 static int32_t vans_run_4x_loop(const uint8_t *src, size_t slen, size_t *pos,
                                 uint8_t *dst, uint32_t u_len, uint32_t *x,
-                                const uint16_t *freq, const uint16_t *cdf, const uint8_t *lookup) {
+                                const uint32_t *dec_tab) {
     size_t p = *pos;
-    for (uint32_t i = 0; i < u_len; i++) {
+    uint32_t x0 = x[0], x1 = x[1], x2 = x[2], x3 = x[3];
+    uint32_t i = 0;
+    while (i + 4 <= u_len) {
+        uint32_t e0 = dec_tab[x0 & 4095];
+        dst[i] = (uint8_t)e0;
+        x0 = ((e0 >> 20) + 1) * (x0 >> 12) + ((e0 >> 8) & 0xFFF);
+        while (x0 < 65536) {
+            if (p >= slen) return PRZM_ERR_CORRUPTED_FRAME;
+            x0 = (x0 << 8) | src[p++];
+        }
+
+        uint32_t e1 = dec_tab[x1 & 4095];
+        dst[i + 1] = (uint8_t)e1;
+        x1 = ((e1 >> 20) + 1) * (x1 >> 12) + ((e1 >> 8) & 0xFFF);
+        while (x1 < 65536) {
+            if (p >= slen) return PRZM_ERR_CORRUPTED_FRAME;
+            x1 = (x1 << 8) | src[p++];
+        }
+
+        uint32_t e2 = dec_tab[x2 & 4095];
+        dst[i + 2] = (uint8_t)e2;
+        x2 = ((e2 >> 20) + 1) * (x2 >> 12) + ((e2 >> 8) & 0xFFF);
+        while (x2 < 65536) {
+            if (p >= slen) return PRZM_ERR_CORRUPTED_FRAME;
+            x2 = (x2 << 8) | src[p++];
+        }
+
+        uint32_t e3 = dec_tab[x3 & 4095];
+        dst[i + 3] = (uint8_t)e3;
+        x3 = ((e3 >> 20) + 1) * (x3 >> 12) + ((e3 >> 8) & 0xFFF);
+        while (x3 < 65536) {
+            if (p >= slen) return PRZM_ERR_CORRUPTED_FRAME;
+            x3 = (x3 << 8) | src[p++];
+        }
+        i += 4;
+    }
+    x[0] = x0; x[1] = x1; x[2] = x2; x[3] = x3;
+    while (i < u_len) {
         int j = (int)(i & 3);
-        uint32_t slot = x[j] & 4095;
-        uint8_t s = lookup[slot];
-        dst[i] = s;
-        x[j] = (uint32_t)freq[s] * (x[j] >> 12) + (slot - cdf[s]);
+        uint32_t e = dec_tab[x[j] & 4095];
+        dst[i] = (uint8_t)e;
+        x[j] = ((e >> 20) + 1) * (x[j] >> 12) + ((e >> 8) & 0xFFF);
         while (x[j] < 65536) {
             if (p >= slen) return PRZM_ERR_CORRUPTED_FRAME;
             x[j] = (x[j] << 8) | src[p++];
         }
+        i++;
     }
     *pos = p;
     return PRZM_OK;
@@ -222,7 +263,7 @@ int32_t przm_vans_decode_literals(const uint8_t *payload, size_t payload_len,
     int32_t err = vans_read_joint_nibbles(payload, payload_len, &pos, g_scratch.vans_freq);
     if (err != PRZM_OK) return err;
 
-    vans_build_tables(g_scratch.vans_freq, g_scratch.vans_cdf, g_scratch.vans_lookup);
+    vans_build_dec_tab(g_scratch.vans_freq, g_scratch.vans_dec_tab);
 
     if (pos + 16 > payload_len) return PRZM_ERR_CORRUPTED_FRAME;
     uint32_t x[4];
@@ -232,7 +273,7 @@ int32_t przm_vans_decode_literals(const uint8_t *payload, size_t payload_len,
     }
 
     return vans_run_4x_loop(payload, payload_len, &pos, dst, u_len, x,
-                            g_scratch.vans_freq, g_scratch.vans_cdf, g_scratch.vans_lookup);
+                            g_scratch.vans_dec_tab);
 }
 
 static int32_t vans_decode4x(const uint8_t *src, size_t slen, uint8_t *dst, uint32_t u_len) {

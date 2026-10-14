@@ -31,23 +31,30 @@ func TestStaticIndexFindMatchesAndVerify(t *testing.T) {
 		b := []byte(phrase)
 		matchesFound := 0
 		for i := 0; i+4 <= len(b); i++ {
-			FindStaticDictMatches(b[i:], func(p uint32, matchLen int) {
+			FindStaticDictMatches(b[i:], func(p uint32, tau uint8, matchLen int) {
 				matchesFound++
 				sub := b[i : i+matchLen]
 
-				// Decompress using RFC 7932 decoder logic
-				b0 := byte(0x80 | ((p >> 7) & 0x7F))
-				b1 := byte(p & 0x7F)
-				cmd := []byte{b0, b1}
-				cp := 1
-				wPtr, tau, err := ResolveRFCWord(b0, cmd, &cp)
-				if err != nil {
-					t.Fatalf("ResolveRFCWord failed for p=%d: %v", p, err)
+				var wPtr []byte
+				var tauVal uint32
+				if tau == 0 {
+					b0 := byte(0x80 | ((p >> 7) & 0x7F))
+					b1 := byte(p & 0x7F)
+					cmd := []byte{b0, b1}
+					cp := 1
+					var err error
+					wPtr, tauVal, err = ResolveRFCWord(b0, cmd, &cp)
+					if err != nil {
+						t.Fatalf("ResolveRFCWord failed for p=%d: %v", p, err)
+					}
+				} else {
+					wPtr = resolveWordByWid(p)
+					tauVal = uint32(tau)
 				}
 				var dst [256]byte
 				pos := 0
-				if err := ApplyTransform(dst[:], &pos, 256, wPtr, tau, scratch[:]); err != nil {
-					t.Fatalf("ApplyTransform failed for p=%d: %v", p, err)
+				if err := ApplyTransform(dst[:], &pos, 256, wPtr, tauVal, scratch[:]); err != nil {
+					t.Fatalf("ApplyTransform failed for p=%d, tau=%d: %v", p, tau, err)
 				}
 				if !bytes.Equal(dst[:pos], sub) {
 					t.Fatalf("Dictionary word decompressed mismatch: got %q, want %q", dst[:pos], sub)
@@ -65,8 +72,9 @@ func TestStaticIndexZeroAllocs(t *testing.T) {
 	buf := []byte("return value from function and http://example.com/api")
 	allocs := testing.AllocsPerRun(1000, func() {
 		for i := 0; i+4 <= len(buf); i++ {
-			FindStaticDictMatches(buf[i:], func(p uint32, matchLen int) {
-				_ = p
+			FindStaticDictMatches(buf[i:], func(wid uint32, tau uint8, matchLen int) {
+				_ = wid
+				_ = tau
 				_ = matchLen
 			})
 		}
