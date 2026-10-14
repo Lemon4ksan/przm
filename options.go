@@ -1,6 +1,9 @@
 package przm
 
-import "errors"
+import (
+	"errors"
+	"sync"
+)
 
 // Standard error definitions for przm package.
 var (
@@ -65,7 +68,15 @@ func WithArchivalMode(archival bool) Option { return func(o *Options) { o.Archiv
 func WithStandardStreamOnly(standard bool) Option { return func(o *Options) { o.StandardStreamOnly = standard } }
 
 // WithGPUAcceleration toggles GPU acceleration preference.
-func WithGPUAcceleration(gpu bool) Option { return func(o *Options) { o.GPUAcceleration = gpu } }
+func WithGPUAcceleration(gpu ...bool) Option {
+	return func(o *Options) {
+		if len(gpu) == 0 || gpu[0] {
+			o.GPUAcceleration = true
+		} else {
+			o.GPUAcceleration = false
+		}
+	}
+}
 
 // DefaultOptions returns the baseline configuration for optimal compression speed & ratio.
 func DefaultOptions() Options {
@@ -155,3 +166,30 @@ func NewDictionaryDesc(dictID uint32, entries []string) *DictionaryDesc {
 	}
 	return d
 }
+
+var (
+	rawDictMu       sync.RWMutex
+	rawDictRegistry = make(map[uint32][]byte)
+)
+
+// RegisterRawDictionary registers a raw prefix dictionary buffer under a 32-bit dictID.
+func RegisterRawDictionary(id uint32, data []byte) {
+	rawDictMu.Lock()
+	defer rawDictMu.Unlock()
+	rawDictRegistry[id] = data
+}
+
+// UnregisterRawDictionary removes a raw dictionary from the registry.
+func UnregisterRawDictionary(id uint32) {
+	rawDictMu.Lock()
+	defer rawDictMu.Unlock()
+	delete(rawDictRegistry, id)
+}
+
+// GetRawDictionary retrieves a registered raw dictionary buffer by id.
+func GetRawDictionary(id uint32) []byte {
+	rawDictMu.RLock()
+	defer rawDictMu.RUnlock()
+	return rawDictRegistry[id]
+}
+

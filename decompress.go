@@ -168,7 +168,16 @@ func parseOptionalHeaders(src []byte, startOff int, f *FrameContext) (int, error
 		f.dictID = binary.LittleEndian.Uint32(src[off : off+4])
 		off += 4
 		if f.dictID != DictIDBrotli && (f.dictDesc == nil || f.dictDesc.DictID != f.dictID) {
-			return 0, ErrUnknownDict
+			if d := GetRawDictionary(f.dictID); len(d) > 0 {
+				f.dict = d
+			} else {
+				return 0, ErrUnknownDict
+			}
+		}
+		if len(f.dict) == 0 {
+			if d := GetRawDictionary(f.dictID); len(d) > 0 {
+				f.dict = d
+			}
 		}
 	}
 	return off, nil

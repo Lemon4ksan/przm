@@ -1,5 +1,5 @@
 // Clean Room Synthesized Brotli Dictionary & RFC 7932 Tables
-package dict
+package tables
 
 var WordBase = [22]uint16{
     0, 1024, 2048, 4096, 6144, 7168, 8192, 9216, 10240, 11264, 11776, 12288, 12544, 12672, 12800, 13056, 13184, 13312, 13376, 13440, 13472, 13504,

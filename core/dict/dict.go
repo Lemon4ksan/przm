@@ -2,18 +2,36 @@ package dict
 
 import (
 	"errors"
+
+	"github.com/lemon4ksan/przm/core/internal/tables"
 )
 
 // ErrCorrupted indicates malformed dictionary data or invalid indices.
 var ErrCorrupted = errors.New("dict: corrupted dictionary stream")
 
+// Aliases for RFC 7932 and Brotli dictionary tables.
+var (
+	WordBase         = tables.WordBase
+	DictOffsets      = tables.DictOffsets
+	Transforms       = tables.Transforms
+	CompactPairs     = tables.CompactPairs
+	PSStrings        = tables.PSStrings
+	TopRFCWords      = tables.TopRFCWords
+	WebTokens        = tables.WebTokens
+	BrotliDictionary = tables.BrotliDictionary[:]
+)
+
+// LookupBrotliWord retrieves word bytes from the static RFC 7932 dictionary by word ID.
+func LookupBrotliWord(wid uint32) []byte {
+	return tables.LookupBrotliWord(wid)
+}
 
 // LookupWebToken retrieves a built-in web/text token by index.
 func LookupWebToken(idx int) (string, bool) {
-	if idx < 0 || idx >= len(WebTokens) {
+	if idx < 0 || idx >= len(tables.WebTokens) {
 		return "", false
 	}
-	return WebTokens[idx], true
+	return tables.WebTokens[idx], true
 }
 
 // readLEB128Internal reads a 32-bit LEB128 integer from b at pos.
@@ -41,22 +59,22 @@ func readLEB128Internal(b []byte, pos *int) (uint32, error) {
 // resolveWordByWid fetches word bytes from the base dictionary or top RFC words.
 func resolveWordByWid(wid uint32) []byte {
 	if wid < 13504 {
-		return LookupBrotliWord(wid)
+		return tables.LookupBrotliWord(wid)
 	}
 	idx := int(wid - 13504)
-	if idx >= len(TopRFCWords) {
+	if idx >= len(tables.TopRFCWords) {
 		return nil
 	}
-	return []byte(TopRFCWords[idx])
+	return []byte(tables.TopRFCWords[idx])
 }
 
 // resolveCompactPair extracts wid and tau from a compact RFC pair index.
 func resolveCompactPair(c uint32) ([]byte, uint32, error) {
-	if c >= uint32(len(CompactPairs)) {
+	if c >= uint32(len(tables.CompactPairs)) {
 		return nil, 0, ErrCorrupted
 	}
-	wid := uint32(CompactPairs[c].WId)
-	tau := uint32(CompactPairs[c].Tau)
+	wid := uint32(tables.CompactPairs[c].WId)
+	tau := uint32(tables.CompactPairs[c].Tau)
 	wPtr := resolveWordByWid(wid)
 	return wPtr, tau, nil
 }
@@ -167,3 +185,49 @@ func ApplyTransform(dst []byte, dstPos *int, uSize uint32, wPtr []byte, tau uint
 	*dstPos += len(suf)
 	return nil
 }
+
+// ExternalDictMapper dynamically maps word IDs to byte slice offsets in an external dictionary.
+type ExternalDictMapper struct {
+	Dict    []byte
+	Base    []uint16
+	Offsets []uint32
+}
+
+// NewExternalDictMapper constructs a new dynamic ExternalDictMapper.
+func NewExternalDictMapper(dict []byte, base []uint16, offsets []uint32) *ExternalDictMapper {
+	return &ExternalDictMapper{
+		Dict:    dict,
+		Base:    base,
+		Offsets: offsets,
+	}
+}
+
+// Lookup finds a word byte slice by its ID in the external dictionary.
+func (m *ExternalDictMapper) Lookup(wid uint32) ([]byte, bool) {
+	if len(m.Base) == 0 || len(m.Offsets) == 0 || len(m.Dict) == 0 {
+		return nil, false
+	}
+	low := 0
+	high := len(m.Base) - 1
+	best := 0
+	for low <= high {
+		mid := (low + high) / 2
+		if uint32(m.Base[mid]) <= wid {
+			best = mid
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+	if best >= len(m.Offsets) {
+		return nil, false
+	}
+	wLen := best + 4
+	idx := int(wid - uint32(m.Base[best]))
+	off := int(m.Offsets[best]) + idx*wLen
+	if off < 0 || off+wLen > len(m.Dict) {
+		return nil, false
+	}
+	return m.Dict[off : off+wLen], true
+}
+

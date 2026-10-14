@@ -532,7 +532,11 @@ func compressInternal(src []byte, opts Options) ([]byte, error) {
 	}
 	s := compScratchPool.Get()
 	defer compScratchPool.Put(s)
-	return executeCompressionPipeline(src, level, opts.RawDict, params, s)
+	rawDict := opts.RawDict
+	if len(rawDict) == 0 && opts.DictID != 0 {
+		rawDict = GetRawDictionary(opts.DictID)
+	}
+	return executeCompressionPipeline(src, level, rawDict, params, s)
 }
 
 // executeCompressionPipeline parses blocks and serializes final compressed frame.
