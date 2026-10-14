@@ -30,7 +30,8 @@ cmake-build-*/
 
 # Agent workspace artifacts
 teamwork_projects/
-.agents/
+.agents/*
+!.agents/GEMINI.md
 scratch/
 bench_data/
 .gotmp/

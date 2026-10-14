@@ -1,0 +1,37 @@
+name: "Feature Request"
+description: "Suggest an improvement, new manifold transform, or hardware SIMD kernel for przm"
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting an improvement for przm.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Motivation
+      description: What data distribution, pipeline bottleneck, or target platform inspires this request?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution & Theory
+      description: Describe the mathematical transformation or architectural design.
+    validations:
+      required: true
+  - type: textarea
+    id: zero-alloc
+    attributes:
+      label: Zero-Allocation Invariant
+      description: How does the proposal maintain 0 heap allocations during decompression?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative algorithms or existing approaches?
+    validations:
+      false
