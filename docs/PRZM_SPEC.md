@@ -369,7 +369,7 @@ For sequential chunk streams (e.g., EON extents, distributed blocks), PRZM propa
 
 ## 14. Formal Verification: 38 Machine-Checked Theorems in Lean 4
 
-All mathematical primitives are formalized and verified in Lean 4 under `przm/PRZM/*.lean`:
+All mathematical primitives are formalized and verified in Lean 4 under `proofs/PRZM/*.lean`:
 
 | Theorem | Formal Name | Mathematical Module | Invariant Guaranteed |
 | :--- | :--- | :--- | :--- |

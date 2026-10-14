@@ -7,7 +7,7 @@ We welcome performance optimizations, mathematical formalizations, hardware acce
 ## Ground Rules
 
 - **Strict Zero-Allocation Contract:** Decompression streaming paths in both Go and C must remain strictly **0 heap allocations** (`0 B/op, 0 allocs/op`). No dynamic `malloc` or slice growth in hot loops.
-- **Formal Invariant Preservation:** Any change modifying core manifold transforms, Hensel lifting, or topological bounds must preserve the corresponding **Lean 4** formal proofs (`PRZM/*.lean`) with strictly 0 `sorry` statements.
+- **Formal Invariant Preservation:** Any change modifying core manifold transforms, Hensel lifting, or topological bounds must preserve the corresponding **Lean 4** formal proofs (`proofs/PRZM/*.lean` and `proofs/*.lean`) with strictly 0 `sorry` statements.
 - **Microarchitectural Line-Rate Speed:** PRZM targets line-rate throughput (saturating hardware bus speeds). Regression in instruction cycles per byte will not be accepted.
 - **Clean Portability:** The C decompressor (`libprzm_dec`) must remain strictly standard C99/C11 with zero external runtime dependencies.
 

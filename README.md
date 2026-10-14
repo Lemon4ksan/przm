@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
 [![Zero-Alloc](https://img.shields.io/badge/Zero--Heap--Alloc-0%20B%2Fop%20%7C%200%20allocs%2Fop-brightgreen.svg)]()
 [![Throughput](https://img.shields.io/badge/Decompress%20Throughput-4.57--6.16%20GB%2Fs%20(Line--Rate)-orange.svg)]()
-[![Formal Verification](https://img.shields.io/badge/Lean%204-0%20sorry%20(33%20Modules%20Verified)-success.svg)](PRZM/)
+[![Formal Verification](https://img.shields.io/badge/Lean%204-0%20sorry%20(33%20Modules%20Verified)-success.svg)](proofs/)
 
 > **"True balance is neither the cold silence of maximum entropy, nor the frozen immobility of a crystal. It is the dynamic, vibrating tension held on the razor-thin boundary between order and chaos.**
 > 
@@ -28,7 +28,7 @@ PRZM couples a production-grade **Go 1.27** core with hardware-accelerated **NVI
 5. **Mode 8 Tri-Stream Demux Architecture**: Decouples the command stream into 3 independent channels (`opStream`, `metaStream`, and `varStream`). Uniform dictionary indices and extended lengths are isolated from low-entropy match structures, completely eliminating entropy table pollution.
 6. **Non-Archimedean $p$-Adic Match Finding**: Level 3/4 match finding employs ultrametric Hensel lifting across multi-tier hash tables, achieving a **2.03x search speedup** (26.3 ns vs 54.6 ns at depth 64) with mathematically proven zero false candidate dismissals (Theorems HL1/HL2).
 7. **Static RFC 7932 Web Dictionary**: Integrated 14,016-word pre-trained dictionary and 121-transform matrix with $O(1)$ hash indexing, delivering instant zero-cost matches across web assets, JSON, HTML, and source code.
-8. **Formal Verification in Lean 4**: Key algebraic symmetries, involutions, and topological properties are computer-checked in **Lean 4** with strictly **0 `sorry` statements** across all 33 formal proof modules (`PRZM/*.lean`).
+8. **Formal Verification in Lean 4**: Key algebraic symmetries, involutions, and topological properties are computer-checked in **Lean 4** with strictly **0 `sorry` statements** across all 33 formal proof modules (`proofs/PRZM/*.lean` and `proofs/*.lean`).
 9. **Clean Room Interoperability**: 100% bit-exact parity verified between the Go reference pipeline and the clean-room Pure C99 decoder (`tests/test_przm_dec.c`, 21/21 tests passing).
 
 ## Verified Empirical Benchmarks
@@ -155,7 +155,10 @@ przm/
 ├── docs/                            # Formal specifications & architectural RFCs
 │   ├── SPECIFICATION.md             # IETF RFC standard draft
 │   └── PRZM_SPEC.md                 # Complete binary format specification
-└── PRZM/                            # Lean 4 formal mathematical verification suite (33 modules)
+└── proofs/                          # Lean 4 formal mathematical verification suite (33 modules)
+    ├── PRZM/                        # 27 foundational manifold transforms & algebraic pillars
+    ├── PRZM.lean                    # Root umbrella library module
+    └── lakefile.lean                # Lake package configuration & build harness
 ```
 
 ## API Usage
@@ -300,9 +303,10 @@ golangci-lint run ./...
 
 ### 3. Verify Formal Mathematical Proofs in Lean 4
 ```bash
+cd proofs
 lake build
 ```
-All 33 proof modules in `PRZM/*.lean` are computer-checked with strictly 0 `sorry` statements.
+All 33 proof modules in `proofs/` are computer-checked with strictly 0 `sorry` statements.
 
 ## CLI Usage
 

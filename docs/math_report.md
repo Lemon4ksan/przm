@@ -3,7 +3,7 @@
 **Author:** Primary Mathematical Report Author Generation 2 (`worker_writer_2`)  
 **Target Codebase:** PRZM Engine (`d:\CodingProjects\przm`)  
 **Specification:** PRZM-SPEC-0.5  
-**Formal Verification:** Lean 4 Formal Proof Library (`PRZM/*.lean`, 38 Formal Theorems)  
+**Formal Verification:** Lean 4 Formal Proof Library (`proofs/PRZM/*.lean`, 38 Formal Theorems)  
 **Date:** September 30, 2026  
 **Classification:** Academic & Applied Mathematical Treatise  
 
@@ -167,7 +167,7 @@ Decoding executes in forward order across the 4 interleaved lanes:
    $$x_{\lambda} \leftarrow (x_{\lambda} \ll 8) \mid \text{stream}[ptr++]$$
 
 #### 3.1.5. Formal Lean 4 Proof of Bijectivity (Theorem 1)
-In `PRZM/VANS.lean` and `przm_theorems.lean`:
+In `proofs/PRZM/VANS.lean` and `przm_theorems.lean`:
 ```lean
 theorem Theorem1_VANS_Bijectivity
     (step : InvertibleStep NibblePair (Nat × Nat)) (b : NibblePair) (s : Nat × Nat) :
@@ -220,7 +220,7 @@ where $|\text{ref}(A)|$ is the reference count of non-terminal $A$ across the gr
 - GGTC performs bottom-up pruning, inlining unprofitable rules directly into their parents, and frequency-sorting surviving rules into contiguous 1-byte opcodes.
 
 #### 3.2.4. Formal Lean 4 Proofs (Theorems 2 & 7)
-In `PRZM/GGTC.lean`:
+In `proofs/PRZM/GGTC.lean`:
 ```lean
 theorem Theorem2_GGTC_Unique_Derivation
     (g : GrammarTree) (w1 w2 : List GF256)
@@ -229,7 +229,7 @@ theorem Theorem2_GGTC_Unique_Derivation
     w1 = w2 :=
   ggtc_unique_derivation g w1 w2 h_det1 h_det2
 ```
-In `PRZM/PWS.lean`:
+In `proofs/PRZM/PWS.lean`:
 ```lean
 theorem Theorem7_PWS_L5_Expansion_Deterministic (v1 v2 : Vector128) :
     let v := combine_vec128 v1 v2
@@ -316,7 +316,7 @@ The entire VM register context resides in host vector registers:
 - `OpSKIP_CHUNK` (0x0E): Conditional skip on zero vector.
 
 #### 3.4.4. Mathematical Proof of Determinism & Linearly Bounded Latency (Theorem 14)
-In `PRZM/VM.lean`:
+In `proofs/PRZM/VM.lean`:
 ```lean
 axiom vm_bounded_latency (p : VMProgram) :
   program_total_latency p ≤ 64 * 6
@@ -329,7 +329,7 @@ axiom vm_bounded_latency (p : VMProgram) :
    This guarantees that decompression execution time is strictly linear in output size $O(N)$ with deterministic, cycle-accurate $O(1)$ latency per 64-byte block.
 
 #### 3.4.5. Categorical Functorial Microcode Optimality (Theorem 25)
-In `PRZM/FunctorVM.lean`:
+In `proofs/PRZM/FunctorVM.lean`:
 The mapping from data structure operations to VM microcode is formalized as a covariant functor:
 $$\mathcal{F}: \mathbf{DataStruct} \to \mathbf{SIMD\_Regs}$$
 satisfying identity preservation $\mathcal{F}(\text{id}_A) = \text{id}_{\mathcal{F}(A)}$ and composition preservation $\mathcal{F}(g \circ f) = \mathcal{F}(g) \circ \mathcal{F}(f)$.
@@ -406,7 +406,7 @@ $$\mathbf{u} = d_0 \phi + \delta_1 \psi + h$$
 where $\phi \in C^0$ is the scalar potential, $\psi \in C^2$ is the discrete stream function (vector potential), $\delta_1 = * d_1 *$ is the discrete codifferential, and $h$ is a harmonic 1-form satisfying $\Delta_1 h = (d_0 \delta_1 + \delta_1 d_0) h = 0$.
 
 #### 4.1.2. The Coboundary Invariant (Theorem 11)
-In `PRZM/DECHHD.lean` and `dec_hhd.go`:
+In `proofs/PRZM/DECHHD.lean` and `dec_hhd.go`:
 $$d_1 \circ d_0 \equiv 0 \pmod{256}$$
 For any discrete scalar field $\phi$, its circulation around any discrete 2-cell (elementary face $f = [x, x+1] \times [y, y+1]$) vanishes identically:
 $$\mathrm{curl}(d_0 \phi)(f) = (d_0 \phi)(e_{x, y}) + (d_0 \phi)(e_{x+1, y}) - (d_0 \phi)(e_{x, y+1}) - (d_0 \phi)(e_{x, y}) = 0$$
@@ -430,7 +430,7 @@ NSS-CE constructs an endomorphism $\mathcal{N}: \mathbb{F}_2^k \to \mathbb{F}_2^
 $$\mathbf{N}^m = \mathbf{0} \quad \text{for some index } m \le k$$
 
 #### 4.2.2. FIR Resolvent Invertibility (Theorem 12)
-In `PRZM/NSSCE.lean` and `nss_ce.go`:
+In `proofs/PRZM/NSSCE.lean` and `nss_ce.go`:
 $$(\mathbf{I} \oplus \mathbf{N})^{-1} = \mathbf{I} \oplus \mathbf{N} \oplus \mathbf{N}^2 \oplus \dots \oplus \mathbf{N}^{m-1}$$
 Because $\mathbf{N}$ is strictly nilpotent over $\mathbb{F}_2$, the inverse operator $(\mathbf{I} \oplus \mathbf{N})^{-1}$ is guaranteed to be a **Finite Impulse Response (FIR) filter** with exactly $m$ taps. In continuous-time or non-nilpotent systems, inversion requires an Infinite Impulse Response (IIR) filter that can diverge or require division. Over $\mathbb{F}_2$, the FIR resolvent is unconditionally stable, exact, and reversible.
 
@@ -454,7 +454,7 @@ where $\Delta$ is the forward finite difference operator $(\Delta f)(x) = f(x+1)
 $$\binom{x}{n} = \frac{x(x-1)\cdots(x-n+1)}{n!}$$
 
 #### 4.3.2. Unimodular Pascal Unipotent Matrix (Theorem 32 & Theorem 33)
-In `PRZM/Mahler.lean` and `mahler.go`:
+In `proofs/PRZM/Mahler.lean` and `mahler.go`:
 Over discrete blocks of size $K=16$, the transformation matrix $\mathbf{B} \in \mathbb{Z}^{16 \times 16}$ has entries $B_{i, j} = \binom{i}{j}$. Because $B_{i, i} = 1$ and $B_{i, j} = 0$ for $j > i$, $\mathbf{B}$ is a strictly lower-triangular unipotent matrix:
 $$\det(\mathbf{B}) \equiv 1 \pmod{256}$$
 Because the determinant is unit in $\mathbb{Z}/256\mathbb{Z}$, the inverse matrix $\mathbf{B}^{-1}$ exists over the integers, with entries $(\mathbf{B}^{-1})_{i, j} = (-1)^{i-j} \binom{i}{j}$.
@@ -485,7 +485,7 @@ $$\omega(\mathbf{u}, \mathbf{v}) = \mathbf{u}^T \mathbf{J} \mathbf{v}, \quad \ma
 A linear transformation $\mathbf{S} \in \mathrm{GL}(4, \mathbb{F}_{2^8})$ is symplectic if $\mathbf{S}^T \mathbf{J} \mathbf{S} = \mathbf{J}$. The collection of all such automorphisms forms the discrete symplectic group $\mathrm{Sp}(4, \mathbb{F}_{2^8})$.
 
 #### 4.4.2. Involutive Shear Transvections (Theorem 30)
-In `PRZM/Symplectic.lean` and `symplectic.go`:
+In `proofs/PRZM/Symplectic.lean` and `symplectic.go`:
 For any non-zero vector $\mathbf{a} \in V$ and scalar $\alpha \in \mathbb{F}_{2^8}$, the symplectic shear transvection is defined by:
 $$T_{\mathbf{a}, \alpha}(\mathbf{v}) = \mathbf{v} \oplus \alpha \, \omega(\mathbf{v}, \mathbf{a}) \, \mathbf{a}$$
 Because the characteristic of the field is 2 ($\mathbb{F}_{2^8}$ satisfies $1 \oplus 1 = 0$), evaluating $T_{\mathbf{a}, \alpha}$ twice yields:
@@ -513,7 +513,7 @@ $$M = \langle M \rangle_0 + \langle M \rangle_1 + \langle M \rangle_2 + \langle 
 spanning 1 scalar, 4 vectors, 6 bivectors, 4 trivectors, and 1 pseudoscalar.
 
 #### 4.5.2. Unitary Rotor Rotation & Invertibility (Theorem 22)
-In `PRZM/Clifford.lean` and `clifford.go`:
+In `proofs/PRZM/Clifford.lean` and `clifford.go`:
 Cross-channel correlations are eliminated by applying an even-grade unitary rotor $R \in \mathcal{C}\ell_{3,1}^+(\mathbb{F}_{2^8})$ satisfying $R R^\dagger = 1$:
 $$M' = R M R^\dagger$$
 The exact inverse transformation is:
@@ -533,7 +533,7 @@ $$\langle \mathbf{x}, \mathbf{y} \rangle_L = -x_0 y_0 + \sum_{i=1}^n x_i y_i$$
 The hyperbolic distance is given by $d_H(\mathbf{x}, \mathbf{y}) = \mathrm{arcosh}(-\langle \mathbf{x}, \mathbf{y} \rangle_L)$.
 
 #### 4.6.2. Analytical Factorization without Iterative Descent (Theorem 26)
-In `PRZM/HMDS.lean`:
+In `proofs/PRZM/HMDS.lean`:
 Classical hyperbolic MDS uses gradient descent, which is non-deterministic and computationally slow ($O(N^3)$ iterations). PRZM formulates an exact analytical solution by computing the hyperbolic Gram matrix:
 $$Y_{ij} = \cosh(d_H(\mathbf{x}_i, \mathbf{x}_j)) = -\langle \mathbf{x}_i, \mathbf{x}_j \rangle_L$$
 Applying pseudo-Euclidean double-centering $\mathbf{B} = -\frac{1}{2} \mathbf{H} Y \mathbf{H}$ (where $\mathbf{H} = \mathbf{I} - \frac{1}{N}\mathbf{1}\mathbf{1}^T$) produces a matrix with signature $(n, 1)$: exactly 1 negative eigenvalue and $n$ positive eigenvalues. Spectral decomposition yields:
@@ -567,7 +567,7 @@ The discrete boundary operator $\partial_k: C_k \to C_{k-1}$ over the Galois fie
 $$\partial_k [v_0, \dots, v_k] = \sum_{i=0}^k [v_0, \dots, \hat{v}_i, \dots, v_k] \pmod 2$$
 
 #### 4.8.2. Boundary Nilpotency Invariant (Theorem 23)
-In `PRZM/TDA.lean`:
+In `proofs/PRZM/TDA.lean`:
 $$\partial_{k-1} \circ \partial_k \equiv 0 \pmod 2$$
 The cycle space $Z_k = \ker \partial_k$ and boundary space $B_k = \mathrm{im} \, \partial_{k+1}$ yield the persistent homology groups:
 $$H_k = Z_k / B_k$$

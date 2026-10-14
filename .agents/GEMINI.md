@@ -12,7 +12,7 @@ This document outlines the architecture, coding standards, build/test commands, 
 ### Key Capabilities & Architectural Pillars
 - **Strict Zero-Allocation Contract**: Strictly **0 dynamic heap allocations** (`0 B/op, 0 allocs/op`) during streaming decompression across both Go and Pure C99/C11 (`libprzm_dec`).
 - **Microarchitectural Line-Rate Throughput**: Decompression operates at **up to 58.7 GB/s** ($O(1)$ cycles/block bound), consuming between **2.63 and 3.5 CPU clock cycles per 64-byte vector block**.
-- **Formal Verification in Lean 4**: Key algebraic symmetries, involutions, and topological properties are formalized and computer-checked in **Lean 4** with strictly **0 `sorry` statements** across all 33 proof modules (`PRZM/*.lean`).
+- **Formal Verification in Lean 4**: Key algebraic symmetries, involutions, and topological properties are formalized and computer-checked in **Lean 4** with strictly **0 `sorry` statements** across all 33 proof modules (`proofs/PRZM/*.lean` and `proofs/*.lean`).
 - **Non-Archimedean $p$-Adic Match Finding**: Level 3/4 match finding replaces linear hash chains with ultrametric Hensel lifting, achieving a **2.03x search speedup** with zero false candidate dismissals.
 
 ---
@@ -25,7 +25,7 @@ przm/
 ├── decompress.go, compress.go        // High-level compression and decompression streams
 ├── c/                                // Standalone Pure C99/C11 line-rate decompressor (libprzm_dec)
 ├── simd/                             // Hardware SIMD vectorization (AVX2, AVX-512, NEON)
-├── PRZM/                             // Formal mathematical specifications and Lean 4 proofs
+├── proofs/                           // Formal mathematical specifications and Lean 4 proofs
 └── .agents/                          // AI assistant guidelines and protocols
 ```
 
