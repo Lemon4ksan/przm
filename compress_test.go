@@ -56,7 +56,7 @@ func TestCompressStrideTabular(t *testing.T) {
 	// 16-byte fixed struct rows with recurring column values
 	record := []byte{0x01, 0x00, 0x00, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0x10, 0x20, 0x30, 0x40, 0xFE, 0xED, 0xBE, 0xEF}
 	src := make([]byte, 16*300)
-	for i := 0; i < 300; i++ {
+	for i := range 300 {
 		copy(src[i*16:], record)
 		src[i*16] = byte(i & 0xFF) // slight variation in ID
 	}

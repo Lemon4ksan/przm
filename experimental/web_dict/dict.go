@@ -130,16 +130,16 @@ func ParseItem(s string) (Item, error) {
 		if len(paramStr) == 0 {
 			continue
 		}
-		pEq := strings.IndexByte(paramStr, '=')
-		if pEq == -1 {
+		before, after, ok := strings.Cut(paramStr, "=")
+		if !ok {
 			// Parameter without value is boolean true (?1)
 			item.Parameters = append(item.Parameters, Parameter{
 				Key:   paramStr,
 				Value: Item{Type: TypeBoolean, BoolVal: true},
 			})
 		} else {
-			pKey := strings.TrimSpace(paramStr[:pEq])
-			pValStr := strings.TrimSpace(paramStr[pEq+1:])
+			pKey := strings.TrimSpace(before)
+			pValStr := strings.TrimSpace(after)
 			pVal, err := ParseItem(pValStr)
 			if err != nil {
 				return Item{}, err

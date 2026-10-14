@@ -58,7 +58,7 @@ func init() {
 	for _, b := range []byte("{}[]()<>() :;,.\"'`=+-*/%&|^!~? \t\r\n\\") {
 		SheafSyntaxTable[b] = 1
 	}
-	for b := 0; b < 256; b++ {
+	for b := range 256 {
 		if SheafSyntaxTable[b] == 1 {
 			SheafContextTable[b] = 0
 		} else if b >= 'a' && b <= 'z' {
@@ -305,7 +305,7 @@ func (m *Mixer) saddBranchless(features uint8, delta int8) uint64 {
 
 	// Unrolled 8 lanes: compiles directly to branchless register shifts and CMOV instructions.
 	// Strictly operates inside registers; 0 memory accesses.
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		cur := int32(int8(w >> (8 * i)))
 		act := int32((features >> i) & 1)
 		next := cur + d*act

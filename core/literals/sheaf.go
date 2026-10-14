@@ -28,7 +28,7 @@ func initSheafLUTs() {
 		syntaxSet[c] = true
 	}
 
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		b := byte(i)
 		sheafMode0LUT[b] = classifyByteMode0(b, wsSet, syntaxSet)
 		sheafMode1LUT[b] = classifyByteMode1(b)
@@ -168,7 +168,7 @@ func runReconstitutionLoop(dst []byte, uLit int, f0, f1, f2, f3 []byte, l0, l1, 
 	var ptr0, ptr1, ptr2, ptr3 int
 	var p1, p2 byte
 
-	for j := 0; j < uLit; j++ {
+	for j := range uLit {
 		var c uint8
 		if mode < 3 {
 			c = ContextClassify(p1, mode)

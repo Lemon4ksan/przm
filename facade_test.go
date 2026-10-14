@@ -149,10 +149,10 @@ func TestConcurrentCompressDecompress(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
 
-	for g := 0; g < numGoroutines; g++ {
+	for g := range numGoroutines {
 		go func(gid int) {
 			defer wg.Done()
-			for it := 0; it < itersPerGoroutine; it++ {
+			for it := range itersPerGoroutine {
 				payloadSize := 256 + ((gid*31 + it*17) % 8192)
 				buf := make([]byte, payloadSize)
 				for i := range buf {

@@ -546,14 +546,14 @@ func TestGPUMultiGoroutineConcurrentStress(t *testing.T) {
 
 	errCh := make(chan error, numWorkers*itersPerWorker)
 
-	for w := 0; w < numWorkers; w++ {
+	for w := range numWorkers {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
 			payloadSize := (1 + (workerID % 4)) * 1024 * 1024 // 1MB to 4MB
 			data := bytes.Repeat([]byte(fmt.Sprintf("CONCURRENT_WORKER_%d_STRESS_BLOCK_", workerID)), payloadSize/32)
 
-			for iter := 0; iter < itersPerWorker; iter++ {
+			for iter := range itersPerWorker {
 				matches, prof, err := comp.MatchLZ77(data)
 				if err != nil {
 					errCh <- fmt.Errorf("worker %d iter %d failed: %w", workerID, iter, err)

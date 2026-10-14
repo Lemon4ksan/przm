@@ -23,7 +23,7 @@ const (
 
 func TestGF256FieldAxioms(t *testing.T) {
 	// Test multiplicative identity
-	for a := 0; a < 256; a++ {
+	for a := range 256 {
 		ua := uint8(a)
 		if mul := GF256Mul(ua, 1); mul != ua {
 			t.Fatalf("Multiplicative identity failed: %d * 1 = %d", ua, mul)
@@ -53,14 +53,14 @@ func TestGF256FieldAxioms(t *testing.T) {
 	for a := 1; a < 256; a++ {
 		ua := uint8(a)
 		var seen [256]bool
-		for x := 0; x < 256; x++ {
+		for x := range 256 {
 			y := GF256Mul(ua, uint8(x))
 			if seen[y] {
 				t.Fatalf("Multiplication by %d is not injective: collision on %d", ua, y)
 			}
 			seen[y] = true
 		}
-		for i := 0; i < 256; i++ {
+		for i := range 256 {
 			if !seen[i] {
 				t.Fatalf("Multiplication by %d is not surjective: missed %d", ua, i)
 			}
@@ -70,7 +70,7 @@ func TestGF256FieldAxioms(t *testing.T) {
 
 func TestGFNIIdentity(t *testing.T) {
 	// Affine transform with identity matrix and imm8 = 0 must be identity
-	for x := 0; x < 256; x++ {
+	for x := range 256 {
 		ux := uint8(x)
 		res := GF2P8AffineQB(ux, GF2IdentityMatrix, 0)
 		if res != ux {
@@ -92,7 +92,7 @@ func TestGFNIInvertMatrix(t *testing.T) {
 	}
 
 	// Verify A * A_inv = I
-	for x := 0; x < 256; x++ {
+	for x := range 256 {
 		ux := uint8(x)
 		y := GF2P8AffineQB(ux, AESAffineMatrix, 0)
 		z := GF2P8AffineQB(y, invAES, 0)
@@ -109,7 +109,7 @@ func TestGFNIAffineRoundtrip(t *testing.T) {
 		t.Fatalf("InvertAffineTransform failed on AES parameters")
 	}
 
-	for x := 0; x < 256; x++ {
+	for x := range 256 {
 		ux := uint8(x)
 		forward := GF2P8AffineQB(ux, AESAffineMatrix, AESAffineImm8)
 		reverse := GF2P8AffineQB(forward, invMat, invImm)
@@ -124,14 +124,14 @@ func TestVBMI_VPERMB(t *testing.T) {
 	var indices [64]byte
 	var dst [64]byte
 
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		src[i] = byte(i * 3)
 		indices[i] = byte(63 - i) // Reverse permutation
 	}
 
 	VPERMB(dst[:], indices[:], src[:])
 
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		expected := src[63-i]
 		if dst[i] != expected {
 			t.Fatalf("VPERMB mismatch at %d: got %d, expected %d", i, dst[i], expected)
@@ -158,7 +158,7 @@ func TestVBMI_VPERMI2B(t *testing.T) {
 	var indices [64]byte
 	var dst [64]byte
 
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		src0[i] = byte(i)
 		src1[i] = byte(100 + i)
 		if i%2 == 0 {
@@ -170,7 +170,7 @@ func TestVBMI_VPERMI2B(t *testing.T) {
 
 	VPERMI2B(dst[:], indices[:], src0[:], src1[:])
 
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		var expected byte
 		if i%2 == 0 {
 			expected = src0[i]
@@ -188,7 +188,7 @@ func TestMicroDecompressorBlock64(t *testing.T) {
 	r := rand.New(rand.NewSource(42))
 	permSlice := r.Perm(64)
 	var perm [64]uint8
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		perm[i] = uint8(permSlice[i])
 	}
 
@@ -198,7 +198,7 @@ func TestMicroDecompressorBlock64(t *testing.T) {
 	}
 
 	var original [64]byte
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		original[i] = byte(i*17 + 5)
 	}
 
@@ -220,7 +220,7 @@ func TestMicroDecompressorBlock64(t *testing.T) {
 func TestMicroDecompressorStreamFuzzing(t *testing.T) {
 	r := rand.New(rand.NewSource(1337))
 
-	for iter := 0; iter < 10; iter++ {
+	for iter := range 10 {
 		// Generate random invertible 8x8 GF(2) matrix
 		var mat uint64
 		for {
@@ -233,7 +233,7 @@ func TestMicroDecompressorStreamFuzzing(t *testing.T) {
 
 		permSlice := r.Perm(64)
 		var perm [64]uint8
-		for i := 0; i < 64; i++ {
+		for i := range 64 {
 			perm[i] = uint8(permSlice[i])
 		}
 
@@ -262,7 +262,7 @@ func TestMicroDecompressorStreamFuzzing(t *testing.T) {
 
 func TestNibbleCodec64(t *testing.T) {
 	var original [64]byte
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		original[i] = byte(i & 0x0F) // valid 4-bit nibbles
 	}
 
@@ -279,7 +279,7 @@ func TestNibbleCodec64(t *testing.T) {
 
 func TestZeroAllocations(t *testing.T) {
 	var perm [64]uint8
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		perm[i] = uint8(63 - i)
 	}
 
@@ -334,14 +334,14 @@ func TestZeroAllocations(t *testing.T) {
 
 func BenchmarkDecompressBlock64(b *testing.B) {
 	var perm [64]uint8
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		perm[i] = uint8(63 - i)
 	}
 	md, _ := NewMicroDecompressor(AESAffineMatrix, AESAffineImm8, perm)
 
 	var src [64]byte
 	var dst [64]byte
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		src[i] = byte(i)
 	}
 
@@ -356,7 +356,7 @@ func BenchmarkDecompressBlock64(b *testing.B) {
 
 func BenchmarkDecompressStream64KB(b *testing.B) {
 	var perm [64]uint8
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		perm[i] = uint8(63 - i)
 	}
 	md, _ := NewMicroDecompressor(AESAffineMatrix, AESAffineImm8, perm)
@@ -364,7 +364,7 @@ func BenchmarkDecompressStream64KB(b *testing.B) {
 	size := 65536
 	src := make([]byte, size)
 	dst := make([]byte, size)
-	for i := 0; i < size; i++ {
+	for i := range size {
 		src[i] = byte(i)
 	}
 
@@ -379,7 +379,7 @@ func BenchmarkDecompressStream64KB(b *testing.B) {
 
 func BenchmarkDecompressStream1MB(b *testing.B) {
 	var perm [64]uint8
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		perm[i] = uint8(63 - i)
 	}
 	md, _ := NewMicroDecompressor(AESAffineMatrix, AESAffineImm8, perm)
@@ -387,7 +387,7 @@ func BenchmarkDecompressStream1MB(b *testing.B) {
 	size := 1024 * 1024
 	src := make([]byte, size)
 	dst := make([]byte, size)
-	for i := 0; i < size; i++ {
+	for i := range size {
 		src[i] = byte(i)
 	}
 
@@ -404,7 +404,7 @@ func BenchmarkVPERMB_64B(b *testing.B) {
 	var src [64]byte
 	var idx [64]byte
 	var dst [64]byte
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		src[i] = byte(i)
 		idx[i] = byte(63 - i)
 	}
@@ -421,7 +421,7 @@ func BenchmarkVPERMB_64B(b *testing.B) {
 func BenchmarkGF2P8AffineQB_64B(b *testing.B) {
 	var src [64]byte
 	var dst [64]byte
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		src[i] = byte(i)
 	}
 
@@ -430,7 +430,7 @@ func BenchmarkGF2P8AffineQB_64B(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		for j := 0; j < 64; j++ {
+		for j := range 64 {
 			dst[j] = GF2P8AffineQB(src[j], AESAffineMatrix, AESAffineImm8)
 		}
 	}
@@ -439,7 +439,7 @@ func BenchmarkGF2P8AffineQB_64B(b *testing.B) {
 func BenchmarkNibbleDecode64(b *testing.B) {
 	var src [32]byte
 	var dst [64]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		src[i] = byte(i)
 	}
 
@@ -456,7 +456,7 @@ func BenchmarkGF256Mul_64B(b *testing.B) {
 	var srcA [64]byte
 	var srcB [64]byte
 	var dst [64]byte
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		srcA[i] = byte(i*7 + 1)
 		srcB[i] = byte(i*13 + 3)
 	}
@@ -466,7 +466,7 @@ func BenchmarkGF256Mul_64B(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		for j := 0; j < 64; j++ {
+		for j := range 64 {
 			dst[j] = GF256Mul(srcA[j], srcB[j])
 		}
 	}

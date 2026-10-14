@@ -295,10 +295,7 @@ func analyzeSingleFrame(src []byte, frameIdx int) (*FrameAnalysis, error) {
 	sec2Offset := sec1Offset + sec1Size
 	sec3Offset := sec2Offset + hdr.CmdStreamSize
 	sec4Offset := sec3Offset + hdr.OffsetStreamSize
-	sec4Size := len(src) - sec4Offset
-	if sec4Size < 0 {
-		sec4Size = 0
-	}
+	sec4Size := max(len(src)-sec4Offset, 0)
 
 	// Section 1: Header / Directory
 	headerBytes := sec2Offset

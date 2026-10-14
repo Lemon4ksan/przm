@@ -107,7 +107,7 @@ func checkHighEntropy(src []byte) bool {
 	}
 	var seen [256]bool
 	unique := 0
-	for i := 0; i < sampleLen; i++ {
+	for i := range sampleLen {
 		b := src[i]
 		if !seen[b] {
 			seen[b] = true
@@ -127,10 +127,7 @@ func detectStride(src []byte) uint32 {
 		return 1
 	}
 	candidates := []uint32{4, 8, 12, 16, 20, 24, 28, 32, 40, 48, 56, 64, 72, 80, 96, 128}
-	sampleLen := len(src)
-	if sampleLen > 2048 {
-		sampleLen = 2048
-	}
+	sampleLen := min(len(src), 2048)
 	var bestStride uint32 = 1
 	var maxMatches int
 	for _, s := range candidates {
@@ -218,7 +215,7 @@ func computeBlockLiteralCosts(block []byte, litCost []uint32) {
 		freq[b]++
 	}
 	invN := 1.0 / float64(len(block))
-	for b := 0; b < 256; b++ {
+	for b := range 256 {
 		litCost[b] = calcLitCost(freq[b], invN)
 	}
 }
@@ -273,15 +270,12 @@ func relaxLiteral(i int, s *CompressorScratchpad, block []byte) {
 // relaxRepeat tests match against the 4 repeat distance registers.
 func relaxRepeat(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, bMin int) {
 	curCost := s.nodes[i].cost
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		d := s.nodes[i].r[k]
 		if d == 0 || globalPos < int(d) {
 			continue
 		}
-		maxL := bSize - i
-		if maxL > MaxMatchLength {
-			maxL = MaxMatchLength
-		}
+		maxL := min(bSize-i, MaxMatchLength)
 		if maxL < bMin {
 			continue
 		}
@@ -316,15 +310,12 @@ func relaxRepeatSublengths(i, k int, d uint32, L, bMin int, curCost uint32, s *C
 // relaxBrackets probes direct fused bracket distances (1..8, 16, 32).
 func relaxBrackets(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, bMin int) {
 	curCost := s.nodes[i].cost
-	for b := 0; b < 10; b++ {
+	for b := range 10 {
 		d := distance.BracketDistance(b)
 		if globalPos < int(d) {
 			continue
 		}
-		maxL := bSize - i
-		if maxL > 15+bMin {
-			maxL = 15 + bMin
-		}
+		maxL := min(bSize-i, 15+bMin)
 		if maxL < bMin {
 			continue
 		}
@@ -347,10 +338,7 @@ func relaxStride(i int, s *CompressorScratchpad, src []byte, globalPos, bSize in
 		if globalPos < int(d) {
 			continue
 		}
-		maxL := bSize - i
-		if maxL > 15+bMin {
-			maxL = 15 + bMin
-		}
+		maxL := min(bSize-i, 15+bMin)
 		if maxL < bMin {
 			continue
 		}
@@ -404,10 +392,7 @@ func relaxHash8Match(i int, s *CompressorScratchpad, src []byte, globalPos, bSiz
 	if d8 == 0 || d8 > uint32(maxDist) {
 		return
 	}
-	maxL := bSize - i
-	if maxL > MaxMatchLength {
-		maxL = MaxMatchLength
-	}
+	maxL := min(bSize-i, MaxMatchLength)
 	L8 := measureMatchLength(src, globalPos, candPos8, maxL)
 	if L8 >= 8 {
 		relaxExplicitSublengths(i, d8, L8, bMin, curCost, s)
@@ -430,10 +415,7 @@ func relaxHash4Matches(
 		if d == 0 || d > uint32(maxDist) {
 			break
 		}
-		maxL := bSize - i
-		if maxL > MaxMatchLength {
-			maxL = MaxMatchLength
-		}
+		maxL := min(bSize-i, MaxMatchLength)
 		L := measureMatchLength(src, globalPos, candPos, maxL)
 		if L >= 4 {
 			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
@@ -489,7 +471,7 @@ func solveBlockTrellis(
 ) {
 	block := src[blockStart : blockStart+bSize]
 	computeBlockLiteralCosts(block, s.litCost[:])
-	for i := 0; i < bSize; i++ {
+	for i := range bSize {
 		globalPos := blockStart + i
 		if i+4 <= bSize {
 			insertHash(src, globalPos, i, s)
@@ -637,10 +619,7 @@ func executeCompressionPipeline(
 	pos := 0
 
 	for pos < u {
-		bSize := u - pos
-		if bSize > MaxBlockHorizon {
-			bSize = MaxBlockHorizon
-		}
+		bSize := min(u-pos, MaxBlockHorizon)
 		initBlockNodes(s, bSize, initialR)
 		solveBlockTrellis(src, pos, bSize, maxDist, params.stride, int(params.bMin), depthLimit, level, s)
 		edges := backtrackEdges(s, bSize)

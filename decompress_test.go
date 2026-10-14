@@ -62,7 +62,7 @@ func TestStandardFusedRaw(t *testing.T) {
 	if n != 25 {
 		t.Fatalf("expected 25 bytes, got %d", n)
 	}
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		if dst[i] != 'A' {
 			t.Fatalf("byte mismatch at %d: %c != 'A'", i, dst[i])
 		}
@@ -359,11 +359,11 @@ func TestDecompressConcurrentZeroAlloc(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
 
-	for g := 0; g < numGoroutines; g++ {
+	for g := range numGoroutines {
 		go func(gid int) {
 			defer wg.Done()
 			dst := make([]byte, len(sampleTabular)+256)
-			for i := 0; i < itersPerGoroutine; i++ {
+			for i := range itersPerGoroutine {
 				frame := testFrames[(gid+i)%len(testFrames)]
 				dec, err := DecompressTo(frame, dst)
 				if err != nil {
@@ -441,7 +441,7 @@ func TestCycle3BoundaryFuzz(t *testing.T) {
 
 	// Part 1: Truncation at every single byte boundary (0 to len(frame)-1)
 	for fIdx, f := range frames {
-		for cutoff := 0; cutoff < len(f); cutoff++ {
+		for cutoff := range f {
 			trunc := f[:cutoff]
 			_, decErr := DecompressTo(trunc, dst)
 			if decErr == nil {
@@ -471,7 +471,7 @@ func TestCycle3BoundaryFuzz(t *testing.T) {
 	}
 
 	// Part 2: Corrupted magic bytes
-	for b := 0; b < 256; b++ {
+	for b := range 256 {
 		if byte(b) == 'P' {
 			continue
 		}

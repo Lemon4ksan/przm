@@ -186,7 +186,7 @@ func renderSectionTreemap(w io.Writer, f *FrameAnalysis) {
 	fillSymbols := []string{"■", "▓", "▒", "░"}
 
 	allocated := 0
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		width := int(math.Round(float64(secSizes[i]) / float64(totalCompressed) * float64(barWidth)))
 		if secSizes[i] > 0 && width == 0 {
 			width = 1
@@ -437,7 +437,7 @@ func renderCommandDump(w io.Writer, f *FrameAnalysis, limit int) {
 	)
 
 	count := min(limit, len(f.Commands))
-	for i := 0; i < count; i++ {
+	for i := range count {
 		cmd := f.Commands[i]
 		fmt.Fprintf(w, "│ #%-5d │ %s%-6s%s │ %-24s │ %s%-54s%s\n",
 			cmd.Offset,

@@ -10,6 +10,7 @@ package literals
 import (
 	"encoding/binary"
 	"errors"
+	"slices"
 	"sync/atomic"
 
 	"github.com/lemon4ksan/foundation/generic"
@@ -110,7 +111,7 @@ func NormalizeFrequencies(counts []int, freq []uint16) error {
 func adjustFrequencySum(counts []int, freq []uint16, sum uint16) error {
 	diff := int(4096) - int(sum)
 	if diff > 0 {
-		for i := 0; i < diff; i++ {
+		for range diff {
 			bestSym := -1
 			bestCount := -1
 			for s, c := range counts {
@@ -140,8 +141,8 @@ func adjustFrequencySum(counts []int, freq []uint16, sum uint16) error {
 // EncodeJointNibbleFreq serializes the 16x16 joint nibble frequency matrix.
 func EncodeJointNibbleFreq(freq []uint16, buf []byte) []byte {
 	var rowMask uint16
-	for h := 0; h < 16; h++ {
-		for l := 0; l < 16; l++ {
+	for h := range 16 {
+		for l := range 16 {
 			if freq[(h<<4)|l] > 0 {
 				rowMask |= (1 << h)
 				break
@@ -150,18 +151,18 @@ func EncodeJointNibbleFreq(freq []uint16, buf []byte) []byte {
 	}
 
 	buf = binary.LittleEndian.AppendUint16(buf, rowMask)
-	for h := 0; h < 16; h++ {
+	for h := range 16 {
 		if (rowMask & (1 << h)) == 0 {
 			continue
 		}
 		var colMask uint16
-		for l := 0; l < 16; l++ {
+		for l := range 16 {
 			if freq[(h<<4)|l] > 0 {
 				colMask |= (1 << l)
 			}
 		}
 		buf = binary.LittleEndian.AppendUint16(buf, colMask)
-		for l := 0; l < 16; l++ {
+		for l := range 16 {
 			if (colMask & (1 << l)) == 0 {
 				continue
 			}
@@ -195,7 +196,7 @@ func DecodeJointNibbleFreq(src []byte, pos *int, freq []uint16) error {
 	}
 	var sum uint32
 
-	for h := 0; h < 16; h++ {
+	for h := range 16 {
 		if (rowMask & (1 << h)) == 0 {
 			continue
 		}
@@ -222,7 +223,7 @@ func DecodeJointNibbleFreq(src []byte, pos *int, freq []uint16) error {
 func decodeRowWeights(src []byte, p *int, colMask uint16, h int, freq []uint16) (uint32, error) {
 	var rowSum uint32
 	pos := *p
-	for l := 0; l < 16; l++ {
+	for l := range 16 {
 		if (colMask & (1 << l)) == 0 {
 			continue
 		}
@@ -255,10 +256,10 @@ func decodeRowWeights(src []byte, p *int, colMask uint16, h int, freq []uint16) 
 // BuildVansTable creates CDF and symbol lookup tables from frequencies.
 func BuildVansTable(freq, cdf []uint16, lookup []byte) {
 	var cum uint16
-	for s := 0; s < 256; s++ {
+	for s := range 256 {
 		cdf[s] = cum
 		f := freq[s]
-		for k := uint16(0); k < f; k++ {
+		for k := range f {
 			lookup[cum+k] = byte(s)
 		}
 		cum += f
@@ -274,9 +275,9 @@ func EncodeVANS4x(src []byte, freq []uint16) ([]byte, error) {
 	x := [4]uint32{65536, 65536, 65536, 65536}
 	var streamBuf []byte
 
-	for i := len(src) - 1; i >= 0; i-- {
+	for i, s := range slices.Backward(src) {
 		lane := i & 3
-		s := src[i]
+
 		f := uint32(freq[s])
 		c := uint32(cdf[s])
 		if f == 0 {
@@ -291,11 +292,11 @@ func EncodeVANS4x(src []byte, freq []uint16) ([]byte, error) {
 	}
 
 	out := EncodeJointNibbleFreq(freq, nil)
-	for j := 0; j < 4; j++ {
+	for j := range 4 {
 		out = binary.LittleEndian.AppendUint32(out, x[j])
 	}
-	for i := len(streamBuf) - 1; i >= 0; i-- {
-		out = append(out, streamBuf[i])
+	for _, s := range slices.Backward(streamBuf) {
+		out = append(out, s)
 	}
 	return out, nil
 }
@@ -330,13 +331,13 @@ func DecodeVANS4x(src, dst []byte, uLen int, lookup []byte, freq, cdf []uint16) 
 		return ErrCorruptedFrame
 	}
 	var x [4]uint32
-	for j := 0; j < 4; j++ {
+	for j := range 4 {
 		x[j] = binary.LittleEndian.Uint32(src[pos : pos+4])
 		pos += 4
 	}
 
 	p := pos
-	for i := 0; i < uLen; i++ {
+	for i := range uLen {
 		lane := i & 3
 		slot := x[lane] & 4095
 		sym := lookup[slot]
@@ -366,7 +367,7 @@ func PackNibblePlanes(src []byte) []byte {
 	binary.LittleEndian.PutUint32(out[0:4], uint32(n))
 	binary.LittleEndian.PutUint32(out[4:8], uint32(nLow))
 
-	for j := 0; j < nLow; j++ {
+	for j := range nLow {
 		p0 := src[2*j] & 0x0F
 		var p1 byte
 		if 2*j+1 < n {
@@ -439,7 +440,7 @@ func unpackHighNibbleRLE(rleSrc, dst []byte, n int) error {
 }
 
 func mergeLowNibbles(lowSrc, dst []byte, n, nLow int) {
-	for j := 0; j < nLow; j++ {
+	for j := range nLow {
 		pair := lowSrc[j]
 		dst[2*j] |= (pair >> 4)
 		if 2*j+1 < n {
@@ -456,13 +457,13 @@ func PackEtaleSheaf(src []byte, mode uint8) ([]byte, error) {
 	}
 	uLit := len(src)
 	var l [4]int
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		l[k] = len(fibers[k])
 	}
 
 	var encodedFibers [4][]byte
 	var e [4]int
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		if l[k] == 0 {
 			e[k] = 0
 			continue
@@ -499,11 +500,11 @@ func assembleSheafContainer(uLit int, mode uint8, l, e [4]int, encodedFibers [4]
 	out[2] = 0x01
 	out[3] = VansFlag4X | VansFlagCtxSheaf | ((mode & 0x0F) << 4)
 	binary.LittleEndian.PutUint32(out[4:8], uint32(uLit))
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		binary.LittleEndian.PutUint32(out[8+k*4:12+k*4], uint32(l[k]))
 		binary.LittleEndian.PutUint32(out[24+k*4:28+k*4], uint32(e[k]))
 	}
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		if e[k] > 0 {
 			out = append(out, encodedFibers[k]...)
 		}
@@ -598,7 +599,7 @@ func unpackEtaleSheaf(s4, dst []byte, uLit int, fiberBuf []byte, s *Scratchpad) 
 
 	var l, e [4]int
 	var sumL int
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		l[k] = int(binary.LittleEndian.Uint32(s4[8+k*4 : 12+k*4]))
 		e[k] = int(binary.LittleEndian.Uint32(s4[24+k*4 : 28+k*4]))
 		sumL += l[k]
@@ -615,7 +616,7 @@ func unpackEtaleSheaf(s4, dst []byte, uLit int, fiberBuf []byte, s *Scratchpad) 
 
 func validateAndDecodeFibers(s4, dst []byte, uLit int, mode uint8, l, e [4]int, fiberBuf []byte, s *Scratchpad) error {
 	pos := 40
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		if l[k] == 0 && e[k] != 0 {
 			return ErrCorruptedFrame
 		}
@@ -640,7 +641,7 @@ func decodeAndReconstituteFibers(
 	fiberDstOffset := 0
 	var fiberSlices [4][]byte
 
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		if l[k] == 0 {
 			fiberSlices[k] = nil
 			continue

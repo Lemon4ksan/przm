@@ -183,7 +183,7 @@ func splitSpecialOp(opcode byte, src []byte, sp *int, v []byte, vp *int) error {
 
 func consumeVarint(src []byte, sp *int, v []byte, vp *int) error {
 	p, outP := *sp, *vp
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		if p >= len(src) || outP >= len(v) {
 			return ErrCorruptedFrame
 		}
@@ -344,7 +344,7 @@ func demuxStepExt(op byte, meta []byte, mp *int, vStream []byte, vp *int, dst []
 
 func copyLEB128Raw(src []byte, sp *int, dst []byte, dp *int) error {
 	p, outP := *sp, *dp
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		if p >= len(src) || outP >= len(dst) {
 			return ErrCorruptedFrame
 		}

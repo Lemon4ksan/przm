@@ -37,54 +37,18 @@ var (
 
 // DistExtraBits contains the extra bit count for each of the 49 distance brackets.
 var DistExtraBits = [49]uint8{
-	0,
-	0,
-	0,
-	0,
-	1,
-	1,
-	2,
-	2,
-	3,
-	3,
-	4,
-	4,
-	5,
-	5,
-	6,
-	6,
-	7,
-	7,
-	8,
-	8,
-	9,
-	9,
-	10,
-	10,
-	11,
-	11,
-	12,
-	12,
-	13,
-	13,
-	14,
-	14,
-	15,
-	15,
-	16,
-	16,
-	17,
-	17,
-	18,
-	18,
-	19,
-	19,
-	20,
-	20,
-	21,
-	21,
-	22,
-	22,
+	0, 0, 0, 0,
+	1, 1, 2, 2,
+	3, 3, 4, 4,
+	5, 5, 6, 6,
+	7, 7, 8, 8,
+	9, 9, 10, 10,
+	11, 11, 12, 12,
+	13, 13, 14, 14,
+	15, 15, 16, 16,
+	17, 17, 18, 18,
+	19, 19, 20, 20,
+	21, 21, 22, 22,
 	24,
 }
 
@@ -138,13 +102,13 @@ var (
 
 func initDistModels4() {
 	distModels4Once.Do(func() {
-		for c := 0; c < 4; c++ {
+		for c := range 4 {
 			var cum uint16
-			for s := 0; s < 64; s++ {
+			for s := range 64 {
 				f := StaticDistFreq4[c][s]
 				distModels4[c].Freq[s] = f
 				distModels4[c].CDF[s] = cum
-				for k := uint16(0); k < f; k++ {
+				for k := range f {
 					distModels4[c].Lookup[cum+k] = uint8(s)
 				}
 				cum += f
@@ -334,7 +298,7 @@ func DecodeDistClusteredVans(src []byte, dstCodes []uint8, n int) error {
 	pos := 5
 	var prev uint8
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ctx := ContextDist(prev)
 		slot := x & 4095
 		s := distModels4[ctx].Lookup[slot]
@@ -455,7 +419,7 @@ func (q *LocalityQueue) Get(idx int) uint32 {
 
 // Find searches for distance d in the LRU queue. If found, returns index [0..3] and true.
 func (q *LocalityQueue) Find(d uint32) (int, bool) {
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		if q.R[k] == d {
 			return k, true
 		}
@@ -503,7 +467,7 @@ func (q *LocalityQueue) UpdateExplicit(d uint32) {
 
 // AdvanceLocalityQueue updates the locality queue with an uncompressed match distance.
 func AdvanceLocalityQueue(q *LocalityQueue, dist uint32) {
-	for k := 0; k < 4; k++ {
+	for k := range 4 {
 		if q.R[k] == dist {
 			q.UpdateRepeat(k)
 			return
@@ -672,7 +636,7 @@ func decodeCodeStream(codeStream []byte, matchCount int, dstCodes []byte) error 
 func decodeDistanceVarints(codes []byte, matchCount int, extraStream, dst []byte, origLen int) (int, error) {
 	reader := BitReader{Buf: extraStream}
 	dstPos := 0
-	for i := 0; i < matchCount; i++ {
+	for i := range matchCount {
 		code := codes[i]
 		if code > 48 {
 			return 0, ErrCorruptedFrame

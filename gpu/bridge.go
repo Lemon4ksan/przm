@@ -1171,10 +1171,7 @@ func (g *GPUCompressor) matchLZ77Single(src []byte) ([]LZ77Match, GPUProfile, er
 		return nil, GPUProfile{}, cuCheck("cuStreamSynchronize totalCount", r)
 	}
 
-	totalMatches := binary.LittleEndian.Uint32(slot.hTotalCountSlice)
-	if totalMatches > uint32(n) {
-		totalMatches = uint32(n)
-	}
+	totalMatches := min(binary.LittleEndian.Uint32(slot.hTotalCountSlice), uint32(n))
 
 	// 5. Egress DMA Phase
 	if totalMatches > 0 {
@@ -1378,7 +1375,7 @@ func (g *GPUCompressor) matchLZ77StreamingLocked(src []byte, chunkSize int) ([]L
 	}
 
 	// Step 3: Pipelined loop across all chunks k = 0 .. numChunks-1
-	for k := 0; k < numChunks; k++ {
+	for k := range numChunks {
 		sIdx := k % 2
 		slot := &g.slots[sIdx]
 		start := k * chunkSize
@@ -1394,10 +1391,7 @@ func (g *GPUCompressor) matchLZ77StreamingLocked(src []byte, chunkSize int) ([]L
 		// At this point, any previous egress on this slot (chunk k-2) is 100% completed
 		unpackPending(sIdx)
 
-		totalMatches := binary.LittleEndian.Uint32(slot.hTotalCountSlice)
-		if totalMatches > uint32(chunkLen) {
-			totalMatches = uint32(chunkLen)
-		}
+		totalMatches := min(binary.LittleEndian.Uint32(slot.hTotalCountSlice), uint32(chunkLen))
 
 		var tIngress, tKernel float32
 		cuEventElapsedTime.Call(uintptr(unsafe.Pointer(&tIngress)), slot.evStart, slot.evIngress)
@@ -1545,10 +1539,7 @@ func (g *GPUCompressor) MatchLZ77(src []byte) ([]LZ77Match, GPUProfile, error) {
 }
 
 func (g *GPUCompressor) ensureTokenizerCap(slot *pipelineSlot, n int) error {
-	numChunks := (n + TokenizerTileSize - 1) / TokenizerTileSize
-	if numChunks < 1 {
-		numChunks = 1
-	}
+	numChunks := max((n+TokenizerTileSize-1)/TokenizerTileSize, 1)
 
 	if numChunks > slot.dTokChunksAlloc {
 		if slot.dChunkCmds != 0 {
@@ -1713,10 +1704,7 @@ func (g *GPUCompressor) ensureTokenizerCap(slot *pipelineSlot, n int) error {
 
 func (g *GPUCompressor) launchTokenizerKernels(slot *pipelineSlot, n int) error {
 	stream := slot.stream
-	numChunks := (n + TokenizerTileSize - 1) / TokenizerTileSize
-	if numChunks < 1 {
-		numChunks = 1
-	}
+	numChunks := max((n+TokenizerTileSize-1)/TokenizerTileSize, 1)
 
 	inLen64 := uint64(n)
 	tileSize32 := uint32(TokenizerTileSize)
@@ -1776,10 +1764,7 @@ func (g *GPUCompressor) launchTokenizerKernels(slot *pipelineSlot, n int) error 
 	cuEventRecord.Call(slot.evTokPass2, stream)
 
 	// Pass 3: przm_tokenizer_gather_kernel
-	gatherGridSize := numChunks
-	if gatherGridSize > 256 {
-		gatherGridSize = 256
-	}
+	gatherGridSize := min(numChunks, 256)
 	pGather := []uintptr{
 		uintptr(unsafe.Pointer(&slot.dChunkCmds)),
 		uintptr(unsafe.Pointer(&slot.dChunkOffs)),

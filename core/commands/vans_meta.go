@@ -28,13 +28,13 @@ type MetaModel struct {
 var metaModels8 [8]MetaModel
 
 func init() {
-	for c := 0; c < 8; c++ {
+	for c := range 8 {
 		var cum uint16
-		for s := 0; s < 256; s++ {
+		for s := range 256 {
 			f := staticMetaFreq8[c][s]
 			metaModels8[c].Freq[s] = f
 			metaModels8[c].CDF[s] = cum
-			for j := uint16(0); j < f; j++ {
+			for j := range f {
 				metaModels8[c].Lookup[cum+j] = byte(s)
 			}
 			cum += f
@@ -151,7 +151,7 @@ func writeVansHeader(dst []byte, n uint32, x *[4]uint32) {
 
 func writeReversedStream(dst, stream []byte) {
 	slen := len(stream)
-	for i := 0; i < slen; i++ {
+	for i := range slen {
 		dst[i] = stream[slen-1-i]
 	}
 }
@@ -181,7 +181,7 @@ func DecodeVansMeta8(src, dst []byte, expectedLen int) error {
 	pos := 24
 	var prevSym byte
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		lane := i & 3
 		ctx := ContextMeta(prevSym)
 		slot := x[lane] & 4095

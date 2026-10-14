@@ -23,7 +23,7 @@ func TestMixer_InitialState(t *testing.T) {
 	}
 
 	// Prediction with 0 weights should be exactly 32768 (50% probability) for any features
-	for f := 0; f < 256; f++ {
+	for f := range 256 {
 		p := m.Predict(uint8(f))
 		if p != 32768 {
 			t.Fatalf("features %d: expected prediction 32768, got %d", f, p)
@@ -33,7 +33,7 @@ func TestMixer_InitialState(t *testing.T) {
 
 func TestMixer_FeatureExtraction(t *testing.T) {
 	// Bias bit must always be 1
-	for b1 := 0; b1 < 256; b1++ {
+	for b1 := range 256 {
 		for b2 := 0; b2 < 256; b2 += 37 {
 			f := ExtractFeatures(uint8(b1), uint8(b2))
 			if f&1 != 1 {
@@ -95,19 +95,19 @@ func TestMixer_FeatureExtraction(t *testing.T) {
 func TestMixer_DotProductBitExact(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 
-	for iter := 0; iter < 1000; iter++ {
+	for range 1000 {
 		var weights [8]int8
-		for i := 0; i < 8; i++ {
+		for i := range 8 {
 			weights[i] = int8(rng.Intn(256) - 128)
 		}
 		m := NewMixerWithWeights(weights)
 
-		for f := 0; f < 256; f++ {
+		for f := range 256 {
 			features := uint8(f)
 
 			// Reference scalar dot product
 			var expected int32
-			for i := 0; i < 8; i++ {
+			for i := range 8 {
 				if (features>>i)&1 == 1 {
 					expected += int32(weights[i])
 				}
@@ -165,11 +165,11 @@ func TestMixer_SaturationBounds(t *testing.T) {
 	m := NewMixer()
 
 	// Verify all 8 lanes can saturate independently to WeightMax (127) and WeightMin (-128)
-	for lane := 0; lane < 8; lane++ {
+	for lane := range 8 {
 		features := uint8(1 << lane)
 
 		// Train on bit 1 until saturated
-		for step := 0; step < 200; step++ {
+		for range 200 {
 			m.Update(features, 1, 64)
 			w := m.Weights()
 			if w[lane] < WeightMin || w[lane] > WeightMax {
@@ -181,7 +181,7 @@ func TestMixer_SaturationBounds(t *testing.T) {
 		}
 
 		// Train on bit 0 until saturated
-		for step := 0; step < 300; step++ {
+		for range 300 {
 			m.Update(features, 0, 64)
 			w := m.Weights()
 			if w[lane] < WeightMin || w[lane] > WeightMax {
@@ -198,7 +198,7 @@ func TestMixer_ConvergenceRepeatingStream(t *testing.T) {
 	// Test 1: Constant 1 stream converges to P > 60000
 	m1 := NewMixer()
 	features := uint8(0b00000001) // Bias feature
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		m1.Update(features, 1, 32)
 	}
 	p1 := m1.Predict(features)
@@ -208,7 +208,7 @@ func TestMixer_ConvergenceRepeatingStream(t *testing.T) {
 
 	// Test 2: Constant 0 stream converges to P < 5000
 	m0 := NewMixer()
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		m0.Update(features, 0, 32)
 	}
 	p0 := m0.Predict(features)
@@ -223,7 +223,7 @@ func TestMixer_ConvergenceRepeatingStream(t *testing.T) {
 	correctPredictions := 0
 	totalSteps := 200
 
-	for i := 0; i < totalSteps; i++ {
+	for i := range totalSteps {
 		nextBit := uint8(i % 2)
 		f := ExtractFeatures(b1, b2)
 
@@ -259,7 +259,7 @@ func TestMixer_SyntheticContextSheafFiberStream(t *testing.T) {
 	var correctCount, totalCount int
 
 	// Repeat pattern 10 times to evaluate online learning convergence
-	for epoch := 0; epoch < 10; epoch++ {
+	for epoch := range 10 {
 		for _, cur := range stream {
 			isSyntax := SheafSyntaxTable[cur]
 			targetBit := uint8(0)
@@ -329,7 +329,7 @@ func TestMixer_DeterministicReplay(t *testing.T) {
 	rng1 := rand.New(rand.NewSource(12345))
 	rng2 := rand.New(rand.NewSource(12345))
 
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		f1 := uint8(rng1.Intn(256))
 		bit1 := uint8(rng1.Intn(2))
 		lr1 := uint8(rng1.Intn(64) + 1)

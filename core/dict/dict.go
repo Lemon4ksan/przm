@@ -43,7 +43,7 @@ func readLEB128Internal(b []byte, pos *int) (uint32, error) {
 	var res uint32
 	var shift uint
 	p := *pos
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		if p >= len(b) {
 			return 0, ErrCorrupted
 		}

@@ -21,8 +21,8 @@ var (
 
 func init() {
 	// Initialize GF(2^8) multiplication table modulo 0x11B
-	for a := 0; a < 256; a++ {
-		for b := 0; b < 256; b++ {
+	for a := range 256 {
+		for b := range 256 {
 			gf256MulTable[a][b] = gf256MulSlow(uint8(a), uint8(b))
 		}
 	}
@@ -44,7 +44,7 @@ func gf256MulSlow(a, b uint8) uint8 {
 	var res uint8
 	currA := a
 	currB := b
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		if (currB & 1) != 0 {
 			res ^= currA
 		}
@@ -75,7 +75,7 @@ func GF256Inv(a uint8) uint8 {
 // row_i = uint8((matrix >> (8 * i)) & 0xFF).
 func GF2P8AffineQB(x uint8, matrix uint64, imm8 uint8) uint8 {
 	var y uint8
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		rowI := uint8((matrix >> (8 * i)) & 0xFF)
 		parity := uint8(bits.OnesCount8(x&rowI) & 1)
 		bBit := (imm8 >> i) & 1
@@ -98,12 +98,12 @@ func InvertGF2Matrix8x8(matrix uint64) (uint64, bool) {
 	var a [8]uint8
 	var inv [8]uint8
 
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		a[i] = uint8((matrix >> (8 * i)) & 0xFF)
 		inv[i] = 1 << i // Augmented with 8x8 identity matrix
 	}
 
-	for col := 0; col < 8; col++ {
+	for col := range 8 {
 		// Find pivot in current column
 		pivotRow := -1
 		for row := col; row < 8; row++ {
@@ -123,7 +123,7 @@ func InvertGF2Matrix8x8(matrix uint64) (uint64, bool) {
 		}
 
 		// Eliminate other rows
-		for row := 0; row < 8; row++ {
+		for row := range 8 {
 			if row != col && ((a[row] & (1 << col)) != 0) {
 				a[row] ^= a[col]
 				inv[row] ^= inv[col]
@@ -132,7 +132,7 @@ func InvertGF2Matrix8x8(matrix uint64) (uint64, bool) {
 	}
 
 	var res uint64
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		res |= uint64(inv[i]) << (8 * i)
 	}
 	return res, true
@@ -159,7 +159,7 @@ func VPERMB(dst, indices, src []byte) {
 	_ = indices[63]
 	_ = src[63]
 
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		dst[i] = src[indices[i]&63]
 	}
 }
@@ -172,7 +172,7 @@ func VPERMI2B(dst, indices, src0, src1 []byte) {
 	_ = src0[63]
 	_ = src1[63]
 
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		idx := indices[i]
 		if (idx & 64) == 0 {
 			dst[i] = src0[idx&63]
@@ -188,7 +188,7 @@ func InvertPermutation64(perm [64]uint8) ([64]uint8, error) {
 	var inv [64]uint8
 	var seen uint64
 
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		v := perm[i]
 		if v >= 64 {
 			return inv, errors.New("permutation index out of range [0, 63]")
@@ -249,7 +249,7 @@ func NewMicroDecompressor(matrix uint64, imm8 uint8, perm [64]uint8) (*MicroDeco
 	}
 
 	// Precompute 256-entry in-register affine tables
-	for x := 0; x < 256; x++ {
+	for x := range 256 {
 		md.ForwardTable[x] = GF2P8AffineQB(uint8(x), matrix, imm8)
 		md.InverseTable[x] = GF2P8AffineQB(uint8(x), invMatrix, invImm8)
 	}
@@ -302,7 +302,7 @@ func (md *MicroDecompressor) DecompressBlock64(dst, src []byte) {
 func (md *MicroDecompressor) DecompressStream(dst, src []byte) {
 	n := len(src)
 	blocks := n / 64
-	for b := 0; b < blocks; b++ {
+	for b := range blocks {
 		offset := b * 64
 		md.DecompressBlock64(dst[offset:offset+64], src[offset:offset+64])
 	}
@@ -313,7 +313,7 @@ func (md *MicroDecompressor) DecompressStream(dst, src []byte) {
 func (md *MicroDecompressor) CompressStream(dst, src []byte) {
 	n := len(src)
 	blocks := n / 64
-	for b := 0; b < blocks; b++ {
+	for b := range blocks {
 		offset := b * 64
 		md.CompressBlock64(dst[offset:offset+64], src[offset:offset+64])
 	}
@@ -328,7 +328,7 @@ func NibbleDecode64(dst, src []byte) {
 	_ = dst[63]
 	_ = src[31]
 
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		b := src[i]
 		dst[2*i] = b & 0x0F
 		dst[2*i+1] = (b >> 4) & 0x0F
@@ -341,7 +341,7 @@ func NibbleEncode64(dst, src []byte) {
 	_ = dst[31]
 	_ = src[63]
 
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		dst[i] = (src[2*i] & 0x0F) | ((src[2*i+1] & 0x0F) << 4)
 	}
 }

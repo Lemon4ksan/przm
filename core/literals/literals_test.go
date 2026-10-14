@@ -121,7 +121,7 @@ func TestJointNibbleFrequencyMatrix(t *testing.T) {
 	if pos != len(buf) {
 		t.Fatalf("Expected pos %d, got %d", len(buf), pos)
 	}
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		if decodedFreq[i] != freq[i] {
 			t.Fatalf("Frequency mismatch for symbol %d: expected %d, got %d", i, freq[i], decodedFreq[i])
 		}

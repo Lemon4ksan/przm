@@ -22,7 +22,7 @@ func TestDistanceToCodeAndBack(t *testing.T) {
 		}
 	}
 
-	for c := uint8(0); c < 49; c++ {
+	for c := range uint8(49) {
 		nb := DistExtraBits[c]
 		base := DistBase[c]
 
@@ -92,7 +92,7 @@ func TestClusteredVANSRoundtrip(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	n := 256
 	codes := make([]uint8, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		codes[i] = uint8(rng.Intn(49))
 	}
 
