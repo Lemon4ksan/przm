@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2026 Lemon4ksan All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
 /* RFC 7932 122,784-byte Static Dictionary Data for Pure C */
 #ifndef PRZM_BROTLI_DATA_H
 #define PRZM_BROTLI_DATA_H

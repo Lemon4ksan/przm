@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Package distance provides match distance encoding, decoding, 49-bracket codebook mapping,
 // Clustered V-ANS Mode 12 entropy coding, 4-register locality queue, and offset stream unpacking.
 // Strictly conforms to the Clean Room Specification with zero dynamic memory allocation.
@@ -33,7 +37,55 @@ var (
 
 // DistExtraBits contains the extra bit count for each of the 49 distance brackets.
 var DistExtraBits = [49]uint8{
-	0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22, 24,
+	0,
+	0,
+	0,
+	0,
+	1,
+	1,
+	2,
+	2,
+	3,
+	3,
+	4,
+	4,
+	5,
+	5,
+	6,
+	6,
+	7,
+	7,
+	8,
+	8,
+	9,
+	9,
+	10,
+	10,
+	11,
+	11,
+	12,
+	12,
+	13,
+	13,
+	14,
+	14,
+	15,
+	15,
+	16,
+	16,
+	17,
+	17,
+	18,
+	18,
+	19,
+	19,
+	20,
+	20,
+	21,
+	21,
+	22,
+	22,
+	24,
 }
 
 // DistBase contains the base distance for each of the 49 distance brackets.
@@ -151,7 +203,7 @@ func DistanceToCode(d uint32) (code uint8, extra uint32, nb uint8) {
 		nb = uint8(bits.Len32(u) - 2)
 		half := uint32((u >> nb) & 1)
 		code = 2*nb + 2 + uint8(half)
-		base := (2 + half) << nb + 1
+		base := (2+half)<<nb + 1
 		extra = d - base
 		return code, extra, nb
 	}
@@ -617,7 +669,7 @@ func decodeCodeStream(codeStream []byte, matchCount int, dstCodes []byte) error 
 }
 
 // decodeDistanceVarints reads extra bits and formats output varints.
-func decodeDistanceVarints(codes []byte, matchCount int, extraStream []byte, dst []byte, origLen int) (int, error) {
+func decodeDistanceVarints(codes []byte, matchCount int, extraStream, dst []byte, origLen int) (int, error) {
 	reader := BitReader{Buf: extraStream}
 	dstPos := 0
 	for i := 0; i < matchCount; i++ {
@@ -737,7 +789,8 @@ func varintLen(d uint32) int {
 
 // assemblePrefixContainer serializes the container header and appends CodeStream and ExtraBitsStream.
 func assemblePrefixContainer(mode byte, origVarintLen, matchCount, codeLen uint32,
-	codeStream, extraStream, dst []byte) (int, error) {
+	codeStream, extraStream, dst []byte,
+) (int, error) {
 	var hSize int
 	switch mode {
 	case ModeDistancePrefix:

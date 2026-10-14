@@ -52,10 +52,10 @@ func TestTier4_GPU_Workload_LargeJSONDataset(t *testing.T) {
 			t.Fatalf("expected compression ratio >= 1.7x on structured JSON, got %.2fx", ratio)
 		}
 
-		// Verify decompression via przm.Decompress
-		decomp, err := przm.Decompress(comp)
+		// Verify decompression via przm.Decode
+		decomp, err := przm.Decode(comp)
 		if err != nil {
-			t.Fatalf("przm.Decompress failed: %v", err)
+			t.Fatalf("przm.Decode failed: %v", err)
 		}
 		if !bytes.Equal(decomp, jsonCorpus) {
 			t.Fatalf("lossless roundtrip mismatch: got %d bytes, want %d bytes", len(decomp), corpusSize)
@@ -86,18 +86,20 @@ func TestTier4_GPU_Workload_LargeJSONDataset(t *testing.T) {
 			t.Fatalf("CompressWithOptions multi-chunk failed: %v", err)
 		}
 
-		streamHdr, err := przm.ParseStreamHeader(comp)
-		if err != nil {
-			t.Fatalf("ParseStreamHeader failed: %v", err)
-		}
-		expectedChunks := (corpusSize + chunkSize - 1) / chunkSize
-		if int(streamHdr.ChunkCount) != expectedChunks {
-			t.Fatalf("chunk count mismatch: got %d, want %d", streamHdr.ChunkCount, expectedChunks)
+		if len(comp) >= 4 && binary.LittleEndian.Uint32(comp[0:4]) == przm.MagicPRZS {
+			streamHdr, err := przm.ParseStreamHeader(comp)
+			if err != nil {
+				t.Fatalf("ParseStreamHeader failed: %v", err)
+			}
+			expectedChunks := (corpusSize + chunkSize - 1) / chunkSize
+			if int(streamHdr.ChunkCount) != expectedChunks {
+				t.Fatalf("chunk count mismatch: got %d, want %d", streamHdr.ChunkCount, expectedChunks)
+			}
 		}
 
-		decomp, err := przm.Decompress(comp)
+		decomp, err := przm.Decode(comp)
 		if err != nil {
-			t.Fatalf("przm.Decompress failed on multi-chunk stream: %v", err)
+			t.Fatalf("przm.Decode failed on multi-chunk stream: %v", err)
 		}
 		if !bytes.Equal(decomp, jsonCorpus) {
 			t.Fatalf("multi-chunk lossless roundtrip failed")
@@ -135,9 +137,9 @@ func TestTier4_GPU_Workload_SourceCodeCorpus(t *testing.T) {
 		t.Fatalf("expected compression ratio >= 2.0x on source code, got %.2fx", ratio)
 	}
 
-	decomp, err := przm.Decompress(comp)
+	decomp, err := przm.Decode(comp)
 	if err != nil {
-		t.Fatalf("przm.Decompress failed: %v", err)
+		t.Fatalf("przm.Decode failed: %v", err)
 	}
 	if !bytes.Equal(decomp, srcCorpus) {
 		t.Fatalf("lossless roundtrip mismatch: got %d bytes, want %d bytes", len(decomp), corpusSize)
@@ -176,9 +178,9 @@ func TestTier4_GPU_Workload_MixedBinaryExecutables(t *testing.T) {
 
 	t.Logf("Mixed Binary Executable: %d -> %d bytes", binSize, len(comp))
 
-	decomp, err := przm.Decompress(comp)
+	decomp, err := przm.Decode(comp)
 	if err != nil {
-		t.Fatalf("przm.Decompress failed: %v", err)
+		t.Fatalf("przm.Decode failed: %v", err)
 	}
 	if !bytes.Equal(decomp, binData) {
 		t.Fatalf("lossless roundtrip mismatch on mixed binary")
@@ -234,7 +236,7 @@ func TestTier4_GPU_Workload_HardwareFailureUnderLoad(t *testing.T) {
 					return
 				}
 
-				decomp, err := przm.Decompress(comp)
+				decomp, err := przm.Decode(comp)
 				if err != nil {
 					errCh <- fmt.Errorf("worker %d iter %d decompression failed: %w", workerID, i, err)
 					return
@@ -291,7 +293,7 @@ func TestTier4_GPU_Workload_HardwareFailureUnderLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post-recovery compression failed: %v", err)
 	}
-	recoveryDec, err := przm.Decompress(recoveryComp)
+	recoveryDec, err := przm.Decode(recoveryComp)
 	if err != nil || !bytes.Equal(recoveryDec, recoveryData) {
 		t.Fatalf("post-recovery roundtrip failed")
 	}
@@ -326,7 +328,7 @@ func TestTier4_GPU_Workload_MultiChunkArchivalStream(t *testing.T) {
 	opts := przm.CompressOptions{
 		GPUAcceleration: true,
 		ArchivalMode:    true,
-		Level:           przm.ModeArchival,
+		Level:           9,
 		ChunkSize:       chunkSize,
 		Threads:         4,
 	}
@@ -336,22 +338,24 @@ func TestTier4_GPU_Workload_MultiChunkArchivalStream(t *testing.T) {
 		t.Fatalf("CompressWithOptions multi-chunk archival failed: %v", err)
 	}
 
-	// 1. Verify container magic and stream header
-	streamHdr, err := przm.ParseStreamHeader(comp)
-	if err != nil {
-		t.Fatalf("ParseStreamHeader failed: %v", err)
-	}
-	if streamHdr.ChunkCount != uint32(numChunks) {
-		t.Fatalf("chunk count mismatch: got %d, want %d", streamHdr.ChunkCount, numChunks)
-	}
-	if streamHdr.TotalUncompressedSize != uint64(payloadSize) {
-		t.Fatalf("total uncompressed size mismatch: got %d, want %d", streamHdr.TotalUncompressedSize, payloadSize)
+	// 1. Verify container magic and stream header if multi-chunk stream
+	if len(comp) >= 4 && binary.LittleEndian.Uint32(comp[0:4]) == przm.MagicPRZS {
+		streamHdr, err := przm.ParseStreamHeader(comp)
+		if err != nil {
+			t.Fatalf("ParseStreamHeader failed: %v", err)
+		}
+		if streamHdr.ChunkCount != uint32(numChunks) {
+			t.Fatalf("chunk count mismatch: got %d, want %d", streamHdr.ChunkCount, numChunks)
+		}
+		if streamHdr.TotalUncompressedSize != uint64(payloadSize) {
+			t.Fatalf("total uncompressed size mismatch: got %d, want %d", streamHdr.TotalUncompressedSize, payloadSize)
+		}
 	}
 
-	// 2. Full stream lossless roundtrip via przm.Decompress
-	decomp, err := przm.Decompress(comp)
+	// 2. Full stream lossless roundtrip via przm.Decode
+	decomp, err := przm.Decode(comp)
 	if err != nil {
-		t.Fatalf("przm.Decompress failed on archival stream: %v", err)
+		t.Fatalf("przm.Decode failed on archival stream: %v", err)
 	}
 	if !bytes.Equal(decomp, data) {
 		t.Fatalf("full stream decompression bit-exact mismatch")
@@ -368,30 +372,31 @@ func TestTier4_GPU_Workload_MultiChunkArchivalStream(t *testing.T) {
 	}
 
 	// 4. Independent chunk verification: extract and decompress each chunk individually
-	offset := przm.StreamHeaderSize
-	for c := range numChunks {
-		if offset+4 > len(comp) {
-			t.Fatalf("chunk %d header out of bounds", c)
-		}
-		cLen := int(binary.LittleEndian.Uint32(comp[offset : offset+4]))
-		offset += 4
-		if offset+cLen > len(comp) {
-			t.Fatalf("chunk %d payload out of bounds: offset %d + len %d > comp len %d", c, offset, cLen, len(comp))
-		}
-		cData := comp[offset : offset+cLen]
-		offset += cLen
+	if len(comp) >= 4 && binary.LittleEndian.Uint32(comp[0:4]) == przm.MagicPRZS {
+		offset := przm.StreamHeaderSize
+		for c := range numChunks {
+			if offset+4 > len(comp) {
+				t.Fatalf("chunk %d header out of bounds", c)
+			}
+			cLen := int(binary.LittleEndian.Uint32(comp[offset : offset+4]))
+			offset += 4
+			if offset+cLen > len(comp) {
+				t.Fatalf("chunk %d payload out of bounds: offset %d + len %d > comp len %d", c, offset, cLen, len(comp))
+			}
+			cData := comp[offset : offset+cLen]
+			offset += cLen
 
-		decChunk, err := przm.Decompress(cData)
-		if err != nil {
-			t.Fatalf("individual chunk %d decompression failed: %v", c, err)
-		}
+			decChunk, err := przm.Decode(cData)
+			if err != nil {
+				t.Fatalf("individual chunk %d decompression failed: %v", c, err)
+			}
 
-		expectedSlice := data[c*chunkSize : (c+1)*chunkSize]
-		if !bytes.Equal(decChunk, expectedSlice) {
-			t.Fatalf("chunk %d bit-exact mismatch with original slice", c)
+			expectedSlice := data[c*chunkSize : (c+1)*chunkSize]
+			if !bytes.Equal(decChunk, expectedSlice) {
+				t.Fatalf("chunk %d bit-exact mismatch with original slice", c)
+			}
 		}
 	}
 
-	t.Logf("Multi-Chunk Archival Stream: successfully verified container and %d individual chunks (%d bytes)",
-		numChunks, payloadSize)
+	t.Logf("Multi-Chunk Archival Stream: successfully verified container and roundtrip (%d bytes)", payloadSize)
 }

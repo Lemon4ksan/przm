@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Package clean_core provides 3-way split command stream encoding, decoding, and Mode 8 container framing.
 // Strictly adheres to the Clean Room Specification with zero dynamic memory allocation.
 package clean_core

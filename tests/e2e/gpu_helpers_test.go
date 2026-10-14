@@ -89,9 +89,9 @@ func assertGPUPipelineRoundtrip(t *testing.T, src []byte, level int) ([]byte, gp
 	}
 
 	// Step 3: Decompress and verify bit-exact lossless roundtrip
-	decompressed, err := przm.Decompress(compressed)
+	decompressed, err := przm.Decode(compressed)
 	if err != nil {
-		t.Fatalf("przm.Decompress failed: %v", err)
+		t.Fatalf("przm.Decode failed: %v", err)
 	}
 
 	if !bytes.Equal(decompressed, src) {

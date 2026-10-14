@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Package commands provides command splitting, Mode 8 framing, and 8-context Bigram V-ANS entropy encoding and decoding.
 // Strictly adheres to the Clean Room Specification with zero dynamic memory allocations.
 package commands
@@ -97,7 +101,7 @@ func encodeEmptyHeader(dst []byte) (int, error) {
 	return 24, nil
 }
 
-func encodeVansMeta8Internal(src, dst []byte, streamBuf []byte) (int, error) {
+func encodeVansMeta8Internal(src, dst, streamBuf []byte) (int, error) {
 	n := len(src)
 	var streamPtr int
 	x := [4]uint32{65536, 65536, 65536, 65536}

@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Package literals provides 4-lane interleaved V-ANS coding, SIMD nibble planes,
 // joint nibble frequency matrix encoding/decoding, and Étale Sheaf literal fiber compression.
 // Strictly adheres to the Clean Room Specification with zero dynamic memory allocation.
@@ -29,7 +33,6 @@ var (
 
 // Scratchpad provides reusable intermediate memory for zero allocations.
 type Scratchpad struct {
-	lits       [8 * 1024 * 1024]byte
 	fiberBuf   [8 * 1024 * 1024]byte
 	vansLookup [4096]byte
 	vansFreq   [256]uint16
@@ -250,7 +253,7 @@ func decodeRowWeights(src []byte, p *int, colMask uint16, h int, freq []uint16) 
 }
 
 // BuildVansTable creates CDF and symbol lookup tables from frequencies.
-func BuildVansTable(freq []uint16, cdf []uint16, lookup []byte) {
+func BuildVansTable(freq, cdf []uint16, lookup []byte) {
 	var cum uint16
 	for s := 0; s < 256; s++ {
 		cdf[s] = cum
@@ -268,7 +271,7 @@ func EncodeVANS4x(src []byte, freq []uint16) ([]byte, error) {
 	var lookup [4096]byte
 	BuildVansTable(freq, cdf[:], lookup[:])
 
-	var x [4]uint32 = [4]uint32{65536, 65536, 65536, 65536}
+	x := [4]uint32{65536, 65536, 65536, 65536}
 	var streamBuf []byte
 
 	for i := len(src) - 1; i >= 0; i-- {
@@ -303,7 +306,7 @@ func EncodeVans4x(src []byte, freq []uint16) ([]byte, error) {
 }
 
 // DecodeVans4x decompresses a 4-lane interleaved V-ANS payload into dst using temporary scratch tables.
-func DecodeVans4x(src []byte, dst []byte, uLen int) error {
+func DecodeVans4x(src, dst []byte, uLen int) error {
 	if uLen == 0 {
 		return nil
 	}
@@ -313,7 +316,7 @@ func DecodeVans4x(src []byte, dst []byte, uLen int) error {
 }
 
 // DecodeVANS4x decompresses a 4-lane interleaved V-ANS payload into dst.
-func DecodeVANS4x(src []byte, dst []byte, uLen int, lookup []byte, freq, cdf []uint16) error {
+func DecodeVANS4x(src, dst []byte, uLen int, lookup []byte, freq, cdf []uint16) error {
 	if uLen == 0 {
 		return nil
 	}
@@ -358,7 +361,8 @@ func DecodeVANS4x(src []byte, dst []byte, uLen int, lookup []byte, freq, cdf []u
 func PackNibblePlanes(src []byte) []byte {
 	n := len(src)
 	nLow := (n + 1) / 2
-	out := make([]byte, 8+nLow)
+	rleTokens := encodeHighNibbleRLE(src)
+	out := make([]byte, 8+nLow, 8+nLow+len(rleTokens))
 	binary.LittleEndian.PutUint32(out[0:4], uint32(n))
 	binary.LittleEndian.PutUint32(out[4:8], uint32(nLow))
 
@@ -371,7 +375,6 @@ func PackNibblePlanes(src []byte) []byte {
 		out[8+j] = (p0 << 4) | p1
 	}
 
-	rleTokens := encodeHighNibbleRLE(src)
 	return append(out, rleTokens...)
 }
 
@@ -393,7 +396,7 @@ func encodeHighNibbleRLE(src []byte) []byte {
 }
 
 // UnpackNibblePlanes restores literals from SIMD low and high nibble planes.
-func UnpackNibblePlanes(src []byte, dst []byte, uLen int) error {
+func UnpackNibblePlanes(src, dst []byte, uLen int) error {
 	if len(src) < 8 {
 		return ErrCorruptedFrame
 	}
@@ -550,7 +553,14 @@ func UnpackSection4Literals(s4 []byte, l4 int, litsBuf, fiberBuf []byte) ([]byte
 			}
 			return litsBuf[:uLen], nil
 		}
-		if err := DecodeVANS4x(s4[8:l4], litsBuf[:uLen], uLen, s.vansLookup[:], s.vansFreq[:], s.vansCDF[:]); err != nil {
+		if err := DecodeVANS4x(
+			s4[8:l4],
+			litsBuf[:uLen],
+			uLen,
+			s.vansLookup[:],
+			s.vansFreq[:],
+			s.vansCDF[:],
+		); err != nil {
 			return nil, err
 		}
 		return litsBuf[:uLen], nil
@@ -618,7 +628,14 @@ func validateAndDecodeFibers(s4, dst []byte, uLit int, mode uint8, l, e [4]int, 
 	return decodeAndReconstituteFibers(s4, dst, uLit, mode, l, e, fiberBuf, s)
 }
 
-func decodeAndReconstituteFibers(s4, dst []byte, uLit int, mode uint8, l, e [4]int, fiberBuf []byte, s *Scratchpad) error {
+func decodeAndReconstituteFibers(
+	s4, dst []byte,
+	uLit int,
+	mode uint8,
+	l, e [4]int,
+	fiberBuf []byte,
+	s *Scratchpad,
+) error {
 	pos := 40
 	fiberDstOffset := 0
 	var fiberSlices [4][]byte

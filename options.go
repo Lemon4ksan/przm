@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package przm
 
 import (
@@ -28,6 +32,7 @@ type Options struct {
 	RawDict            []byte
 	DictID             uint32
 	GPUAcceleration    bool
+	ChunkSize          int
 }
 
 // CompressOptions is an alias for Options to maintain full backwards compatibility.
@@ -53,10 +58,14 @@ func WithDictDesc(desc *DictionaryDesc) Option {
 }
 
 // WithWindowBits sets the sliding window horizon exponent (log2).
-func WithWindowBits(bits int) Option { return func(o *Options) { o.WindowBits = bits; o.WindowLog = bits } }
+func WithWindowBits(bits int) Option {
+	return func(o *Options) { o.WindowBits = bits; o.WindowLog = bits }
+}
 
 // WithWindowLog sets the window logarithm.
-func WithWindowLog(wLog int) Option { return func(o *Options) { o.WindowLog = wLog; o.WindowBits = wLog } }
+func WithWindowLog(wLog int) Option {
+	return func(o *Options) { o.WindowLog = wLog; o.WindowBits = wLog }
+}
 
 // WithThreads configures concurrency for multi-block compression pipelines.
 func WithThreads(threads int) Option { return func(o *Options) { o.Threads = threads } }
@@ -65,7 +74,12 @@ func WithThreads(threads int) Option { return func(o *Options) { o.Threads = thr
 func WithArchivalMode(archival bool) Option { return func(o *Options) { o.ArchivalMode = archival } }
 
 // WithStandardStreamOnly restricts output strictly to standard framing.
-func WithStandardStreamOnly(standard bool) Option { return func(o *Options) { o.StandardStreamOnly = standard } }
+func WithStandardStreamOnly(standard bool) Option {
+	return func(o *Options) { o.StandardStreamOnly = standard }
+}
+
+// WithChunkSize configures the chunk size for multi-chunk streaming/GPU pipelines.
+func WithChunkSize(chunkSize int) Option { return func(o *Options) { o.ChunkSize = chunkSize } }
 
 // WithGPUAcceleration toggles GPU acceleration preference.
 func WithGPUAcceleration(gpu ...bool) Option {
@@ -129,8 +143,12 @@ func applySingleOption(cfg *Options, opt any) {
 }
 
 func syncWindowParameters(cfg *Options) {
-	if cfg.WindowLog > 0 && cfg.WindowBits == 18 { cfg.WindowBits = cfg.WindowLog }
-	if cfg.WindowBits > 0 && cfg.WindowLog == 0 { cfg.WindowLog = cfg.WindowBits }
+	if cfg.WindowLog > 0 && cfg.WindowBits == 18 {
+		cfg.WindowBits = cfg.WindowLog
+	}
+	if cfg.WindowBits > 0 && cfg.WindowLog == 0 {
+		cfg.WindowLog = cfg.WindowBits
+	}
 }
 
 // DictEntry represents an entry within an external dictionary.
@@ -192,4 +210,3 @@ func GetRawDictionary(id uint32) []byte {
 	defer rawDictMu.RUnlock()
 	return rawDictRegistry[id]
 }
-

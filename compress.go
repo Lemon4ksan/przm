@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package przm
 
 import (
@@ -5,6 +9,7 @@ import (
 	"math"
 
 	"github.com/lemon4ksan/foundation/generic"
+
 	"github.com/lemon4ksan/przm/core/commands"
 	"github.com/lemon4ksan/przm/core/distance"
 	"github.com/lemon4ksan/przm/core/literals"
@@ -26,13 +31,20 @@ const (
 // selectSearchDepth scales match discovery effort strictly with user-specified compression level.
 func selectSearchDepth(level int) int {
 	switch {
-	case level <= 1: return 2
-	case level <= 3: return 4
-	case level <= 5: return 8
-	case level <= 7: return 16
-	case level <= 9: return 32
-	case level <= 10: return 64
-	default: return 128
+	case level <= 1:
+		return 2
+	case level <= 3:
+		return 4
+	case level <= 5:
+		return 8
+	case level <= 7:
+		return 16
+	case level <= 9:
+		return 32
+	case level <= 10:
+		return 64
+	default:
+		return 128
 	}
 }
 
@@ -45,7 +57,6 @@ type TrellisNode struct {
 
 // CompressorScratchpad holds cache-resident tables and working memory for compression.
 type CompressorScratchpad struct {
-	head3       [MaxHashBuckets]int32
 	head4       [MaxHashBuckets]int32
 	head8       [MaxHashBuckets]int32
 	prevPos     [MaxWindowHorizon]int32
@@ -59,7 +70,7 @@ type CompressorScratchpad struct {
 	edgesBuffer [MaxBlockHorizon]commands.TrellisEdge
 }
 
-var compScratchPool = generic.NewPool[CompressorScratchpad](func() *CompressorScratchpad {
+var compScratchPool = generic.NewPool(func() *CompressorScratchpad {
 	return new(CompressorScratchpad)
 })
 
@@ -90,10 +101,7 @@ func AnalyzeInput(src []byte) AnalysisParams {
 
 // checkHighEntropy inspects a sample for high uncompressed byte diversity.
 func checkHighEntropy(src []byte) bool {
-	sampleLen := len(src)
-	if sampleLen > 512 {
-		sampleLen = 512
-	}
+	sampleLen := min(len(src), 512)
 	if sampleLen < 64 {
 		return false
 	}
@@ -152,16 +160,17 @@ func countStrideMatches(src []byte, s, sampleLen int) int {
 // selectWindowLog computes optimal window logarithm based on buffer size.
 func selectWindowLog(u int) uint32 {
 	switch {
-	case u <= 1024: return 10
-	case u <= 4096: return 12
-	case u <= 16384: return 14
-	case u <= 65536: return 16
-	default: return 18
+	case u <= 1024:
+		return 10
+	case u <= 4096:
+		return 12
+	case u <= 16384:
+		return 14
+	case u <= 65536:
+		return 16
+	default:
+		return 18
 	}
-}
-
-func hash3(src []byte, p int) uint16 {
-	return uint16(((uint32(src[p]) | (uint32(src[p+1]) << 8) | (uint32(src[p+2]) << 16)) * HashMultiplier32) >> 16)
 }
 
 func hash4(src []byte, p int) uint16 {
@@ -270,10 +279,16 @@ func relaxRepeat(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, b
 			continue
 		}
 		maxL := bSize - i
-		if maxL > MaxMatchLength { maxL = MaxMatchLength }
-		if maxL < bMin { continue }
+		if maxL > MaxMatchLength {
+			maxL = MaxMatchLength
+		}
+		if maxL < bMin {
+			continue
+		}
 		L := measureMatchLength(src, globalPos, globalPos-int(d), maxL)
-		if L < bMin { continue }
+		if L < bMin {
+			continue
+		}
 		relaxRepeatSublengths(i, k, d, L, bMin, curCost, s)
 	}
 }
@@ -287,7 +302,13 @@ func relaxRepeatSublengths(i, k int, d uint32, L, bMin int, curCost uint32, s *C
 		if cost < s.nodes[i+l].cost {
 			s.nodes[i+l].cost = cost
 			s.nodes[i+l].r = rNext
-			s.nodes[i+l].edge = commands.TrellisEdge{From: uint16(i), Length: uint16(l), Dist: d, Kind: 1, Arg: uint8(k)}
+			s.nodes[i+l].edge = commands.TrellisEdge{
+				From:   uint16(i),
+				Length: uint16(l),
+				Dist:   d,
+				Kind:   1,
+				Arg:    uint8(k),
+			}
 		}
 	}
 }
@@ -301,10 +322,16 @@ func relaxBrackets(i int, s *CompressorScratchpad, src []byte, globalPos, bSize,
 			continue
 		}
 		maxL := bSize - i
-		if maxL > 15+bMin { maxL = 15 + bMin }
-		if maxL < bMin { continue }
+		if maxL > 15+bMin {
+			maxL = 15 + bMin
+		}
+		if maxL < bMin {
+			continue
+		}
 		L := measureMatchLength(src, globalPos, globalPos-int(d), maxL)
-		if L < bMin { continue }
+		if L < bMin {
+			continue
+		}
 		relaxFixedSublengths(i, 2, uint8(b), d, L, bMin, curCost, s)
 	}
 }
@@ -321,10 +348,16 @@ func relaxStride(i int, s *CompressorScratchpad, src []byte, globalPos, bSize in
 			continue
 		}
 		maxL := bSize - i
-		if maxL > 15+bMin { maxL = 15 + bMin }
-		if maxL < bMin { continue }
+		if maxL > 15+bMin {
+			maxL = 15 + bMin
+		}
+		if maxL < bMin {
+			continue
+		}
 		L := measureMatchLength(src, globalPos, globalPos-int(d), maxL)
-		if L < bMin { continue }
+		if L < bMin {
+			continue
+		}
 		relaxFixedSublengths(i, 3, uint8(m), d, L, bMin, curCost, s)
 	}
 }
@@ -344,7 +377,12 @@ func relaxFixedSublengths(i int, kind, arg uint8, d uint32, L, bMin int, curCost
 }
 
 // relaxHashMatches queries multi-tier hash tables for sliding window matches.
-func relaxHashMatches(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, maxDist, bMin, depthLimit, level int) {
+func relaxHashMatches(
+	i int,
+	s *CompressorScratchpad,
+	src []byte,
+	globalPos, bSize, maxDist, bMin, depthLimit, level int,
+) {
 	if i+4 > bSize {
 		return
 	}
@@ -376,7 +414,13 @@ func relaxHash8Match(i int, s *CompressorScratchpad, src []byte, globalPos, bSiz
 	}
 }
 
-func relaxHash4Matches(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, maxDist, bMin, depthLimit int, curCost uint32) {
+func relaxHash4Matches(
+	i int,
+	s *CompressorScratchpad,
+	src []byte,
+	globalPos, bSize, maxDist, bMin, depthLimit int,
+	curCost uint32,
+) {
 	h4 := hash4(src, globalPos)
 	cand := s.head4[h4]
 	depth := 0
@@ -387,9 +431,13 @@ func relaxHash4Matches(i int, s *CompressorScratchpad, src []byte, globalPos, bS
 			break
 		}
 		maxL := bSize - i
-		if maxL > MaxMatchLength { maxL = MaxMatchLength }
+		if maxL > MaxMatchLength {
+			maxL = MaxMatchLength
+		}
 		L := measureMatchLength(src, globalPos, candPos, maxL)
-		if L >= 4 { relaxExplicitSublengths(i, d, L, bMin, curCost, s) }
+		if L >= 4 {
+			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
+		}
 		cand = s.prevPos[candPos&WindowHorizonMask]
 		depth++
 	}
@@ -432,13 +480,23 @@ func initBlockNodes(s *CompressorScratchpad, bSize int, initialR [4]uint32) {
 }
 
 // solveBlockTrellis runs DAG shortest-path relaxation over the 64 KiB block.
-func solveBlockTrellis(src []byte, blockStart, bSize, maxDist int, stride uint32, bMin, depthLimit, level int, s *CompressorScratchpad) {
+func solveBlockTrellis(
+	src []byte,
+	blockStart, bSize, maxDist int,
+	stride uint32,
+	bMin, depthLimit, level int,
+	s *CompressorScratchpad,
+) {
 	block := src[blockStart : blockStart+bSize]
 	computeBlockLiteralCosts(block, s.litCost[:])
 	for i := 0; i < bSize; i++ {
 		globalPos := blockStart + i
-		if i+4 <= bSize { insertHash(src, globalPos, i, s) }
-		if s.nodes[i].cost == InfinityCost { continue }
+		if i+4 <= bSize {
+			insertHash(src, globalPos, i, s)
+		}
+		if s.nodes[i].cost == InfinityCost {
+			continue
+		}
 		relaxLiteral(i, s, block)
 		relaxRepeat(i, s, src, globalPos, bSize, bMin)
 		relaxBrackets(i, s, src, globalPos, bSize, bMin)
@@ -464,7 +522,12 @@ func backtrackEdges(s *CompressorScratchpad, bSize int) []commands.TrellisEdge {
 }
 
 // packageSections dispatches unpacked stream buffers to their respective codecs.
-func packageSections(wLog uint32, cmds, lits []byte, offs []uint32, s *CompressorScratchpad) ([]byte, []byte, []byte, []byte, uint8) {
+func packageSections(
+	wLog uint32,
+	cmds, lits []byte,
+	offs []uint32,
+	s *CompressorScratchpad,
+) ([]byte, []byte, []byte, []byte, uint8) {
 	s1 := []byte{0x00, byte(wLog), 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 	s2 := commands.PackageCommandsSection(cmds)
 	s3 := distance.PackageOffsetsSection(offs, s.s3Buf[:])
@@ -540,11 +603,23 @@ func compressInternal(src []byte, opts Options) ([]byte, error) {
 }
 
 // executeCompressionPipeline parses blocks and serializes final compressed frame.
-func executeCompressionPipeline(src []byte, level int, dict []byte, params AnalysisParams, s *CompressorScratchpad) ([]byte, error) {
+func executeCompressionPipeline(
+	src []byte,
+	level int,
+	dict []byte,
+	params AnalysisParams,
+	s *CompressorScratchpad,
+) ([]byte, error) {
 	u := len(src)
-	for i := range s.head4 { s.head4[i] = -1 }
-	for i := range s.head8 { s.head8[i] = -1 }
-	for i := range s.prevPos { s.prevPos[i] = -1 }
+	for i := range s.head4 {
+		s.head4[i] = -1
+	}
+	for i := range s.head8 {
+		s.head8[i] = -1
+	}
+	for i := range s.prevPos {
+		s.prevPos[i] = -1
+	}
 
 	_ = dict // Generic dynamic dictionary injection hook
 

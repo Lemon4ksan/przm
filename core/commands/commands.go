@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Package commands provides 3-way split command stream encoding, decoding, Mode 8 framing,
 // and 8-context Bigram V-ANS entropy coding with strictly zero dynamic allocations.
 package commands
@@ -9,7 +13,7 @@ import (
 )
 
 // SplitCommands decomposes linear bytecode instructions into opStream, metaStream, and varStream.
-func SplitCommands(src []byte, op, meta, v []byte) (nOp, nM, nV int, err error) {
+func SplitCommands(src, op, meta, v []byte) (nOp, nM, nV int, err error) {
 	var srcPtr int
 	sLen := len(src)
 	for srcPtr < sLen {
@@ -377,7 +381,7 @@ func PackCommandsMode8(op, meta, v []byte, origLen int, dst []byte) (int, error)
 }
 
 // UnpackCommandsMode8 parses a Mode 8 frame, extracting origLen and substreams into op, meta, v.
-func UnpackCommandsMode8(src []byte, op, meta, v []byte) (origLen, nOp, nM, nV int, err error) {
+func UnpackCommandsMode8(src, op, meta, v []byte) (origLen, nOp, nM, nV int, err error) {
 	if len(src) < 13 || src[0] != 0x08 {
 		return 0, 0, 0, 0, ErrCorruptedFrame
 	}
@@ -445,7 +449,7 @@ func unpackSubstreamOrVans(src, dst []byte, rawLen int) (int, error) {
 }
 
 // DemultiplexCommands reconstructs the canonical command stream from tri-stream inputs.
-func DemultiplexCommands(opStream, meta, vStream []byte, dst []byte, expected int) error {
+func DemultiplexCommands(opStream, meta, vStream, dst []byte, expected int) error {
 	return JoinCommands(dst, opStream, meta, vStream, expected)
 }
 
@@ -513,7 +517,8 @@ func AppendLEB128(buf []byte, v uint32) []byte {
 
 // EmitBlockCommands generates linear bytecode tokens from the optimal Trellis path.
 func EmitBlockCommands(edges []TrellisEdge, block []byte, bMin int,
-	cmdsOut, litsOut *[]byte, offsOut *[]uint32) {
+	cmdsOut, litsOut *[]byte, offsOut *[]uint32,
+) {
 	var pendingLits []byte
 	for _, e := range edges {
 		if e.Kind == 0 {
@@ -530,7 +535,8 @@ func EmitBlockCommands(edges []TrellisEdge, block []byte, bMin int,
 }
 
 func emitMatchWithLiterals(e TrellisEdge, pendingLits *[]byte, bMin int,
-	cmdsOut, litsOut *[]byte, offsOut *[]uint32) {
+	cmdsOut, litsOut *[]byte, offsOut *[]uint32,
+) {
 	switch e.Kind {
 	case 1:
 		emitRepeatMatch(e, pendingLits, bMin, cmdsOut, litsOut)
@@ -579,7 +585,8 @@ func emitFixedMatch(op byte, e TrellisEdge, pendingLits *[]byte, bMin int, cmdsO
 }
 
 func emitExplicitMatch(e TrellisEdge, pendingLits *[]byte, bMin int,
-	cmdsOut, litsOut *[]byte, offsOut *[]uint32) {
+	cmdsOut, litsOut *[]byte, offsOut *[]uint32,
+) {
 	nLit := len(*pendingLits)
 	lMatch := int(e.Length)
 	if nLit > 15 {
@@ -612,7 +619,7 @@ func EmitLiteralRun(lits []byte, cmdsOut, litsOut *[]byte) {
 }
 
 // UnpackSection2Commands decodes Section 2 command stream according to container framing mode.
-func UnpackSection2Commands(s2 []byte, op, meta, varBuf, cmds []byte) ([]byte, error) {
+func UnpackSection2Commands(s2, op, meta, varBuf, cmds []byte) ([]byte, error) {
 	if len(s2) == 0 {
 		return nil, nil
 	}

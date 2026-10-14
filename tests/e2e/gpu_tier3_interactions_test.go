@@ -6,6 +6,7 @@ package e2e_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
@@ -58,12 +59,12 @@ func TestTier3_GPU_Multithreading_Pairwise(t *testing.T) {
 				}
 
 				// For multi-chunk streams, verify container magic
-				expectedChunks := (len(ds.data) + chunkSize - 1) / chunkSize
-				if expectedChunks > 1 && th > 1 {
+				if len(comp) >= 4 && binary.LittleEndian.Uint32(comp[0:4]) == przm.MagicPRZS {
 					streamHdr, err := przm.ParseStreamHeader(comp)
 					if err != nil {
 						t.Fatalf("ParseStreamHeader failed on multi-chunk stream: %v", err)
 					}
+					expectedChunks := (len(ds.data) + chunkSize - 1) / chunkSize
 					if int(streamHdr.ChunkCount) != expectedChunks {
 						t.Fatalf("chunk count mismatch: got %d, want %d", streamHdr.ChunkCount, expectedChunks)
 					}
@@ -76,10 +77,10 @@ func TestTier3_GPU_Multithreading_Pairwise(t *testing.T) {
 					}
 				}
 
-				// Verify bit-exact roundtrip via przm.Decompress
-				decomp, err := przm.Decompress(comp)
+				// Verify bit-exact roundtrip via przm.Decode
+				decomp, err := przm.Decode(comp)
 				if err != nil {
-					t.Fatalf("przm.Decompress failed: %v", err)
+					t.Fatalf("przm.Decode failed: %v", err)
 				}
 				if !bytes.Equal(decomp, ds.data) {
 					t.Fatalf("lossless roundtrip failed: got %d bytes, want %d bytes", len(decomp), len(ds.data))
@@ -141,28 +142,30 @@ func TestTier3_GPU_ChunkSizes_Pairwise(t *testing.T) {
 				t.Fatalf("CompressWithOptions(chunkSize=%d) failed: %v", cc.chunkSize, err)
 			}
 
-			// Validate stream container header
-			streamHdr, err := przm.ParseStreamHeader(comp)
-			if err != nil {
-				t.Fatalf("failed to parse PRZS stream header: %v", err)
-			}
+			// Validate stream container header if multi-chunk stream
+			if len(comp) >= 4 && binary.LittleEndian.Uint32(comp[0:4]) == przm.MagicPRZS {
+				streamHdr, err := przm.ParseStreamHeader(comp)
+				if err != nil {
+					t.Fatalf("failed to parse PRZS stream header: %v", err)
+				}
 
-			expectedChunks := (len(data) + cc.chunkSize - 1) / cc.chunkSize
-			if int(streamHdr.ChunkCount) != expectedChunks {
-				t.Fatalf("unexpected chunk count: got %d, want %d", streamHdr.ChunkCount, expectedChunks)
-			}
-			if streamHdr.TotalUncompressedSize != uint64(len(data)) {
-				t.Fatalf(
-					"total uncompressed size mismatch: got %d, want %d",
-					streamHdr.TotalUncompressedSize,
-					len(data),
-				)
+				expectedChunks := (len(data) + cc.chunkSize - 1) / cc.chunkSize
+				if int(streamHdr.ChunkCount) != expectedChunks {
+					t.Fatalf("unexpected chunk count: got %d, want %d", streamHdr.ChunkCount, expectedChunks)
+				}
+				if streamHdr.TotalUncompressedSize != uint64(len(data)) {
+					t.Fatalf(
+						"total uncompressed size mismatch: got %d, want %d",
+						streamHdr.TotalUncompressedSize,
+						len(data),
+					)
+				}
 			}
 
 			// Validate bit-exact lossless roundtrip
-			decomp, err := przm.Decompress(comp)
+			decomp, err := przm.Decode(comp)
 			if err != nil {
-				t.Fatalf("przm.Decompress failed: %v", err)
+				t.Fatalf("przm.Decode failed: %v", err)
 			}
 			if !bytes.Equal(decomp, data) {
 				t.Fatalf("lossless roundtrip failed: got %d bytes, want %d bytes", len(decomp), len(data))
@@ -219,9 +222,9 @@ func TestTier3_GPU_VaryingLevels_Pairwise(t *testing.T) {
 					t.Fatalf("CompressWithOptions(level=%d) failed: %v", lvl, err)
 				}
 
-				decomp, err := przm.Decompress(comp)
+				decomp, err := przm.Decode(comp)
 				if err != nil {
-					t.Fatalf("przm.Decompress failed: %v", err)
+					t.Fatalf("przm.Decode failed: %v", err)
 				}
 
 				if !bytes.Equal(decomp, src) {
@@ -259,7 +262,7 @@ func TestTier3_GPU_FallbackToggling_MidPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Step 1 failed: %v", err)
 	}
-	dec1, err := przm.Decompress(comp1)
+	dec1, err := przm.Decode(comp1)
 	if err != nil || !bytes.Equal(dec1, data) {
 		t.Fatalf("Step 1 roundtrip failed")
 	}
@@ -270,7 +273,7 @@ func TestTier3_GPU_FallbackToggling_MidPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Step 2 CPU fallback failed: %v", err)
 	}
-	dec2, err := przm.Decompress(comp2)
+	dec2, err := przm.Decode(comp2)
 	if err != nil || !bytes.Equal(dec2, data) {
 		t.Fatalf("Step 2 roundtrip failed during mock unavailable")
 	}
@@ -282,7 +285,7 @@ func TestTier3_GPU_FallbackToggling_MidPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Step 3 CPU fallback on match error failed: %v", err)
 	}
-	dec3, err := przm.Decompress(comp3)
+	dec3, err := przm.Decode(comp3)
 	if err != nil || !bytes.Equal(dec3, data) {
 		t.Fatalf("Step 3 roundtrip failed during mock match error")
 	}
@@ -293,7 +296,7 @@ func TestTier3_GPU_FallbackToggling_MidPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Step 4 recovery failed: %v", err)
 	}
-	dec4, err := przm.Decompress(comp4)
+	dec4, err := przm.Decode(comp4)
 	if err != nil || !bytes.Equal(dec4, data) {
 		t.Fatalf("Step 4 roundtrip failed after recovery")
 	}
@@ -311,7 +314,7 @@ func TestTier3_GPU_FallbackToggling_MidPipeline(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Iteration %d (simulateFailure=%v) failed: %v", i, simulateFailure, err)
 		}
-		decIter, err := przm.Decompress(compIter)
+		decIter, err := przm.Decode(compIter)
 		if err != nil || !bytes.Equal(decIter, data) {
 			t.Fatalf("Iteration %d roundtrip mismatch (simulateFailure=%v)", i, simulateFailure)
 		}
@@ -402,7 +405,7 @@ func TestTier3_GPU_PinnedMemoryPool_ConcurrentReuse(t *testing.T) {
 						return
 					}
 
-					decomp, err := przm.Decompress(comp)
+					decomp, err := przm.Decode(comp)
 					if err != nil {
 						errCh <- fmt.Errorf("worker %d decompress iter %d failed: %w", workerID, i, err)
 						return

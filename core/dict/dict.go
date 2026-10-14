@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package dict
 
 import (
@@ -18,7 +22,7 @@ var (
 	PSStrings        = tables.PSStrings
 	TopRFCWords      = tables.TopRFCWords
 	WebTokens        = tables.WebTokens
-	BrotliDictionary = tables.BrotliDictionary[:]
+	BrotliDictionary = tables.BrotliDictionary
 )
 
 // LookupBrotliWord retrieves word bytes from the static RFC 7932 dictionary by word ID.
@@ -134,7 +138,7 @@ func capitalize(b []byte) {
 }
 
 // transformWord applies RFC 7932 word operations.
-func transformWord(op uint8, mw []byte, scratch []byte) []byte {
+func transformWord(op uint8, mw, scratch []byte) []byte {
 	mwLen := len(mw)
 	if op >= 1 && op <= 9 {
 		cut := int(op)
@@ -230,4 +234,3 @@ func (m *ExternalDictMapper) Lookup(wid uint32) ([]byte, bool) {
 	}
 	return m.Dict[off : off+wLen], true
 }
-

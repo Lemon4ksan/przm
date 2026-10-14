@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Package clean_core provides Distance Offsets, 49-bracket codebook mapping,
 // Clustered V-ANS Mode 12 entropy coding, 4-register locality queue, and offset stream unpacking.
 // Strictly adheres to the Clean Room Specification with zero dynamic memory allocations.

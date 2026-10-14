@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package przm
 
 import (
@@ -68,7 +72,7 @@ func TestStandardFusedRaw(t *testing.T) {
 func TestStandardFusedLZ(t *testing.T) {
 	frame := make([]byte, 0, 64)
 	frame = append(frame, 'P', 'R', 'Z', 'M')
-	frame = append(frame, 0x00) // flags
+	frame = append(frame, 0x00)    // flags
 	frame = append(frame, 8, 0, 0) // U = 8
 	// Section directory: L_cmd = 1, L_off = 0
 	frame = append(frame, 1, 0)
@@ -96,7 +100,7 @@ func TestStandardFusedLZ(t *testing.T) {
 func TestCommandSplitDecompression(t *testing.T) {
 	frame := make([]byte, 0, 64)
 	frame = append(frame, 'P', 'R', 'Z', 'M')
-	frame = append(frame, 0x00) // flags
+	frame = append(frame, 0x00)    // flags
 	frame = append(frame, 4, 0, 0) // U = 4
 	// Section directory: L_cmd = 17, L_off = 0
 	frame = append(frame, 17, 0)
@@ -456,7 +460,12 @@ func TestCycle3BoundaryFuzz(t *testing.T) {
 				_, _ = DecompressTo(trunc, dst)
 			})
 			if allocs != 0.00 {
-				t.Fatalf("frame %d cutoff %d error path allocated %.2f allocs/op (strictly 0.00 required)", fIdx, cutoff, allocs)
+				t.Fatalf(
+					"frame %d cutoff %d error path allocated %.2f allocs/op (strictly 0.00 required)",
+					fIdx,
+					cutoff,
+					allocs,
+				)
 			}
 		}
 	}

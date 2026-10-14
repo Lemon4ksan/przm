@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Package przm provides the reference decompressor for PRZM frames.
 // Strictly conforms to the Clean Room Specification with zero dynamic memory allocation.
 package przm
@@ -8,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/lemon4ksan/foundation/generic"
+
 	"github.com/lemon4ksan/przm/core/commands"
 	"github.com/lemon4ksan/przm/core/dict"
 	"github.com/lemon4ksan/przm/core/distance"
@@ -16,9 +21,12 @@ import (
 
 // Frame Signatures and Capacity Bounds
 const (
-	MagicPRZM    = 0x4D5A5250 // ASCII 'P','R','Z','M'
-	MaxBlockSize = 16777216   // 16 MiB maximum payload
-	DictIDBrotli = 0x4252544C // ASCII 'B','R','T','L'
+	MagicPRZM        = 0x4D5A5250 // ASCII 'P','R','Z','M'
+	MagicPRZS        = 0x535A5250 // ASCII 'P','R','Z','S'
+	HeaderSize       = 8
+	StreamHeaderSize = 17
+	MaxBlockSize     = 16777216   // 16 MiB maximum payload
+	DictIDBrotli     = 0x4252544C // ASCII 'B','R','T','L'
 )
 
 // Configuration Vector Bitmasks
@@ -43,33 +51,38 @@ type Scratchpad struct {
 	meta        [2 * 1024 * 1024]byte
 	varBuf      [2 * 1024 * 1024]byte
 	norm        [8 * 1024 * 1024]byte
-	vansLookup  [4096]byte
-	vansFreq    [256]uint16
-	vansCDF     [256]uint16
 	wordScratch [128]byte
 }
 
-var scratchPool = generic.NewPool[Scratchpad](func() *Scratchpad {
+var scratchPool = generic.NewPool(func() *Scratchpad {
 	return new(Scratchpad)
 })
 
 var fastScratch [4]atomic.Pointer[Scratchpad]
 
 func init() {
-	for i := range fastScratch { fastScratch[i].Store(new(Scratchpad)) }
+	for i := range fastScratch {
+		fastScratch[i].Store(new(Scratchpad))
+	}
 }
 
 func getScratch() *Scratchpad {
 	for i := range fastScratch {
-		if s := fastScratch[i].Swap(nil); s != nil { return s }
+		if s := fastScratch[i].Swap(nil); s != nil {
+			return s
+		}
 	}
 	return scratchPool.Get()
 }
 
 func putScratch(s *Scratchpad) {
-	if s == nil { return }
+	if s == nil {
+		return
+	}
 	for i := range fastScratch {
-		if fastScratch[i].CompareAndSwap(nil, s) { return }
+		if fastScratch[i].CompareAndSwap(nil, s) {
+			return
+		}
 	}
 	scratchPool.Put(s)
 }
@@ -101,8 +114,10 @@ func readLEB128(b []byte, pos *int) (uint32, error) {
 	var res uint32
 	var shift uint
 	p := *pos
-	for i := 0; i < 4; i++ {
-		if p >= len(b) { return 0, ErrCorruptedFrame }
+	for range 4 {
+		if p >= len(b) {
+			return 0, ErrCorruptedFrame
+		}
 		byteVal := b[p]
 		p++
 		res |= uint32(byteVal&0x7F) << shift
@@ -110,7 +125,9 @@ func readLEB128(b []byte, pos *int) (uint32, error) {
 			shift += 7
 			continue
 		}
-		if res > MaxBlockSize { return 0, ErrCorruptedFrame }
+		if res > MaxBlockSize {
+			return 0, ErrCorruptedFrame
+		}
 		*pos = p
 		return res, nil
 	}
@@ -148,7 +165,9 @@ func parseBasicHeader(src []byte, dstCap int, f *FrameContext) error {
 		return ErrBufferTooSmall
 	}
 	f.bMin = 4
-	if (f.flags & FlagMinMatch3) != 0 { f.bMin = 3 }
+	if (f.flags & FlagMinMatch3) != 0 {
+		f.bMin = 3
+	}
 	return nil
 }
 
@@ -156,7 +175,9 @@ func parseOptionalHeaders(src []byte, startOff int, f *FrameContext) (int, error
 	off := startOff
 	f.stride = 1
 	if (f.flags & FlagStride) != 0 {
-		if off >= len(src) { return 0, ErrCorruptedFrame }
+		if off >= len(src) {
+			return 0, ErrCorruptedFrame
+		}
 		f.stride = uint32(src[off]) + 1
 		off++
 	}
@@ -231,7 +252,6 @@ func stageUnpackLiterals(src []byte, f *FrameContext, s *Scratchpad) error {
 }
 
 // stageUnpackCommands handles Mode 8 demux or flat substream unpacking for Section 2.
-// stageUnpackCommands handles Section 2 command stream unpacking.
 func stageUnpackCommands(src []byte, f *FrameContext, s *Scratchpad) error {
 	if f.lCmd == 0 {
 		f.cmdBuf = nil
@@ -280,19 +300,25 @@ func finishMatch(dst []byte, dstP *int, d, lMatch uint32, f *FrameContext) error
 }
 
 // copyMatch reproduces match bytes from window history or external dictionary.
-func copyMatch(dst []byte, dstPos int, d uint32, matchLen uint32, uSize uint32, dict []byte) error {
-	if d == 0 { return ErrOffsetOOB }
-	if uint32(dstPos)+matchLen > uSize { return ErrCorruptedFrame }
+func copyMatch(dst []byte, dstPos int, d, matchLen, uSize uint32, dict []byte) error {
+	if d == 0 {
+		return ErrOffsetOOB
+	}
+	if uint32(dstPos)+matchLen > uSize {
+		return ErrCorruptedFrame
+	}
 	mLen, dist := int(matchLen), int(d)
 	if dist <= dstPos {
 		srcPos := dstPos - dist
-		for i := 0; i < mLen; i++ { dst[dstPos+i] = dst[srcPos+i] }
+		for i := range mLen {
+			dst[dstPos+i] = dst[srcPos+i]
+		}
 		return nil
 	}
 	return copyDictMatch(dst, dstPos, dstPos-dist, mLen, dict)
 }
 
-func copyDictMatch(dst []byte, dstPos int, sIdx, mLen int, dict []byte) error {
+func copyDictMatch(dst []byte, dstPos, sIdx, mLen int, dict []byte) error {
 	if len(dict) == 0 {
 		return ErrOffsetOOB
 	}
@@ -307,7 +333,7 @@ func copyDictMatch(dst []byte, dstPos int, sIdx, mLen int, dict []byte) error {
 	copy(dst[dstPos:dstPos+aDict], dict[oDict:oDict+aDict])
 	if mLen > aDict {
 		rem := mLen - aDict
-		for i := 0; i < rem; i++ {
+		for i := range rem {
 			dst[dstPos+aDict+i] = dst[i]
 		}
 	}
@@ -354,14 +380,21 @@ func stageExecuteCommands(dst []byte, f *FrameContext, s *Scratchpad) error {
 	return nil
 }
 
-func executeCommandStep(op byte, dst []byte, dstP, litP, offP, cmdP *int, f *FrameContext, r *[4]uint32, s *Scratchpad) error {
+func executeCommandStep(
+	op byte,
+	dst []byte,
+	dstP, litP, offP, cmdP *int,
+	f *FrameContext,
+	r *[4]uint32,
+	s *Scratchpad,
+) error {
 	if op < 0x80 {
 		return execFusedRepeat(dst, dstP, litP, op, f, r)
 	}
 	if op < 0xC0 {
 		return execFusedExt(dst, dstP, litP, offP, cmdP, op, f, r)
 	}
-	return execExtendedOp(dst, dstP, litP, offP, cmdP, op, f, r, s)
+	return execExtendedOp(dst, dstP, litP, cmdP, op, f, r, s)
 }
 
 func execFusedRepeat(dst []byte, dstP, litP *int, op byte, f *FrameContext, r *[4]uint32) error {
@@ -397,15 +430,22 @@ func execFusedExt(dst []byte, dstP, litP, offP, cmdP *int, op byte, f *FrameCont
 	return finishMatch(dst, dstP, d, uint32(lMatch), f)
 }
 
-func execExtendedOp(dst []byte, dstP, litP, offP, cmdP *int, op byte, f *FrameContext, r *[4]uint32, s *Scratchpad) error {
+func execExtendedOp(dst []byte, dstP, litP, cmdP *int, op byte, f *FrameContext, r *[4]uint32, s *Scratchpad) error {
 	switch {
-	case op <= 0xC3: return execLongRepeat(dst, dstP, litP, cmdP, op, f, r)
-	case op <= 0xCD: return execBracketMatch(dst, dstP, litP, cmdP, op, f, r)
-	case op == 0xCE: return execDiffLattice(dst, dstP, cmdP, f, r)
-	case op == 0xCF: return execRFCTransform(dst, dstP, f.uSize, f.cmdBuf, cmdP, s)
-	case op <= 0xD7: return execStrideMatch(dst, dstP, litP, cmdP, op, f, r)
-	case op >= 0xD8 && op <= 0xDF: return execTokenMatch(dst, dstP, op, f)
-	default: return execSpecialOp(dst, dstP, litP, cmdP, op, f)
+	case op <= 0xC3:
+		return execLongRepeat(dst, dstP, litP, cmdP, op, f, r)
+	case op <= 0xCD:
+		return execBracketMatch(dst, dstP, litP, cmdP, op, f, r)
+	case op == 0xCE:
+		return execDiffLattice(dst, dstP, cmdP, f, r)
+	case op == 0xCF:
+		return execRFCTransform(dst, dstP, f.uSize, f.cmdBuf, cmdP, s)
+	case op <= 0xD7:
+		return execStrideMatch(dst, dstP, litP, cmdP, op, f, r)
+	case op >= 0xD8 && op <= 0xDF:
+		return execTokenMatch(dst, dstP, op, f)
+	default:
+		return execSpecialOp(dst, dstP, litP, cmdP, op, f)
 	}
 }
 
@@ -510,10 +550,14 @@ func execTokenMatch(dst []byte, dstPos *int, op byte, f *FrameContext) error {
 
 func execSpecialOp(dst []byte, dstP, litP, cmdP *int, op byte, f *FrameContext) error {
 	switch {
-	case op == 0xF0: return execLiteralRunVar(dst, dstP, litP, cmdP, f)
-	case op == 0xF1: return execRLEByte(dst, dstP, cmdP, litP, f)
-	case op >= 0xF3 && op <= 0xFA: return execLiteralRunFixed(dst, dstP, litP, op, f)
-	default: return ErrCorruptedFrame
+	case op == 0xF0:
+		return execLiteralRunVar(dst, dstP, litP, cmdP, f)
+	case op == 0xF1:
+		return execRLEByte(dst, dstP, cmdP, litP, f)
+	case op >= 0xF3 && op <= 0xFA:
+		return execLiteralRunFixed(dst, dstP, litP, op, f)
+	default:
+		return ErrCorruptedFrame
 	}
 }
 
@@ -596,7 +640,7 @@ func encodeB64Triplet(octA, octB, octC byte, i, uSize int, norm []byte, j *int) 
 }
 
 // decompressInternal executes the 7-stage linear pipeline for PRZM decompression.
-func decompressInternal(src, dst []byte, dict []byte, dictDesc *DictionaryDesc) (int, error) {
+func decompressInternal(src, dst, dict []byte, dictDesc *DictionaryDesc) (int, error) {
 	var f FrameContext
 	f.dict = dict
 	f.dictDesc = dictDesc
@@ -633,9 +677,15 @@ func normalizeError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, commands.ErrCorruptedFrame), errors.Is(err, distance.ErrCorruptedFrame), errors.Is(err, literals.ErrCorruptedFrame), errors.Is(err, ErrCorruptedFrame):
+	case errors.Is(err, commands.ErrCorruptedFrame),
+		errors.Is(err, distance.ErrCorruptedFrame),
+		errors.Is(err, literals.ErrCorruptedFrame),
+		errors.Is(err, ErrCorruptedFrame):
 		return ErrCorruptedFrame
-	case errors.Is(err, commands.ErrBufferTooSmall), errors.Is(err, distance.ErrBufferTooSmall), errors.Is(err, literals.ErrBufferTooSmall), errors.Is(err, ErrBufferTooSmall):
+	case errors.Is(err, commands.ErrBufferTooSmall),
+		errors.Is(err, distance.ErrBufferTooSmall),
+		errors.Is(err, literals.ErrBufferTooSmall),
+		errors.Is(err, ErrBufferTooSmall):
 		return ErrBufferTooSmall
 	case errors.Is(err, distance.ErrOffsetOOB), errors.Is(err, ErrOffsetOOB):
 		return ErrOffsetOOB
@@ -657,4 +707,98 @@ func executePipeline(src, dst []byte, f *FrameContext, s *Scratchpad) error {
 		return err
 	}
 	return stageExecuteCommands(dst, f, s)
+}
+
+// FrameHeader exposes metadata of a parsed PRZM frame.
+type FrameHeader struct {
+	Flags             uint8
+	UncompressedSize  int
+	CompressedSize    int
+	Stride            int
+	WindowLog         uint8
+	DictID            uint32
+	NormMode          uint8
+	DataOffset        int
+	CmdStreamSize     int
+	OffsetStreamSize  int
+	LiteralStreamSize int
+	HeaderSize        int
+}
+
+// ParseFrameHeader parses the frame header and directory of a PRZM frame.
+func ParseFrameHeader(src []byte) (FrameHeader, error) {
+	if len(src) < 8 {
+		return FrameHeader{}, ErrCorruptedFrame
+	}
+	var f FrameContext
+	if err := parseBasicHeader(src, int(f.uSize)+64, &f); err != nil && !errors.Is(err, ErrBufferTooSmall) {
+		return FrameHeader{}, err
+	}
+	off, err := parseOptionalHeaders(src, 8, &f)
+	if err != nil {
+		return FrameHeader{}, err
+	}
+	if err := parseDirectory(src, off, &f); err != nil {
+		return FrameHeader{}, err
+	}
+	if err := stageResolveSections(src, &f); err != nil {
+		return FrameHeader{}, err
+	}
+	return FrameHeader{
+		Flags:             f.flags,
+		UncompressedSize:  int(f.uSize),
+		CompressedSize:    len(src),
+		Stride:            int(f.stride),
+		WindowLog:         18,
+		DictID:            f.dictID,
+		DataOffset:        f.o1,
+		CmdStreamSize:     f.lCmd,
+		OffsetStreamSize:  f.lOff,
+		LiteralStreamSize: f.l4,
+		HeaderSize:        f.o1,
+	}, nil
+}
+
+// StreamHeader exposes metadata of a multi-frame PRZS stream.
+type StreamHeader struct {
+	ChunkCount            uint32
+	TotalUncompressedSize uint64
+	Flags                 uint8
+}
+
+// ParseStreamHeader parses the 17-byte header of a PRZS stream.
+func ParseStreamHeader(src []byte) (StreamHeader, error) {
+	if len(src) < 17 {
+		return StreamHeader{}, ErrCorruptedFrame
+	}
+	magic := binary.LittleEndian.Uint32(src[0:4])
+	if magic != MagicPRZS {
+		return StreamHeader{}, ErrInvalidMagic
+	}
+	flags := src[4]
+	chunkCount := binary.LittleEndian.Uint32(src[5:9])
+	totalUSize := binary.LittleEndian.Uint64(src[9:17])
+	return StreamHeader{
+		ChunkCount:            chunkCount,
+		TotalUncompressedSize: totalUSize,
+		Flags:                 flags,
+	}, nil
+}
+
+// UnpackStream unpacks an intermediate Section 2 commands or Section 3 offsets stream.
+func UnpackStream(dst, src, _ []byte) (int, error) {
+	if len(src) == 0 {
+		return 0, nil
+	}
+	s := scratchPool.Get()
+	defer scratchPool.Put(s)
+	buf, err := commands.UnpackSection2Commands(src, s.op[:], s.meta[:], s.varBuf[:], dst)
+	if err == nil {
+		return len(buf), nil
+	}
+	nDist, errDist := distance.UnpackOffsets(src, dst)
+	if errDist == nil {
+		return nDist, nil
+	}
+	return 0, err
 }

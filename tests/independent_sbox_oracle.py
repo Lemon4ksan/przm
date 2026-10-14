@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Lemon4ksan All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 """
 Independent S-Box ANF & Degree Oracle for AES-128
 Milestone 1 Empirical Challenger Verification Script

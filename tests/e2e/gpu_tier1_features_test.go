@@ -233,9 +233,9 @@ func TestTier1_GPU_F05_WithGPUAccelerationOption(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CompressWithOptions failed: %v", err)
 			}
-			dec, err := przm.Decompress(comp)
+			dec, err := przm.Decode(comp)
 			if err != nil {
-				t.Fatalf("Decompress failed: %v", err)
+				t.Fatalf("Decode failed: %v", err)
 			}
 			if !bytes.Equal(dec, tc.payload) {
 				t.Fatalf("Bit-exact roundtrip mismatch: got %d bytes, want %d", len(dec), len(tc.payload))
@@ -264,9 +264,9 @@ func TestTier1_GPU_F06_EnginePipelineRouting(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Pipeline routing failed: %v", err)
 			}
-			dec, err := przm.Decompress(comp)
+			dec, err := przm.Decode(comp)
 			if err != nil {
-				t.Fatalf("Decompress failed: %v", err)
+				t.Fatalf("Decode failed: %v", err)
 			}
 			if !bytes.Equal(dec, tc.data) {
 				t.Fatalf("Roundtrip mismatch in pipeline routing")
@@ -333,7 +333,7 @@ func TestTier1_GPU_F07_GracefulCPUSIMDFallback(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Compression failed during fallback test: %v", err)
 			}
-			dec, err := przm.Decompress(comp)
+			dec, err := przm.Decode(comp)
 			if err != nil {
 				t.Fatalf("Decompression failed during fallback test: %v", err)
 			}
@@ -359,7 +359,7 @@ func TestTier1_GPU_F08_BitExactLosslessRoundtrips(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Level %d compression failed: %v", lvl, err)
 			}
-			dec, err := przm.Decompress(comp)
+			dec, err := przm.Decode(comp)
 			if err != nil {
 				t.Fatalf("Level %d decompression failed: %v", lvl, err)
 			}
@@ -438,9 +438,9 @@ func TestTier1_GPU_F10_SimulatedFailureFallback(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Compression failed under simulated failure: %v", err)
 			}
-			dec, err := przm.Decompress(comp)
+			dec, err := przm.Decode(comp)
 			if err != nil {
-				t.Fatalf("Decompress failed under simulated failure: %v", err)
+				t.Fatalf("Decode failed under simulated failure: %v", err)
 			}
 			if !bytes.Equal(dec, tc.payload) {
 				t.Fatalf("Bit-exact roundtrip mismatch during simulated failure")

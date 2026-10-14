@@ -25,4 +25,9 @@ test: $(TARGET)
 clean:
 	rm -f $(TARGET) $(LIB) src/*.o
 
+format:
+	go fmt ./...
+	addlicense -c "Lemon4ksan" -l bsd -ignore "**/*.yml" .
+	golangci-lint run --fix --allow-parallel-runners ./...
+
 .PHONY: all test clean

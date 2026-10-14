@@ -70,9 +70,9 @@ func TestTier2_GPU_B02_MinMatchBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Compress failed: %v", err)
 			}
-			dec, err := przm.Decompress(c)
+			dec, err := przm.Decode(c)
 			if err != nil {
-				t.Fatalf("Decompress failed: %v", err)
+				t.Fatalf("Decode failed: %v", err)
 			}
 			if !bytes.Equal(dec, data) {
 				t.Fatalf("Roundtrip mismatch")
@@ -237,9 +237,9 @@ func TestTier2_GPU_B08_IncompressibleHighEntropy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Compression of random data failed: %v", err)
 			}
-			dec, err := przm.Decompress(comp)
+			dec, err := przm.Decode(comp)
 			if err != nil {
-				t.Fatalf("Decompress failed: %v", err)
+				t.Fatalf("Decode failed: %v", err)
 			}
 			if !bytes.Equal(dec, buf) {
 				t.Fatalf("Random payload roundtrip mismatch")
@@ -275,9 +275,9 @@ func TestTier2_GPU_B09_DegenerateDistributions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Compression failed: %v", err)
 			}
-			dec, err := przm.Decompress(comp)
+			dec, err := przm.Decode(comp)
 			if err != nil {
-				t.Fatalf("Decompress failed: %v", err)
+				t.Fatalf("Decode failed: %v", err)
 			}
 			if !bytes.Equal(dec, data) {
 				t.Fatalf("Roundtrip mismatch on degenerate pattern %s", tc.name)

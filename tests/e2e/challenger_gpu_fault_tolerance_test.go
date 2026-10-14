@@ -119,7 +119,7 @@ func TestChallenger_GPU_AdversarialChaosMonkey(t *testing.T) {
 					return
 				}
 
-				dec, err := przm.Decompress(comp)
+				dec, err := przm.Decode(comp)
 				if err != nil {
 					errCh <- fmt.Errorf("worker %d op %d decompression failed: %w", workerID, op, err)
 					return
@@ -182,7 +182,7 @@ func TestChallenger_GPU_ScratchpadContamination(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Fallback compression failed: %v", err)
 			}
-			decFallback, err := przm.Decompress(compFallback)
+			decFallback, err := przm.Decode(compFallback)
 			if err != nil {
 				t.Fatalf("Fallback decompression failed: %v", err)
 			}
@@ -196,7 +196,7 @@ func TestChallenger_GPU_ScratchpadContamination(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CPU baseline compression failed: %v", err)
 			}
-			decCPU, err := przm.Decompress(compCPU)
+			decCPU, err := przm.Decode(compCPU)
 			if err != nil {
 				t.Fatalf("CPU baseline decompression failed: %v", err)
 			}
@@ -222,7 +222,7 @@ func TestChallenger_GPU_MultiChunk_FallbackStress(t *testing.T) {
 		gpu.ResetGlobalCompressorForTest()
 	}()
 
-	// 1 MiB payload with multiple chunks (ChunkSize = 64 KiB, Threads = 4 -> 16 chunks)
+	// 1 MiB payload with multiple chunks (Threads = 4)
 	data := make([]byte, 1024*1024)
 	for i := range data {
 		data[i] = byte((i * 7) ^ (i / 1024))
@@ -233,7 +233,6 @@ func TestChallenger_GPU_MultiChunk_FallbackStress(t *testing.T) {
 
 	opts := przm.CompressOptions{
 		GPUAcceleration: true,
-		ChunkSize:       64 * 1024,
 		Threads:         4,
 		Level:           3,
 	}
@@ -243,7 +242,7 @@ func TestChallenger_GPU_MultiChunk_FallbackStress(t *testing.T) {
 		t.Fatalf("Multi-chunk fallback compression failed: %v", err)
 	}
 
-	dec, err := przm.Decompress(comp)
+	dec, err := przm.Decode(comp)
 	if err != nil {
 		t.Fatalf("Multi-chunk fallback decompression failed: %v", err)
 	}

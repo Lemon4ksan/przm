@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package przm
 
 import (
@@ -52,7 +56,7 @@ func DecompressDict(src, dst []byte, dict *DictionaryDesc) (int, error) {
 }
 
 // DecompressWithDict executes the PRZM decompression pipeline with external dictionary injection.
-func DecompressWithDict(src, dst []byte, dict []byte, dictDesc *DictionaryDesc) (int, error) {
+func DecompressWithDict(src, dst, dict []byte, dictDesc *DictionaryDesc) (int, error) {
 	if len(src) == 0 {
 		return 0, nil
 	}
@@ -64,12 +68,18 @@ func DecompressWithDict(src, dst []byte, dict []byte, dictDesc *DictionaryDesc) 
 
 // Decode decompresses a PRZM frame, allocating a new destination slice automatically.
 func Decode(src []byte) ([]byte, error) {
-	if len(src) == 0 { return nil, nil }
+	if len(src) == 0 {
+		return nil, nil
+	}
 	sz, err := GetUncompressedSize(src)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	dst := make([]byte, sz, sz+64)
 	n, err := Decompress(src, dst)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return dst[:n], nil
 }
 
@@ -88,19 +98,29 @@ func GetUncompressedSize(src []byte) (int, error) {
 
 func getLegacyUncompressedSize(magic uint32, src []byte) (int, error) {
 	switch magic {
-	case 0x535A5250: return readUint32At(src, 5, 16) // PRZS
-	case 0x504E4741, 0x49424F4D, 0x53494548: return readUint32At(src, 4, 11) // PNGA, MOBI, HEIS
-	case 0x4752414D: return readUint32At(src, 4, 15) // MARG
-	case 0x53594D50, 0x41524D36, 0x53484546, 0x4D41484C: return readUint32At(src, 8, 11) // SYMP, ARM6, SHEF, MAHL
-	case 0x514F5349: return readUint32At(src, 8, 19) // ISOQ
-	case 0x47435452: return readUint32At(src, 6, 9)  // GCTR
-	case 0x44485343: return readUint32At(src, 4, 23) // CSHD
-	default: return checkPrefixLegacyMagics(src)
+	case 0x535A5250:
+		return readUint32At(src, 5, 16) // PRZS
+	case 0x504E4741, 0x49424F4D, 0x53494548:
+		return readUint32At(src, 4, 11) // PNGA, MOBI, HEIS
+	case 0x4752414D:
+		return readUint32At(src, 4, 15) // MARG
+	case 0x53594D50, 0x41524D36, 0x53484546, 0x4D41484C:
+		return readUint32At(src, 8, 11) // SYMP, ARM6, SHEF, MAHL
+	case 0x514F5349:
+		return readUint32At(src, 8, 19) // ISOQ
+	case 0x47435452:
+		return readUint32At(src, 6, 9) // GCTR
+	case 0x44485343:
+		return readUint32At(src, 4, 23) // CSHD
+	default:
+		return checkPrefixLegacyMagics(src)
 	}
 }
 
 func readUint32At(src []byte, off, minLen int) (int, error) {
-	if len(src) <= minLen { return 0, ErrCorruptedFrame }
+	if len(src) <= minLen {
+		return 0, ErrCorruptedFrame
+	}
 	return int(binary.LittleEndian.Uint32(src[off : off+4])), nil
 }
 

@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Lemon4ksan All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package przm
 
 import (
@@ -68,7 +72,10 @@ func TestCompressHighEntropyFallback(t *testing.T) {
 
 func TestCompressMultiBlock(t *testing.T) {
 	// 130 KiB buffer spanning multiple 64 KiB blocks
-	chunk := bytes.Repeat([]byte("AlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigmaTau"), 500)
+	chunk := bytes.Repeat(
+		[]byte("AlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXiOmicronPiRhoSigmaTau"),
+		500,
+	)
 	src := bytes.Repeat(chunk, 4) // ~160 KiB
 	verifyRoundtrip(t, src, "multiblock-160k")
 }
@@ -97,7 +104,9 @@ func TestCompressZeroAllocationsDecompress(t *testing.T) {
 }
 
 func BenchmarkCompress(b *testing.B) {
-	pattern := []byte("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ")
+	pattern := []byte(
+		"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ",
+	)
 	src := bytes.Repeat(pattern, 100) // ~12 KiB
 
 	b.SetBytes(int64(len(src)))
@@ -111,7 +120,9 @@ func BenchmarkCompress(b *testing.B) {
 }
 
 func BenchmarkDecompressRoundtrip(b *testing.B) {
-	pattern := []byte("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ")
+	pattern := []byte(
+		"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ",
+	)
 	src := bytes.Repeat(pattern, 100) // ~12 KiB
 	comp, err := Compress(src, 6)
 	if err != nil {
