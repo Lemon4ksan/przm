@@ -1135,10 +1135,57 @@ static void test_mode8_and_explicit_matches(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc >= 3 && (strcmp(argv[1], "-c") == 0 || strcmp(argv[1], "--compress") == 0)) {
+        const char *in_path = argv[2];
+        const char *out_path = (argc >= 4) ? argv[3] : "out.przm";
+        int level = (argc >= 5) ? atoi(argv[4]) : 3;
+
+        FILE *in = fopen(in_path, "rb");
+        if (!in) {
+            fprintf(stderr, "Cannot open input file: %s\n", in_path);
+            return 1;
+        }
+        fseek(in, 0, SEEK_END);
+        long in_size = ftell(in);
+        fseek(in, 0, SEEK_SET);
+        if (in_size < 0) { fclose(in); return 1; }
+        uint8_t *src = (uint8_t *)malloc((size_t)in_size);
+        if (!src && in_size > 0) { fclose(in); return 1; }
+        if (in_size > 0 && fread(src, 1, (size_t)in_size, in) != (size_t)in_size) {
+            free(src); fclose(in); return 1;
+        }
+        fclose(in);
+
+        size_t dst_cap = (size_t)in_size + 1024;
+        uint8_t *dst = (uint8_t *)malloc(dst_cap);
+        if (!dst) { free(src); return 1; }
+
+        int32_t comp_len = przm_compress(src, (size_t)in_size, dst, dst_cap, level);
+        free(src);
+        if (comp_len < 0) {
+            fprintf(stderr, "przm_compress error: %d\n", comp_len);
+            free(dst);
+            return 1;
+        }
+        FILE *out = fopen(out_path, "wb");
+        if (!out) {
+            fprintf(stderr, "Cannot open output file: %s\n", out_path);
+            free(dst);
+            return 1;
+        }
+        if (comp_len > 0 && fwrite(dst, 1, (size_t)comp_len, out) != (size_t)comp_len) {
+            free(dst); fclose(out); return 1;
+        }
+        fclose(out);
+        free(dst);
+        printf("Compressed %s -> %s (%ld -> %d bytes)\n", in_path, out_path, in_size, comp_len);
+        return 0;
+    }
+
     if (argc >= 3) {
         const char *in_path = argv[1];
         const char *out_path = argv[2];
-        if (argc >= 4 && strcmp(argv[1], "--decompress") == 0) {
+        if (argc >= 4 && (strcmp(argv[1], "-d") == 0 || strcmp(argv[1], "--decompress") == 0)) {
             in_path = argv[2];
             out_path = argv[3];
         }
