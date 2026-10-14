@@ -102,6 +102,9 @@ func AnalyzeInput(src []byte) AnalysisParams {
 		return p
 	}
 	p.stride = detectStride(src)
+	if p.stride > 1 {
+		p.bMin = 3
+	}
 	p.wLog = selectWindowLog(u)
 	return p
 }
@@ -133,17 +136,35 @@ func detectStride(src []byte) uint32 {
 	if len(src) < 128 {
 		return 1
 	}
-	candidates := []uint32{4, 8, 12, 16, 20, 24, 28, 32, 40, 48, 56, 64, 72, 80, 96, 128}
-	sampleLen := min(len(src), 2048)
+	candidates := []uint32{2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 28, 32, 40, 48, 56, 64, 72, 80, 96, 128}
+	offsets := []int{0, len(src) / 4, len(src) / 2, (3 * len(src)) / 4}
+	chunkLen := 2048
 	var bestStride uint32 = 1
 	var maxMatches int
+
 	for _, s := range candidates {
-		if int(s) >= sampleLen {
-			continue
+		totalMatches := 0
+		totalLen := 0
+		for _, off := range offsets {
+			if off+chunkLen > len(src) {
+				off = len(src) - chunkLen
+				if off < 0 {
+					off = 0
+				}
+			}
+			chunk := src[off:min(off+chunkLen, len(src))]
+			if int(s) >= len(chunk) {
+				continue
+			}
+			totalMatches += countStrideMatches(chunk, int(s), len(chunk))
+			totalLen += len(chunk)
 		}
-		matches := countStrideMatches(src, int(s), sampleLen)
-		if matches > maxMatches && matches > (sampleLen*20)/100 {
-			maxMatches = matches
+		thresholdMatches := maxMatches
+		if bestStride > 1 && s%bestStride == 0 {
+			thresholdMatches = (maxMatches * 115) / 100
+		}
+		if totalLen > 0 && totalMatches > thresholdMatches && totalMatches > (totalLen*20)/100 {
+			maxMatches = totalMatches
 			bestStride = s
 		}
 	}
@@ -337,9 +358,9 @@ func costExplicit(L int, dist uint32, bMin, nLit int) uint32 {
 	}
 	if L > 14+bMin {
 		if L <= 14+bMin+127 {
-			base += 14
+			base += 10
 		} else {
-			base += 28
+			base += 20
 		}
 	}
 	distCost := distCodeCost[code] + uint32(2*nb)
@@ -486,35 +507,39 @@ func relaxHashMatches(
 	i int,
 	s *CompressorScratchpad,
 	src []byte,
-	globalPos, bSize, maxDist, winMask, bMin, depthLimit, level int,
+	globalPos, bSize, maxDist, winMask int,
+	stride uint32,
+	bMin, depthLimit, level int,
 ) {
 	if i+4 > bSize {
 		return
 	}
 	curCost := s.nodes[i].cost
 	if level >= 6 && i+32 <= bSize && globalPos+32 <= len(src) {
-		relaxHash32Matches(i, s, src, globalPos, bSize, maxDist, bMin, curCost)
+		relaxHash32Matches(i, s, src, globalPos, bSize, maxDist, stride, bMin, curCost)
 	}
 	if level >= 6 && i+24 <= bSize && globalPos+24 <= len(src) {
-		relaxHash24Matches(i, s, src, globalPos, bSize, maxDist, bMin, curCost)
+		relaxHash24Matches(i, s, src, globalPos, bSize, maxDist, stride, bMin, curCost)
 	}
 	if level >= 5 && i+16 <= bSize && globalPos+16 <= len(src) {
-		relaxHash16Matches(i, s, src, globalPos, bSize, maxDist, bMin, curCost)
+		relaxHash16Matches(i, s, src, globalPos, bSize, maxDist, stride, bMin, curCost)
 	}
 	if level >= 4 && i+12 <= bSize && globalPos+12 <= len(src) {
-		relaxHash12Matches(i, s, src, globalPos, bSize, maxDist, bMin, curCost)
+		relaxHash12Matches(i, s, src, globalPos, bSize, maxDist, stride, bMin, curCost)
 	}
 	if level >= 3 && i+8 <= bSize && globalPos+8 <= len(src) {
-		relaxHash8Matches(i, s, src, globalPos, bSize, maxDist, bMin, curCost)
+		relaxHash8Matches(i, s, src, globalPos, bSize, maxDist, stride, bMin, curCost)
 	}
-	relaxHash4Matches(i, s, src, globalPos, bSize, maxDist, winMask, bMin, depthLimit, curCost)
+	relaxHash4Matches(i, s, src, globalPos, bSize, maxDist, winMask, stride, bMin, depthLimit, curCost)
 }
 
 func relaxHash32Matches(
 	i int,
 	s *CompressorScratchpad,
 	src []byte,
-	globalPos, bSize, maxDist, bMin int,
+	globalPos, bSize, maxDist int,
+	stride uint32,
+	bMin int,
 	curCost uint32,
 ) {
 	h32 := hash32(src, globalPos)
@@ -531,7 +556,7 @@ func relaxHash32Matches(
 		}
 		L := measureMatchLength(src, globalPos, candPos, maxL)
 		if L >= 32 {
-			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
+			relaxExplicitSublengths(i, d, L, bMin, stride, curCost, s)
 		}
 	}
 }
@@ -540,7 +565,9 @@ func relaxHash24Matches(
 	i int,
 	s *CompressorScratchpad,
 	src []byte,
-	globalPos, bSize, maxDist, bMin int,
+	globalPos, bSize, maxDist int,
+	stride uint32,
+	bMin int,
 	curCost uint32,
 ) {
 	h24 := hash24(src, globalPos)
@@ -557,7 +584,7 @@ func relaxHash24Matches(
 		}
 		L := measureMatchLength(src, globalPos, candPos, maxL)
 		if L >= 24 {
-			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
+			relaxExplicitSublengths(i, d, L, bMin, stride, curCost, s)
 		}
 	}
 }
@@ -566,7 +593,9 @@ func relaxHash16Matches(
 	i int,
 	s *CompressorScratchpad,
 	src []byte,
-	globalPos, bSize, maxDist, bMin int,
+	globalPos, bSize, maxDist int,
+	stride uint32,
+	bMin int,
 	curCost uint32,
 ) {
 	h16 := hash16(src, globalPos)
@@ -583,7 +612,7 @@ func relaxHash16Matches(
 		}
 		L := measureMatchLength(src, globalPos, candPos, maxL)
 		if L >= 16 {
-			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
+			relaxExplicitSublengths(i, d, L, bMin, stride, curCost, s)
 		}
 	}
 }
@@ -592,7 +621,9 @@ func relaxHash12Matches(
 	i int,
 	s *CompressorScratchpad,
 	src []byte,
-	globalPos, bSize, maxDist, bMin int,
+	globalPos, bSize, maxDist int,
+	stride uint32,
+	bMin int,
 	curCost uint32,
 ) {
 	h12 := hash12(src, globalPos)
@@ -609,7 +640,7 @@ func relaxHash12Matches(
 		}
 		L := measureMatchLength(src, globalPos, candPos, maxL)
 		if L >= 12 {
-			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
+			relaxExplicitSublengths(i, d, L, bMin, stride, curCost, s)
 		}
 	}
 }
@@ -618,7 +649,9 @@ func relaxHash8Matches(
 	i int,
 	s *CompressorScratchpad,
 	src []byte,
-	globalPos, bSize, maxDist, bMin int,
+	globalPos, bSize, maxDist int,
+	stride uint32,
+	bMin int,
 	curCost uint32,
 ) {
 	h8 := hash8(src, globalPos)
@@ -635,7 +668,7 @@ func relaxHash8Matches(
 		}
 		L := measureMatchLength(src, globalPos, candPos, maxL)
 		if L >= 8 {
-			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
+			relaxExplicitSublengths(i, d, L, bMin, stride, curCost, s)
 		}
 	}
 }
@@ -644,7 +677,9 @@ func relaxHash4Matches(
 	i int,
 	s *CompressorScratchpad,
 	src []byte,
-	globalPos, bSize, maxDist, winMask, bMin, depthLimit int,
+	globalPos, bSize, maxDist, winMask int,
+	stride uint32,
+	bMin, depthLimit int,
 	curCost uint32,
 ) {
 	h4 := hash4(src, globalPos)
@@ -658,21 +693,36 @@ func relaxHash4Matches(
 		}
 		maxL := min(bSize-i, MaxMatchLength)
 		L := measureMatchLength(src, globalPos, candPos, maxL)
-		if L >= 4 {
-			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
+		if L >= bMin {
+			relaxExplicitSublengths(i, d, L, bMin, stride, curCost, s)
 		}
 		cand = s.prevPos[candPos&winMask]
 		depth++
 	}
 }
 
-func relaxExplicitSublengths(i int, d uint32, L, bMin int, curCost uint32, s *CompressorScratchpad) {
+func relaxExplicitSublengths(i int, d uint32, L, bMin int, stride, curCost uint32, s *CompressorScratchpad) {
+	for k := range 4 {
+		if d == s.nodes[i].r[k] {
+			relaxRepeatSublengths(i, k, d, L, bMin, curCost, s)
+			return
+		}
+	}
 	if d > 2048 {
 		for mode := byte(0); mode < 3; mode++ {
 			ref := s.nodes[i].r[mode]
 			diff := int64(d) - int64(ref)
 			if diff >= -128 && diff <= 127 && diff != 0 {
 				relaxDiffLatticeSublengths(i, mode, int8(diff), d, L, bMin, curCost, s)
+			}
+		}
+		if stride > 1 {
+			diff := int64(d) - int64(s.nodes[i].r[0])
+			if diff%int64(stride) == 0 {
+				delta := diff / int64(stride)
+				if delta >= -128 && delta <= 127 && delta != 0 {
+					relaxDiffLatticeSublengths(i, 3, int8(delta), d, L, bMin, curCost, s)
+				}
 			}
 		}
 	}
@@ -775,9 +825,9 @@ func relaxDiffLatticeSublengths(
 		diff := l - bMin
 		var costLat uint32
 		if diff < 7 {
-			costLat = curCost + 36 + flushCost
+			costLat = curCost + 30 + flushCost
 		} else {
-			costLat = curCost + 50 + flushCost
+			costLat = curCost + 40 + flushCost
 		}
 		costExp := curCost + costExplicit(l, d, bMin, nLit)
 		if costLat >= costExp {
@@ -860,7 +910,7 @@ func solveBlockTrellis(
 			relaxRepeat(i, s, src, globalPos, bSize, bMin)
 			relaxBrackets(i, s, src, globalPos, bSize, bMin)
 			relaxStride(i, s, src, globalPos, bSize, stride, bMin)
-			relaxHashMatches(i, s, src, globalPos, bSize, maxDist, winMask, bMin, depthLimit, level)
+			relaxHashMatches(i, s, src, globalPos, bSize, maxDist, winMask, stride, bMin, depthLimit, level)
 			relaxDictMatches(i, s, src, globalPos, bSize, bMin)
 			relaxDiffLattice(i, s, src, globalPos, bSize, stride, bMin)
 		}
