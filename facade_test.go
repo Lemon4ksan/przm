@@ -2,6 +2,7 @@ package przm
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 )
 
@@ -136,4 +137,147 @@ func TestDefaultOptionsAndFallback(t *testing.T) {
 	if err != nil || sz != 0 {
 		t.Fatalf("GetUncompressedSize(emptyComp) = %d, err = %v; want 0, nil", sz, err)
 	}
+}
+
+func TestConcurrentCompressDecompress(t *testing.T) {
+	const numGoroutines = 64
+	const itersPerGoroutine = 10
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	for g := 0; g < numGoroutines; g++ {
+		go func(gid int) {
+			defer wg.Done()
+			for it := 0; it < itersPerGoroutine; it++ {
+				payloadSize := 256 + ((gid*31 + it*17) % 8192)
+				buf := make([]byte, payloadSize)
+				for i := range buf {
+					buf[i] = byte(gid + it + i*3)
+				}
+
+				lvl := 1 + ((gid + it) % 9)
+				comp, err := Compress(buf, lvl)
+				if err != nil {
+					t.Errorf("goroutine %d iter %d: Compress failed: %v", gid, it, err)
+					return
+				}
+
+				dec, err := Decode(comp)
+				if err != nil {
+					t.Errorf("goroutine %d iter %d: Decode failed: %v", gid, it, err)
+					return
+				}
+				if !bytes.Equal(buf, dec) {
+					t.Errorf("goroutine %d iter %d: payload mismatch! len=%d vs %d", gid, it, len(buf), len(dec))
+					return
+				}
+
+				dst := make([]byte, payloadSize, payloadSize+64)
+				decTo, err := DecompressTo(comp, dst)
+				if err != nil {
+					t.Errorf("goroutine %d iter %d: DecompressTo failed: %v", gid, it, err)
+					return
+				}
+				if !bytes.Equal(buf, decTo) {
+					t.Errorf("goroutine %d iter %d: DecompressTo mismatch", gid, it)
+					return
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+}
+
+func TestPublicAPIGracefulEdgeCases(t *testing.T) {
+	t.Run("NilAndEmpty", func(t *testing.T) {
+		cNil, err := Compress(nil, 6)
+		if err != nil || len(cNil) < 8 {
+			t.Fatalf("Compress(nil) failed: %v, len=%d", err, len(cNil))
+		}
+		cEmpty, err := Compress([]byte{}, 6)
+		if err != nil || len(cEmpty) < 8 {
+			t.Fatalf("Compress(empty) failed: %v", err)
+		}
+
+		cdNil, err := CompressWithDict(nil, 6, nil)
+		if err != nil || len(cdNil) < 8 {
+			t.Fatalf("CompressWithDict(nil) failed: %v", err)
+		}
+
+		coNil, err := CompressWithOptions(nil, WithLevel(4))
+		if err != nil || len(coNil) < 8 {
+			t.Fatalf("CompressWithOptions(nil) failed: %v", err)
+		}
+
+		n, err := Decompress(nil, nil)
+		if err != nil || n != 0 {
+			t.Fatalf("Decompress(nil) failed: %v, n=%d", err, n)
+		}
+		n, err = Decompress([]byte{}, nil)
+		if err != nil || n != 0 {
+			t.Fatalf("Decompress(empty) failed: %v, n=%d", err, n)
+		}
+
+		dTo, err := DecompressTo(nil, nil)
+		if err != nil || len(dTo) != 0 {
+			t.Fatalf("DecompressTo(nil) failed: %v", err)
+		}
+
+		n, err = DecompressDict(nil, nil, nil)
+		if err != nil || n != 0 {
+			t.Fatalf("DecompressDict(nil) failed: %v", err)
+		}
+
+		n, err = DecompressWithDict(nil, nil, nil, nil)
+		if err != nil || n != 0 {
+			t.Fatalf("DecompressWithDict(nil) failed: %v", err)
+		}
+
+		dec, err := Decode(nil)
+		if err != nil || len(dec) != 0 {
+			t.Fatalf("Decode(nil) failed: %v", err)
+		}
+		dec, err = Decode([]byte{})
+		if err != nil || len(dec) != 0 {
+			t.Fatalf("Decode(empty) failed: %v", err)
+		}
+	})
+
+	t.Run("OversizedBlock", func(t *testing.T) {
+		oversized := make([]byte, MaxBlockSize+1)
+		_, err := Compress(oversized, 6)
+		if err != ErrExceedsMaxBlock {
+			t.Fatalf("expected ErrExceedsMaxBlock, got %v", err)
+		}
+
+		_, err = CompressWithDict(oversized, 6, nil)
+		if err != ErrExceedsMaxBlock {
+			t.Fatalf("expected ErrExceedsMaxBlock, got %v", err)
+		}
+
+		_, err = CompressWithOptions(oversized, WithLevel(1))
+		if err != ErrExceedsMaxBlock {
+			t.Fatalf("expected ErrExceedsMaxBlock, got %v", err)
+		}
+	})
+
+	t.Run("CorruptedInputs", func(t *testing.T) {
+		_, err := Decompress([]byte{0x01, 0x02, 0x03}, nil)
+		if err != ErrCorruptedFrame {
+			t.Fatalf("expected ErrCorruptedFrame on short frame, got %v", err)
+		}
+
+		badMagic := []byte{'B', 'A', 'D', 'M', 0, 10, 0, 0}
+		dst := make([]byte, 10, 10+64)
+		_, err = Decompress(badMagic, dst)
+		if err != ErrInvalidMagic {
+			t.Fatalf("expected ErrInvalidMagic, got %v", err)
+		}
+
+		_, err = Decode(badMagic)
+		if err != ErrInvalidMagic {
+			t.Fatalf("expected ErrInvalidMagic on Decode, got %v", err)
+		}
+	})
 }

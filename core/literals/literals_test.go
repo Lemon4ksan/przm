@@ -209,3 +209,104 @@ func TestEtaleSheafContainerRoundtrip(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkClassifyContext(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = ClassifyContext(byte(i), uint8(i&3))
+	}
+}
+
+func BenchmarkDecomposeFibers(b *testing.B) {
+	src := bytes.Repeat([]byte("function computeHash(key, seed) { return (key ^ seed) * 0x9e3779b9; }\n"), 16)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = DecomposeFibers(src, 1)
+	}
+}
+
+func BenchmarkReconstituteFoliation(b *testing.B) {
+	src := bytes.Repeat([]byte("function computeHash(key, seed) { return (key ^ seed) * 0x9e3779b9; }\n"), 16)
+	fibers, _ := DecomposeFibers(src, 1)
+	dst := make([]byte, len(src))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = ReconstituteFoliation(dst, len(src),
+			fibers[0], fibers[1], fibers[2], fibers[3],
+			len(fibers[0]), len(fibers[1]), len(fibers[2]), len(fibers[3]),
+			1)
+	}
+}
+
+func BenchmarkVans4x(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	raw := make([]byte, 1024)
+	for i := range raw {
+		raw[i] = byte('a' + rng.Intn(10))
+	}
+	counts := make([]int, 256)
+	for _, c := range raw {
+		counts[c]++
+	}
+	var freq [256]uint16
+	_ = NormalizeFrequencies(counts, freq[:])
+	enc, _ := EncodeVans4x(raw, freq[:])
+	dst := make([]byte, len(raw))
+
+	b.Run("Encode", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_, _ = EncodeVans4x(raw, freq[:])
+		}
+	})
+
+	b.Run("Decode", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = DecodeVans4x(enc, dst, len(raw))
+		}
+	})
+}
+
+func BenchmarkNibblePlanes(b *testing.B) {
+	raw := bytes.Repeat([]byte("alpha-numeric-payload-with-high-low-nibbles-1234567890"), 20)
+	packed := PackNibblePlanes(raw)
+	dst := make([]byte, len(raw))
+
+	b.Run("Pack", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = PackNibblePlanes(raw)
+		}
+	})
+
+	b.Run("Unpack", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = UnpackNibblePlanes(packed, dst, len(raw))
+		}
+	})
+}
+
+func BenchmarkEtaleSheafContainer(b *testing.B) {
+	sample := bytes.Repeat([]byte("int compute(int x) { return x * 42 + 7; }\n"), 30)
+	packed, _ := PackEtaleSheaf(sample, 0)
+	var litsBuf [4096]byte
+	var fiberBuf [4096]byte
+
+	b.Run("Pack", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_, _ = PackEtaleSheaf(sample, 0)
+		}
+	})
+
+	b.Run("Unpack", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_, _ = UnpackSection4Literals(packed, len(packed), litsBuf[:], fiberBuf[:])
+		}
+	})
+}

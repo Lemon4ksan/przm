@@ -6,6 +6,7 @@ package literals
 import (
 	"encoding/binary"
 	"errors"
+	"sync/atomic"
 
 	"github.com/lemon4ksan/foundation/generic"
 )
@@ -38,6 +39,35 @@ type Scratchpad struct {
 var scratchPool = generic.NewPool[Scratchpad](func() *Scratchpad {
 	return new(Scratchpad)
 })
+
+var fastScratch [4]atomic.Pointer[Scratchpad]
+
+func init() {
+	for i := range fastScratch {
+		fastScratch[i].Store(new(Scratchpad))
+	}
+}
+
+func getScratch() *Scratchpad {
+	for i := range fastScratch {
+		if s := fastScratch[i].Swap(nil); s != nil {
+			return s
+		}
+	}
+	return scratchPool.Get()
+}
+
+func putScratch(s *Scratchpad) {
+	if s == nil {
+		return
+	}
+	for i := range fastScratch {
+		if fastScratch[i].CompareAndSwap(nil, s) {
+			return
+		}
+	}
+	scratchPool.Put(s)
+}
 
 // NormalizeFrequencies produces symbol frequencies summing strictly to 4096.
 func NormalizeFrequencies(counts []int, freq []uint16) error {
@@ -267,6 +297,21 @@ func EncodeVANS4x(src []byte, freq []uint16) ([]byte, error) {
 	return out, nil
 }
 
+// EncodeVans4x compresses input literals into a 4-lane interleaved V-ANS stream.
+func EncodeVans4x(src []byte, freq []uint16) ([]byte, error) {
+	return EncodeVANS4x(src, freq)
+}
+
+// DecodeVans4x decompresses a 4-lane interleaved V-ANS payload into dst using temporary scratch tables.
+func DecodeVans4x(src []byte, dst []byte, uLen int) error {
+	if uLen == 0 {
+		return nil
+	}
+	s := scratchPool.Get()
+	defer scratchPool.Put(s)
+	return DecodeVANS4x(src, dst, uLen, s.vansLookup[:], s.vansFreq[:], s.vansCDF[:])
+}
+
 // DecodeVANS4x decompresses a 4-lane interleaved V-ANS payload into dst.
 func DecodeVANS4x(src []byte, dst []byte, uLen int, lookup []byte, freq, cdf []uint16) error {
 	if uLen == 0 {
@@ -490,8 +535,8 @@ func UnpackSection4Literals(s4 []byte, l4 int, litsBuf, fiberBuf []byte) ([]byte
 	if l4 == 0 {
 		return nil, nil
 	}
-	s := scratchPool.Get()
-	defer scratchPool.Put(s)
+	s := getScratch()
+	defer putScratch(s)
 
 	if l4 >= 8 && s4[0] == 'V' && s4[1] == 'A' && s4[2] == 0x01 {
 		flags := s4[3]
@@ -521,6 +566,14 @@ func UnpackSection4Literals(s4 []byte, l4 int, litsBuf, fiberBuf []byte) ([]byte
 		return litsBuf[:nLits], nil
 	}
 	return s4[:l4], nil
+}
+
+// UnpackEtaleSheaf unpacks an Étale Sheaf container from s4 into dst.
+func UnpackEtaleSheaf(s4, dst []byte, uLit int) error {
+	s := scratchPool.Get()
+	defer scratchPool.Put(s)
+	_, err := UnpackSection4Literals(s4, len(s4), dst, s.fiberBuf[:])
+	return err
 }
 
 func unpackEtaleSheaf(s4, dst []byte, uLit int, fiberBuf []byte, s *Scratchpad) error {

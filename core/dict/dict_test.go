@@ -82,3 +82,47 @@ func TestApplyTransformBounds(t *testing.T) {
 	}
 	_ = bytes.Equal
 }
+
+func BenchmarkLookupBrotliWord(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = LookupBrotliWord(uint32(i % 13504))
+	}
+}
+
+func BenchmarkExternalDictMapper(b *testing.B) {
+	mapper := NewExternalDictMapper(BrotliDictionary, WordBase[:], DictOffsets[:])
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = mapper.Lookup(uint32(i % 13504))
+	}
+}
+
+func BenchmarkLookupWebToken(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = LookupWebToken(i % 256)
+	}
+}
+
+func BenchmarkResolveRFCWord(b *testing.B) {
+	cmd := []byte{0x80, 0x00}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		cp := 1
+		_, _, _ = ResolveRFCWord(cmd[0], cmd, &cp)
+	}
+}
+
+func BenchmarkApplyTransform(b *testing.B) {
+	dst := make([]byte, 64)
+	wPtr := []byte("transformation")
+	var scratch [128]byte
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		dstPos := 0
+		_ = ApplyTransform(dst, &dstPos, 64, wPtr, 10, scratch[:])
+	}
+}

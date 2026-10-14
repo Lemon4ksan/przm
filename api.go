@@ -64,15 +64,12 @@ func DecompressWithDict(src, dst []byte, dict []byte, dictDesc *DictionaryDesc) 
 
 // Decode decompresses a PRZM frame, allocating a new destination slice automatically.
 func Decode(src []byte) ([]byte, error) {
+	if len(src) == 0 { return nil, nil }
 	sz, err := GetUncompressedSize(src)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	dst := make([]byte, sz, sz+64)
 	n, err := Decompress(src, dst)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	return dst[:n], nil
 }
 

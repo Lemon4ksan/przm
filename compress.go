@@ -270,16 +270,10 @@ func relaxRepeat(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, b
 			continue
 		}
 		maxL := bSize - i
-		if maxL > MaxMatchLength {
-			maxL = MaxMatchLength
-		}
-		if maxL < bMin {
-			continue
-		}
+		if maxL > MaxMatchLength { maxL = MaxMatchLength }
+		if maxL < bMin { continue }
 		L := measureMatchLength(src, globalPos, globalPos-int(d), maxL)
-		if L < bMin {
-			continue
-		}
+		if L < bMin { continue }
 		relaxRepeatSublengths(i, k, d, L, bMin, curCost, s)
 	}
 }
@@ -307,16 +301,10 @@ func relaxBrackets(i int, s *CompressorScratchpad, src []byte, globalPos, bSize,
 			continue
 		}
 		maxL := bSize - i
-		if maxL > 15+bMin {
-			maxL = 15 + bMin
-		}
-		if maxL < bMin {
-			continue
-		}
+		if maxL > 15+bMin { maxL = 15 + bMin }
+		if maxL < bMin { continue }
 		L := measureMatchLength(src, globalPos, globalPos-int(d), maxL)
-		if L < bMin {
-			continue
-		}
+		if L < bMin { continue }
 		relaxFixedSublengths(i, 2, uint8(b), d, L, bMin, curCost, s)
 	}
 }
@@ -333,16 +321,10 @@ func relaxStride(i int, s *CompressorScratchpad, src []byte, globalPos, bSize in
 			continue
 		}
 		maxL := bSize - i
-		if maxL > 15+bMin {
-			maxL = 15 + bMin
-		}
-		if maxL < bMin {
-			continue
-		}
+		if maxL > 15+bMin { maxL = 15 + bMin }
+		if maxL < bMin { continue }
 		L := measureMatchLength(src, globalPos, globalPos-int(d), maxL)
-		if L < bMin {
-			continue
-		}
+		if L < bMin { continue }
 		relaxFixedSublengths(i, 3, uint8(m), d, L, bMin, curCost, s)
 	}
 }
@@ -405,13 +387,9 @@ func relaxHash4Matches(i int, s *CompressorScratchpad, src []byte, globalPos, bS
 			break
 		}
 		maxL := bSize - i
-		if maxL > MaxMatchLength {
-			maxL = MaxMatchLength
-		}
+		if maxL > MaxMatchLength { maxL = MaxMatchLength }
 		L := measureMatchLength(src, globalPos, candPos, maxL)
-		if L >= 4 {
-			relaxExplicitSublengths(i, d, L, bMin, curCost, s)
-		}
+		if L >= 4 { relaxExplicitSublengths(i, d, L, bMin, curCost, s) }
 		cand = s.prevPos[candPos&WindowHorizonMask]
 		depth++
 	}
@@ -459,12 +437,8 @@ func solveBlockTrellis(src []byte, blockStart, bSize, maxDist int, stride uint32
 	computeBlockLiteralCosts(block, s.litCost[:])
 	for i := 0; i < bSize; i++ {
 		globalPos := blockStart + i
-		if i+4 <= bSize {
-			insertHash(src, globalPos, i, s)
-		}
-		if s.nodes[i].cost == InfinityCost {
-			continue
-		}
+		if i+4 <= bSize { insertHash(src, globalPos, i, s) }
+		if s.nodes[i].cost == InfinityCost { continue }
 		relaxLiteral(i, s, block)
 		relaxRepeat(i, s, src, globalPos, bSize, bMin)
 		relaxBrackets(i, s, src, globalPos, bSize, bMin)

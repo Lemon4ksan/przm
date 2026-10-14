@@ -250,3 +250,81 @@ func TestDistanceZeroAllocations(t *testing.T) {
 		t.Fatalf("UnpackOffsets allocated %f allocs/op (0.00 required!)", allocsUnpack)
 	}
 }
+
+func BenchmarkDistanceToCode(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _, _ = DistanceToCode(uint32(i%100000 + 1))
+	}
+}
+
+func BenchmarkCodeToDistance(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = CodeToDistance(uint8(i%49), uint32(i%16))
+	}
+}
+
+func BenchmarkLocalityQueue(b *testing.B) {
+	q := NewLocalityQueue()
+	b.Run("Push", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			q.Push(uint32(i + 1))
+		}
+	})
+	b.Run("Find", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_, _ = q.Find(uint32(i % 10))
+		}
+	})
+}
+
+func BenchmarkVansDist4(b *testing.B) {
+	codes := make([]uint8, 256)
+	for i := range codes {
+		codes[i] = uint8(i % 49)
+	}
+	enc := make([]byte, 512)
+	dec := make([]uint8, 256)
+	nEnc, _ := EncodeVansDist4(codes, enc)
+
+	b.Run("Encode", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_, _ = EncodeVansDist4(codes, enc)
+		}
+	})
+
+	b.Run("Decode", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = DecodeVansDist4(enc[:nEnc], dec, len(codes))
+		}
+	})
+}
+
+func BenchmarkDistancePrefix(b *testing.B) {
+	distances := make([]uint32, 256)
+	for i := range distances {
+		distances[i] = uint32(i*17 + 1)
+	}
+	packed := make([]byte, 1024)
+	unpacked := make([]byte, 2048)
+	nPacked, _ := PackDistancePrefix(distances, ModeDistancePrefix, true, packed)
+
+	b.Run("Pack", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_, _ = PackDistancePrefix(distances, ModeDistancePrefix, true, packed)
+		}
+	})
+
+	b.Run("Unpack", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_, _ = UnpackDistancePrefix(packed[:nPacked], unpacked)
+		}
+	})
+}

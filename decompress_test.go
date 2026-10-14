@@ -3,6 +3,8 @@ package przm
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"sync"
 	"testing"
 )
 
@@ -306,4 +308,221 @@ func BenchmarkDecompress(b *testing.B) {
 			_, _ = Decompress(brotliFrame, dst)
 		}
 	})
+}
+
+func TestDecompressConcurrentZeroAlloc(t *testing.T) {
+	// Construct distinct valid frames across all modes
+	rawFrame := make([]byte, 33)
+	copy(rawFrame[0:4], []byte{'P', 'R', 'Z', 'M'})
+	rawFrame[4] = FlagUncompressed
+	rawFrame[5] = 25
+	copy(rawFrame[8:], bytes.Repeat([]byte{'A'}, 25))
+
+	lzFrame := []byte{
+		'P', 'R', 'Z', 'M', 0x00, 8, 0, 0,
+		1, 0, 0, 0,
+		0, 16, 0, 0, 0, 0, 0, 0,
+		0xFA,
+		'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+	}
+
+	brotliFrame := []byte{
+		'P', 'R', 'Z', 'M', FlagDictRef, 4, 0, 0,
+		0x4C, 0x54, 0x52, 0x42,
+		3, 0, 0, 0,
+		0xCF, 0x80, 0x00,
+	}
+
+	textPattern := []byte("The quick brown fox jumps over the lazy dog. 1234567890! ")
+	sampleText := bytes.Repeat(textPattern, 20)
+	compText, err := Compress(sampleText, 6)
+	if err != nil {
+		t.Fatalf("Compress sampleText failed: %v", err)
+	}
+
+	tabularPattern := []byte("1001,Alice,Engineering,95000\n1002,Bob,Finance,88000\n1003,Charlie,Product,102000\n")
+	sampleTabular := bytes.Repeat(tabularPattern, 15)
+	compTabular, err := Compress(sampleTabular, 6)
+	if err != nil {
+		t.Fatalf("Compress sampleTabular failed: %v", err)
+	}
+
+	testFrames := [][]byte{rawFrame, lzFrame, brotliFrame, compText, compTabular}
+
+	// 1. High-concurrency stress test: 16 goroutines executing DecompressTo concurrently
+	const numGoroutines = 16
+	const itersPerGoroutine = 50
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	for g := 0; g < numGoroutines; g++ {
+		go func(gid int) {
+			defer wg.Done()
+			dst := make([]byte, len(sampleTabular)+256)
+			for i := 0; i < itersPerGoroutine; i++ {
+				frame := testFrames[(gid+i)%len(testFrames)]
+				dec, err := DecompressTo(frame, dst)
+				if err != nil {
+					t.Errorf("goroutine %d iter %d DecompressTo failed: %v", gid, i, err)
+					return
+				}
+				if len(dec) == 0 {
+					t.Errorf("goroutine %d iter %d empty output", gid, i)
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// 2. Strict zero-allocation verification across all test frames
+	for idx, frame := range testFrames {
+		dst := make([]byte, len(sampleTabular)+256)
+		allocs := testing.AllocsPerRun(100, func() {
+			_, decErr := DecompressTo(frame, dst)
+			if decErr != nil {
+				t.Fatalf("DecompressTo frame %d failed: %v", idx, decErr)
+			}
+		})
+		if allocs != 0.00 {
+			t.Fatalf("frame %d allocated %.2f allocs/op (strictly 0.00 required!)", idx, allocs)
+		}
+	}
+}
+
+func isStandardError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrCorruptedFrame) ||
+		errors.Is(err, ErrInvalidMagic) ||
+		errors.Is(err, ErrBufferTooSmall) ||
+		errors.Is(err, ErrExceedsMaxBlock) ||
+		errors.Is(err, ErrOffsetOOB) ||
+		errors.Is(err, ErrUnsupportedMode) ||
+		errors.Is(err, ErrUnknownDict)
+}
+
+func TestCycle3BoundaryFuzz(t *testing.T) {
+	// Construct test frames across categories
+	rawFrame := make([]byte, 33)
+	copy(rawFrame[0:4], []byte{'P', 'R', 'Z', 'M'})
+	rawFrame[4] = FlagUncompressed
+	rawFrame[5] = 25
+	copy(rawFrame[8:], bytes.Repeat([]byte{'A'}, 25))
+
+	lzFrame := []byte{
+		'P', 'R', 'Z', 'M', 0x00, 8, 0, 0,
+		1, 0, 0, 0,
+		0, 16, 0, 0, 0, 0, 0, 0,
+		0xFA,
+		'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+	}
+
+	brotliFrame := []byte{
+		'P', 'R', 'Z', 'M', FlagDictRef, 4, 0, 0,
+		0x4C, 0x54, 0x52, 0x42,
+		3, 0, 0, 0,
+		0xCF, 0x80, 0x00,
+	}
+
+	pattern := []byte("fuzzing boundary truncation across all byte offsets: 0123456789! ")
+	compMulti, err := Compress(bytes.Repeat(pattern, 10), 6)
+	if err != nil {
+		t.Fatalf("Compress failed: %v", err)
+	}
+
+	frames := [][]byte{rawFrame, lzFrame, brotliFrame, compMulti}
+	dst := make([]byte, 65536)
+
+	// Part 1: Truncation at every single byte boundary (0 to len(frame)-1)
+	for fIdx, f := range frames {
+		for cutoff := 0; cutoff < len(f); cutoff++ {
+			trunc := f[:cutoff]
+			_, decErr := DecompressTo(trunc, dst)
+			if decErr == nil {
+				// Nil or 0-length input returns 0, nil for empty frames
+				if cutoff == 0 {
+					continue
+				}
+				t.Fatalf("frame %d cutoff %d/%d: expected error on truncated stream, got nil", fIdx, cutoff, len(f))
+			}
+			if !isStandardError(decErr) {
+				t.Fatalf("frame %d cutoff %d: non-standard error returned: %v", fIdx, cutoff, decErr)
+			}
+
+			// Verify zero allocations during error path handling
+			allocs := testing.AllocsPerRun(10, func() {
+				_, _ = DecompressTo(trunc, dst)
+			})
+			if allocs != 0.00 {
+				t.Fatalf("frame %d cutoff %d error path allocated %.2f allocs/op (strictly 0.00 required)", fIdx, cutoff, allocs)
+			}
+		}
+	}
+
+	// Part 2: Corrupted magic bytes
+	for b := 0; b < 256; b++ {
+		if byte(b) == 'P' {
+			continue
+		}
+		corrupt := make([]byte, len(lzFrame))
+		copy(corrupt, lzFrame)
+		corrupt[0] = byte(b)
+		_, decErr := DecompressTo(corrupt, dst)
+		if !errors.Is(decErr, ErrInvalidMagic) {
+			t.Fatalf("byte 0 corruption with 0x%02X expected ErrInvalidMagic, got %v", b, decErr)
+		}
+	}
+
+	// Part 3: Corrupted uncompressed payload
+	hdrTrunc := []byte{'P', 'R', 'Z', 'M', FlagUncompressed, 0xFF, 0xFF, 0x00, 0x41}
+	_, decErr := DecompressTo(hdrTrunc, dst)
+	if decErr == nil {
+		t.Fatalf("expected error on truncated uncompressed payload, got nil")
+	}
+
+	// Part 4: Out-of-bounds LEB128 varints (5-byte MSB overflow)
+	badVarCmd := []byte{
+		'P', 'R', 'Z', 'M', 0x00, 10, 0, 0,
+		1, 0, 0, 0,
+		0, 16, 0, 0, 0, 0, 0, 0,
+		0x8F,                         // Fused match opcode with varint
+		0x80, 0x80, 0x80, 0x80, 0x80, // 5-byte non-terminating LEB128
+		'A', 'B', 'C', 'D',
+	}
+	_, decErr = DecompressTo(badVarCmd, dst)
+	if decErr == nil || !isStandardError(decErr) {
+		t.Fatalf("expected standard error on malformed LEB128 varint, got %v", decErr)
+	}
+
+	// Part 5: Malformed dictionary descriptors & offsets
+	badDictTau := []byte{
+		'P', 'R', 'Z', 'M', FlagDictRef, 10, 0, 0,
+		0x4C, 0x54, 0x52, 0x42, // 'B','R','T','L'
+		3, 0, 0, 0,
+		0xCF, 125, 0x00, // tau = 125 > 120
+	}
+	_, decErr = DecompressTo(badDictTau, dst)
+	if decErr == nil || !isStandardError(decErr) {
+		t.Fatalf("expected standard error on tau > 120, got %v", decErr)
+	}
+
+	badWordID := []byte{
+		'P', 'R', 'Z', 'M', FlagDictRef, 10, 0, 0,
+		0x4C, 0x54, 0x52, 0x42,
+		4, 0, 0, 0,
+		0xCF, 0, 0x80, 0x80, // word ID out of range
+	}
+	_, decErr = DecompressTo(badWordID, dst)
+	if decErr == nil || !isStandardError(decErr) {
+		t.Fatalf("expected standard error on out of range word ID, got %v", decErr)
+	}
+
+	// Part 6: Buffer too small
+	tooSmall := make([]byte, 10) // needs 25 + 64 bytes
+	_, decErr = DecompressTo(rawFrame, tooSmall)
+	if !errors.Is(decErr, ErrBufferTooSmall) {
+		t.Fatalf("expected ErrBufferTooSmall, got %v", decErr)
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"math/bits"
 	"sync"
+	"sync/atomic"
 
 	"github.com/lemon4ksan/foundation/generic"
 )
@@ -110,6 +111,35 @@ type Scratchpad struct {
 var scratchPool = generic.NewPool[Scratchpad](func() *Scratchpad {
 	return new(Scratchpad)
 })
+
+var fastScratch [4]atomic.Pointer[Scratchpad]
+
+func init() {
+	for i := range fastScratch {
+		fastScratch[i].Store(new(Scratchpad))
+	}
+}
+
+func getScratch() *Scratchpad {
+	for i := range fastScratch {
+		if s := fastScratch[i].Swap(nil); s != nil {
+			return s
+		}
+	}
+	return scratchPool.Get()
+}
+
+func putScratch(s *Scratchpad) {
+	if s == nil {
+		return
+	}
+	for i := range fastScratch {
+		if fastScratch[i].CompareAndSwap(nil, s) {
+			return
+		}
+	}
+	scratchPool.Put(s)
+}
 
 // DistanceToCode maps a match distance D to its distance code, extra bits, and extra bit count.
 func DistanceToCode(d uint32) (code uint8, extra uint32, nb uint8) {
@@ -233,6 +263,11 @@ func (r *BitReader) ReadBits(nb uint8) (uint32, error) {
 	return val, nil
 }
 
+// DecodeVansDist4 decodes n distance codes using 4-context Mode 12 V-ANS.
+func DecodeVansDist4(src []byte, dstCodes []uint8, n int) error {
+	return DecodeDistClusteredVans(src, dstCodes, n)
+}
+
 // DecodeDistClusteredVans decodes n distance codes using 4-context Mode 12 V-ANS.
 func DecodeDistClusteredVans(src []byte, dstCodes []uint8, n int) error {
 	if len(src) < 5 || src[0] != ModeDistClusteredVANS {
@@ -269,6 +304,11 @@ func DecodeDistClusteredVans(src []byte, dstCodes []uint8, n int) error {
 	return nil
 }
 
+// EncodeVansDist4 encodes n distance codes into dst using Mode 12 V-ANS.
+func EncodeVansDist4(codes []uint8, dst []byte) (int, error) {
+	return EncodeDistClusteredVans(codes, dst)
+}
+
 // EncodeDistClusteredVans encodes n distance codes into dst using Mode 12 V-ANS.
 func EncodeDistClusteredVans(codes []uint8, dst []byte) (int, error) {
 	n := len(codes)
@@ -282,8 +322,8 @@ func EncodeDistClusteredVans(codes []uint8, dst []byte) (int, error) {
 	}
 	initDistModels4()
 
-	s := scratchPool.Get()
-	defer scratchPool.Put(s)
+	s := getScratch()
+	defer putScratch(s)
 
 	stream := s.varBuf[:]
 	var streamPtr int
@@ -330,14 +370,18 @@ type LocalityQueue struct {
 	R [4]uint32
 }
 
-// NewLocalityQueue constructs a new LocalityQueue with stride configuration.
-func NewLocalityQueue(stride int) LocalityQueue {
+// NewLocalityQueue constructs a new LocalityQueue with optional stride configuration.
+func NewLocalityQueue(stride ...int) LocalityQueue {
+	s := 1
+	if len(stride) > 0 {
+		s = stride[0]
+	}
 	var q LocalityQueue
-	if stride > 1 {
+	if s > 1 {
 		q.R[0] = 1
-		q.R[1] = uint32(stride)
-		q.R[2] = uint32(2 * stride)
-		q.R[3] = uint32(3 * stride)
+		q.R[1] = uint32(s)
+		q.R[2] = uint32(2 * s)
+		q.R[3] = uint32(3 * s)
 		return q
 	}
 	q.R[0] = 1
@@ -345,6 +389,26 @@ func NewLocalityQueue(stride int) LocalityQueue {
 	q.R[2] = 8
 	q.R[3] = 16
 	return q
+}
+
+// Push pushes an explicit distance d to the front of the LRU queue.
+func (q *LocalityQueue) Push(d uint32) {
+	q.UpdateExplicit(d)
+}
+
+// Get returns the distance register at index idx in [0..3].
+func (q *LocalityQueue) Get(idx int) uint32 {
+	return q.R[idx]
+}
+
+// Find searches for distance d in the LRU queue. If found, returns index [0..3] and true.
+func (q *LocalityQueue) Find(d uint32) (int, bool) {
+	for k := 0; k < 4; k++ {
+		if q.R[k] == d {
+			return k, true
+		}
+	}
+	return -1, false
 }
 
 // Init sets the initial distance vector based on flags and stride.
@@ -598,8 +662,8 @@ func UnpackDistancePrefix(src, dstVarints []byte) (int, error) {
 	if matchCount == 0 {
 		return 0, nil
 	}
-	s := scratchPool.Get()
-	defer scratchPool.Put(s)
+	s := getScratch()
+	defer putScratch(s)
 
 	codes := s.meta[:matchCount]
 	codeStream := src[hSize : hSize+int(codeLen)]
@@ -617,8 +681,8 @@ func PackDistancePrefix(distances []uint32, mode byte, useVANS bool, dst []byte)
 	if n == 0 {
 		return 0, nil
 	}
-	s := scratchPool.Get()
-	defer scratchPool.Put(s)
+	s := getScratch()
+	defer putScratch(s)
 
 	codes := s.meta[:n]
 	extraWriter := NewBitWriter(s.varBuf[:])

@@ -4,6 +4,8 @@ package przm
 
 import (
 	"encoding/binary"
+	"errors"
+	"sync/atomic"
 
 	"github.com/lemon4ksan/foundation/generic"
 	"github.com/lemon4ksan/przm/core/commands"
@@ -51,6 +53,27 @@ var scratchPool = generic.NewPool[Scratchpad](func() *Scratchpad {
 	return new(Scratchpad)
 })
 
+var fastScratch [4]atomic.Pointer[Scratchpad]
+
+func init() {
+	for i := range fastScratch { fastScratch[i].Store(new(Scratchpad)) }
+}
+
+func getScratch() *Scratchpad {
+	for i := range fastScratch {
+		if s := fastScratch[i].Swap(nil); s != nil { return s }
+	}
+	return scratchPool.Get()
+}
+
+func putScratch(s *Scratchpad) {
+	if s == nil { return }
+	for i := range fastScratch {
+		if fastScratch[i].CompareAndSwap(nil, s) { return }
+	}
+	scratchPool.Put(s)
+}
+
 // FrameContext holds structural offsets and parameters for the current frame.
 type FrameContext struct {
 	flags    uint8
@@ -79,9 +102,7 @@ func readLEB128(b []byte, pos *int) (uint32, error) {
 	var shift uint
 	p := *pos
 	for i := 0; i < 4; i++ {
-		if p >= len(b) {
-			return 0, ErrCorruptedFrame
-		}
+		if p >= len(b) { return 0, ErrCorruptedFrame }
 		byteVal := b[p]
 		p++
 		res |= uint32(byteVal&0x7F) << shift
@@ -89,9 +110,7 @@ func readLEB128(b []byte, pos *int) (uint32, error) {
 			shift += 7
 			continue
 		}
-		if res > MaxBlockSize {
-			return 0, ErrCorruptedFrame
-		}
+		if res > MaxBlockSize { return 0, ErrCorruptedFrame }
 		*pos = p
 		return res, nil
 	}
@@ -253,16 +272,12 @@ func finishMatch(dst []byte, dstP *int, d, lMatch uint32, f *FrameContext) error
 
 // copyMatch reproduces match bytes from window history or external dictionary.
 func copyMatch(dst []byte, dstPos int, d uint32, matchLen uint32, uSize uint32, dict []byte) error {
-	if uint32(dstPos)+matchLen > uSize {
-		return ErrCorruptedFrame
-	}
-	mLen := int(matchLen)
-	dist := int(d)
+	if d == 0 { return ErrOffsetOOB }
+	if uint32(dstPos)+matchLen > uSize { return ErrCorruptedFrame }
+	mLen, dist := int(matchLen), int(d)
 	if dist <= dstPos {
 		srcPos := dstPos - dist
-		for i := 0; i < mLen; i++ {
-			dst[dstPos+i] = dst[srcPos+i]
-		}
+		for i := 0; i < mLen; i++ { dst[dstPos+i] = dst[srcPos+i] }
 		return nil
 	}
 	return copyDictMatch(dst, dstPos, dstPos-dist, mLen, dict)
@@ -375,20 +390,13 @@ func execFusedExt(dst []byte, dstP, litP, offP, cmdP *int, op byte, f *FrameCont
 
 func execExtendedOp(dst []byte, dstP, litP, offP, cmdP *int, op byte, f *FrameContext, r *[4]uint32, s *Scratchpad) error {
 	switch {
-	case op <= 0xC3:
-		return execLongRepeat(dst, dstP, litP, cmdP, op, f, r)
-	case op <= 0xCD:
-		return execBracketMatch(dst, dstP, litP, cmdP, op, f, r)
-	case op == 0xCE:
-		return execDiffLattice(dst, dstP, cmdP, f, r)
-	case op == 0xCF:
-		return execRFCTransform(dst, dstP, f.uSize, f.cmdBuf, cmdP, s)
-	case op <= 0xD7:
-		return execStrideMatch(dst, dstP, litP, cmdP, op, f, r)
-	case op >= 0xD8 && op <= 0xDF:
-		return execTokenMatch(dst, dstP, op, f)
-	default:
-		return execSpecialOp(dst, dstP, litP, cmdP, op, f)
+	case op <= 0xC3: return execLongRepeat(dst, dstP, litP, cmdP, op, f, r)
+	case op <= 0xCD: return execBracketMatch(dst, dstP, litP, cmdP, op, f, r)
+	case op == 0xCE: return execDiffLattice(dst, dstP, cmdP, f, r)
+	case op == 0xCF: return execRFCTransform(dst, dstP, f.uSize, f.cmdBuf, cmdP, s)
+	case op <= 0xD7: return execStrideMatch(dst, dstP, litP, cmdP, op, f, r)
+	case op >= 0xD8 && op <= 0xDF: return execTokenMatch(dst, dstP, op, f)
+	default: return execSpecialOp(dst, dstP, litP, cmdP, op, f)
 	}
 }
 
@@ -585,7 +593,7 @@ func decompressInternal(src, dst []byte, dict []byte, dictDesc *DictionaryDesc) 
 	f.dictDesc = dictDesc
 
 	if err := stageParseHeader(src, cap(dst), &f); err != nil {
-		return 0, err
+		return 0, normalizeError(err)
 	}
 	if f.uSize == 0 {
 		return 0, nil
@@ -598,16 +606,35 @@ func decompressInternal(src, dst []byte, dict []byte, dictDesc *DictionaryDesc) 
 		return int(f.uSize), nil
 	}
 	if err := stageResolveSections(src, &f); err != nil {
-		return 0, err
+		return 0, normalizeError(err)
 	}
 
-	s := scratchPool.Get()
+	s := getScratch()
 	err := executePipeline(src, dst, &f, s)
-	scratchPool.Put(s)
 	if err != nil {
-		return 0, err
+		putScratch(s)
+		return 0, normalizeError(err)
 	}
-	return stageFinalize(dst, cap(dst), &f, s)
+	n, err := stageFinalize(dst, cap(dst), &f, s)
+	putScratch(s)
+	return n, normalizeError(err)
+}
+
+func normalizeError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, commands.ErrCorruptedFrame), errors.Is(err, distance.ErrCorruptedFrame), errors.Is(err, literals.ErrCorruptedFrame), errors.Is(err, ErrCorruptedFrame):
+		return ErrCorruptedFrame
+	case errors.Is(err, commands.ErrBufferTooSmall), errors.Is(err, distance.ErrBufferTooSmall), errors.Is(err, literals.ErrBufferTooSmall), errors.Is(err, ErrBufferTooSmall):
+		return ErrBufferTooSmall
+	case errors.Is(err, distance.ErrOffsetOOB), errors.Is(err, ErrOffsetOOB):
+		return ErrOffsetOOB
+	case errors.Is(err, distance.ErrUnsupportedMode), errors.Is(err, ErrUnsupportedMode):
+		return ErrUnsupportedMode
+	default:
+		return err
+	}
 }
 
 func executePipeline(src, dst []byte, f *FrameContext, s *Scratchpad) error {
