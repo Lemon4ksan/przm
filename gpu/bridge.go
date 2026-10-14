@@ -147,11 +147,6 @@ func GetGlobalCompressor() (*GPUCompressor, error) {
 	return comp, nil
 }
 
-// GetGPUCompressor is an alias for GetGlobalCompressor matching PRZM architecture diagrams.
-func GetGPUCompressor() (*GPUCompressor, error) {
-	return GetGlobalCompressor()
-}
-
 // ResetGlobalCompressorForTest closes and resets the global singleton for testing.
 func ResetGlobalCompressorForTest() {
 	globalMu.Lock()

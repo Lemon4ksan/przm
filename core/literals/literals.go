@@ -301,11 +301,6 @@ func EncodeVANS4x(src []byte, freq []uint16) ([]byte, error) {
 	return out, nil
 }
 
-// EncodeVans4x compresses input literals into a 4-lane interleaved V-ANS stream.
-func EncodeVans4x(src []byte, freq []uint16) ([]byte, error) {
-	return EncodeVANS4x(src, freq)
-}
-
 // DecodeVans4x decompresses a 4-lane interleaved V-ANS payload into dst using temporary scratch tables.
 func DecodeVans4x(src, dst []byte, uLen int) error {
 	if uLen == 0 {

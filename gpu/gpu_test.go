@@ -61,14 +61,6 @@ func TestGetGlobalCompressorSingleton(t *testing.T) {
 	if comp1 != comp2 {
 		t.Fatalf("Expected identical singleton instance pointers, got %p vs %p", comp1, comp2)
 	}
-
-	comp3, err := GetGPUCompressor()
-	if err != nil {
-		t.Fatalf("GetGPUCompressor failed: %v", err)
-	}
-	if comp1 != comp3 {
-		t.Fatalf("Expected alias GetGPUCompressor to return identical singleton pointer, got %p vs %p", comp1, comp3)
-	}
 }
 
 func TestPTXKernelExecutionAndAccuracy(t *testing.T) {

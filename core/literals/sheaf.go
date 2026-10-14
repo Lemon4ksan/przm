@@ -86,12 +86,6 @@ func ContextClassify(p1 byte, mode uint8) uint8 {
 	}
 }
 
-// ClassifyContext determines the fiber class (0..3) for Modes 0, 1, 2.
-// It is an idiomatic alias for ContextClassify.
-func ClassifyContext(p1 byte, mode uint8) uint8 {
-	return ContextClassify(p1, mode)
-}
-
 // ContextClassifyOrder2 evaluates joint bigram foliation for Mode 3.
 func ContextClassifyOrder2(p2, p1 byte) uint8 {
 	if p1 >= '0' && p1 <= '9' {
@@ -137,12 +131,6 @@ func DecomposeFibers(src []byte, mode uint8) ([4][]byte, error) {
 		p1 = b
 	}
 	return fibers, nil
-}
-
-// ReconstituteFoliation reconstructs literals from 4 fibers via causal history.
-// It is an alias for ReconstituteFibers.
-func ReconstituteFoliation(dst []byte, uLit int, f0, f1, f2, f3 []byte, l0, l1, l2, l3 int, mode uint8) error {
-	return ReconstituteFibers(dst, uLit, f0, f1, f2, f3, l0, l1, l2, l3, mode)
 }
 
 // ReconstituteFibers reconstructs literals from 4 fibers via causal history.

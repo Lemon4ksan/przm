@@ -292,19 +292,19 @@ func BenchmarkVansDist4(b *testing.B) {
 	}
 	enc := make([]byte, 512)
 	dec := make([]uint8, 256)
-	nEnc, _ := EncodeVansDist4(codes, enc)
+	nEnc, _ := EncodeDistClusteredVans(codes, enc)
 
 	b.Run("Encode", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			_, _ = EncodeVansDist4(codes, enc)
+			_, _ = EncodeDistClusteredVans(codes, enc)
 		}
 	})
 
 	b.Run("Decode", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			_ = DecodeVansDist4(enc[:nEnc], dec, len(codes))
+			_ = DecodeDistClusteredVans(enc[:nEnc], dec, len(codes))
 		}
 	})
 }

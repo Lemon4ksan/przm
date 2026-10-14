@@ -251,13 +251,3 @@ func TestChallenger_GPU_MultiChunk_FallbackStress(t *testing.T) {
 		t.Fatalf("Multi-chunk fallback roundtrip data mismatch!")
 	}
 }
-
-// TestTier4_GPU_W04_HardwareFailureUnderLoad aliases TestTier4_GPU_Workload_HardwareFailureUnderLoad
-func TestTier4_GPU_W04_HardwareFailureUnderLoad(t *testing.T) {
-	TestTier4_GPU_Workload_HardwareFailureUnderLoad(t)
-}
-
-// TestTier3_GPU_I04_MidPipelineFallbackToggling aliases TestTier3_GPU_FallbackToggling_MidPipeline
-func TestTier3_GPU_I04_MidPipelineFallbackToggling(t *testing.T) {
-	TestTier3_GPU_FallbackToggling_MidPipeline(t)
-}

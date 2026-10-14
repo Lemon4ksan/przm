@@ -279,11 +279,6 @@ func (r *BitReader) ReadBits(nb uint8) (uint32, error) {
 	return val, nil
 }
 
-// DecodeVansDist4 decodes n distance codes using 4-context Mode 12 V-ANS.
-func DecodeVansDist4(src []byte, dstCodes []uint8, n int) error {
-	return DecodeDistClusteredVans(src, dstCodes, n)
-}
-
 // DecodeDistClusteredVans decodes n distance codes using 4-context Mode 12 V-ANS.
 func DecodeDistClusteredVans(src []byte, dstCodes []uint8, n int) error {
 	if len(src) < 5 || src[0] != ModeDistClusteredVANS {
@@ -318,11 +313,6 @@ func DecodeDistClusteredVans(src []byte, dstCodes []uint8, n int) error {
 		}
 	}
 	return nil
-}
-
-// EncodeVansDist4 encodes n distance codes into dst using Mode 12 V-ANS.
-func EncodeVansDist4(codes []uint8, dst []byte) (int, error) {
-	return EncodeDistClusteredVans(codes, dst)
 }
 
 // EncodeDistClusteredVans encodes n distance codes into dst using Mode 12 V-ANS.

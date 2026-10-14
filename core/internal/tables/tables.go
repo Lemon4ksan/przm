@@ -10762,9 +10762,6 @@ type DictionaryDesc struct {
 	Entries      []DictEntry
 }
 
-// BrotliDictData is an alias to BrotliDictionary for backward compatibility.
-var BrotliDictData = BrotliDictionary
-
 // LookupBrotliWord performs binary search over the static RFC 7932 dictionary.
 func LookupBrotliWord(wid uint32) []byte {
 	low := 0

@@ -214,10 +214,10 @@ func TestEtaleSheafContainerRoundtrip(t *testing.T) {
 	}
 }
 
-func BenchmarkClassifyContext(b *testing.B) {
+func BenchmarkContextClassify(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = ClassifyContext(byte(i), uint8(i&3))
+		_ = ContextClassify(byte(i), uint8(i&3))
 	}
 }
 
@@ -230,14 +230,14 @@ func BenchmarkDecomposeFibers(b *testing.B) {
 	}
 }
 
-func BenchmarkReconstituteFoliation(b *testing.B) {
+func BenchmarkReconstituteFibers(b *testing.B) {
 	src := bytes.Repeat([]byte("function computeHash(key, seed) { return (key ^ seed) * 0x9e3779b9; }\n"), 16)
 	fibers, _ := DecomposeFibers(src, 1)
 	dst := make([]byte, len(src))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = ReconstituteFoliation(dst, len(src),
+		_ = ReconstituteFibers(dst, len(src),
 			fibers[0], fibers[1], fibers[2], fibers[3],
 			len(fibers[0]), len(fibers[1]), len(fibers[2]), len(fibers[3]),
 			1)
@@ -256,13 +256,13 @@ func BenchmarkVans4x(b *testing.B) {
 	}
 	var freq [256]uint16
 	_ = NormalizeFrequencies(counts, freq[:])
-	enc, _ := EncodeVans4x(raw, freq[:])
+	enc, _ := EncodeVANS4x(raw, freq[:])
 	dst := make([]byte, len(raw))
 
 	b.Run("Encode", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			_, _ = EncodeVans4x(raw, freq[:])
+			_, _ = EncodeVANS4x(raw, freq[:])
 		}
 	})
 
