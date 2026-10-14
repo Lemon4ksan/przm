@@ -23,7 +23,9 @@ func RenderHTML(w io.Writer, r *AnalysisReport, filename string) error {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PRZM Compression Diagnostics - ` + html.EscapeString(filename) + `</title>
+<title>PRZM Compression Diagnostics - `)
+	b.WriteString(html.EscapeString(filename))
+	b.WriteString(`</title>
 <style>
   :root {
     --bg-primary: #0d1117;
@@ -635,7 +637,9 @@ func RenderHTML(w io.Writer, r *AnalysisReport, filename string) error {
 	b.WriteString(`
 <div id="jsonDrawer" style="display:none; margin-top: 24px;" class="card">
   <div class="panel-title">Full Diagnostic JSON Payload</div>
-  <pre><code>` + html.EscapeString(string(jsonData)) + `</code></pre>
+  <pre><code>`)
+	b.WriteString(html.EscapeString(string(jsonData)))
+	b.WriteString(`</code></pre>
 </div>
 
 <script>
