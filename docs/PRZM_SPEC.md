@@ -1,8 +1,8 @@
 # PRZM Compression Format Specification
 
 ```text
-Document:     PRZM-SPEC-0.6
-Version:      0.6.0
+Document:     PRZM-SPEC-0.8
+Version:      0.8.0
 Status:       Standard Specification
 Identifier:   PRZM (0x4D5A5250 Little-Endian)
 Verification: Formally Proved in Lean 4 (38 Verified Theorems)
@@ -123,13 +123,13 @@ Following the Section Directory are 4 structured sections:
 
 | Bit | Mask | Identifier | Semantics |
 | :--- | :--- | :--- | :--- |
-| 0 | `0x01` | `FLAG_STRIDE` | Stride parameter `Stride` (1B) is present in Frame Parameters. |
+| 0 | `0x01` | `FLAG_STRIDE` | Stride parameter `Stride` (1B, value $S-1$) is present in Frame Parameters. |
 | 1 | `0x02` | `FLAG_DELTA_MASK` | Delta residual mask channel is active in Section 4. |
 | 2 | `0x04` | `FLAG_UNCOMPRESSED`| Payload is uncompressed raw data (Sections 1..4 omitted). |
 | 3 | `0x08` | `FLAG_EXT_OFFSET` | Offsets and section lengths are 24-bit (required for blocks > 64 KiB). |
 | 4 | `0x10` | `FLAG_DICT_REF` | External schema dictionary `DictID` (4B) present in Parameters. |
-| 5 | `0x20` | `FLAG_BCJ_SPLIT` | x86 branch displacement splitting across 4 byte planes. |
-| 6 | `0x40` | `FLAG_BCJ` | x86_64 relative address translation active on block. |
+| 5 | `0x20` | `FLAG_NORM` | Text normalization permutation active on block. |
+| 6 | `0x40` | `FLAG_MIN_MATCH_3` | Minimum match base length is set to $bMin = 3$ (default is $bMin = 4$). |
 | 7 | `0x80` | `FLAG_NIBBLE` | Section 4 encoded via SIMD Nibble-Planes or V-ANS. |
 
 ### 3.3. Section Directory & Addressing
@@ -507,19 +507,23 @@ Every byte `op` in Section 2 is decoded strictly according to the following disp
 
 | Opcode Range | Category | Bitfield Layout | Description & Decoding Semantics |
 | :--- | :--- | :--- | :--- |
-| `0x00 .. 0x7F` | **Fast-Path 1: Fused Repeat Token** | `0 LLL MM KK` | **Bit 7**: `0`<br>**Bits [6..4] (`LLL`)**: Literal length $L \in [0, 7]$. If $L > 0$, copy $L$ bytes from Section 4 to `dst[dstPos..dstPos+L]`.<br>**Bits [3..2] (`MM`)**: Base match length $M = \text{MM} + 4 \in [4, 7]$.<br>**Bits [1..0] (`KK`)**: Register index $k \in [0, 3]$. If $k \in [0, 2]$, use `rep_k` and pivot registers. If $k = 3$, read explicit distance $d$ from Section 3 and pivot registers. Copy $M$ bytes from `dst[dstPos - d]`. |
-| `0x80 .. 0xBF` | **Fast-Path 2: Fused Extended Match** | `10 LL MMMM` | **Bits [7..6]**: `10`<br>**Bits [5..4] (`LL`)**: Literal length $L \in [0, 3]$. If $L > 0$, copy $L$ bytes from Section 4 to `dst`.<br>**Bits [3..0] (`MMMM`)**: Base match length $M_{\text{base}} = \text{MMMM} + 4 \in [4, 19]$. If $\text{MMMM} == 15$, read ULEB128 `extra` from Section 2's decompressed symbol stream: $M = 19 + \text{extra}$.<br>Read explicit distance $d$ from Section 3 as ULEB128 and pivot registers. Copy $M$ bytes from `dst[dstPos - d]`. |
-| `0xC0 .. 0xCF` | **Long Repeat Match** | `1100 KKKK` | **Bits [3..0] (`KKKK`)**: Register index $k \in [0, 15]$. If $k \in [0, 2]$, use `rep_k`. If $k = 3$, read explicit distance $d$ from Section 3. If $k > 3$, RESERVED/INVALID (decoder MUST reject).<br>Next byte in Section 2's decompressed stream: `[litLen (4b) | baseLen (4b)]`.<br>Copy `litLen` literals from Section 4.<br>Base match length $M = \text{baseLen} + 4$. If $\text{baseLen} == 15$, read ULEB128 `extra` from Section 2's decompressed stream: $M = 19 + \text{extra}$.<br>Pivot registers. Copy $M$ bytes from `dst[dstPos - d]`. |
-| `0xD0 .. 0xD7` | **Stride Match** | `1101 0MMM` | **Bits [2..0] (`MMM`)**: Stride multiplier index $m = \text{MMM} + 1 \in [1, 8]$.<br>Distance is strictly computed as $d = m \cdot S$.<br>Next byte in Section 2's decompressed stream: `[litLen (4b) | baseLen (4b)]`.<br>Copy `litLen` literals from Section 4, then copy $\text{baseLen} + 4$ bytes from `dst[dstPos - d]`. |
-| `0xD8 .. 0xDF` | **Direct 1-Byte Schema Token** | `1101 1TTT` | **Bits [2..0] (`TTT`)**: Token index $T \in [0, 7]$ from active `DictID`.<br>Immediately copies the pre-defined token string (see Section 17.5) directly into `dst` with 0 literal overhead and 0 offset bytes. |
-| `0xE0 .. 0xE7` | **Delta-Mask Match (Locality)** | `1110 0KKK` | **Bits [2..0] (`KKK`)**: Register index $k \in [0, 7]$. If $k \in [0, 2]$, use `rep_k`. If $k = 3$, read explicit distance $d$ from Section 3. If $k > 3$, RESERVED/INVALID. Pivot registers.<br>Next byte in Section 2's decompressed stream: length byte $B$. Match length $M = B + 4$ (if $B == 255$, read ULEB128 `extra` from Section 2's decompressed stream: $M = 259 + \text{extra}$).<br>Execute vector match copy of $M$ bytes from `dst[dstPos - d]`.<br>Read mutations from Section 4 and apply in-place XOR deltas. |
-| `0xE8` | **Delta-Mask Match (Explicit)** | `1110 1000` | Read explicit distance $d$ from Section 3 as ULEB128. Pivot registers.<br>Next byte in Section 2's decompressed stream: length byte $B$. Match length $M = B + 4$ (if $B == 255$, read ULEB128 `extra` from Section 2's decompressed stream).<br>Copy $M$ bytes from `dst[dstPos - d]`. Read mutations from Section 4 and apply XOR deltas. |
-| `0xE9 .. 0xEF` | *Reserved* | — | Reserved for future format expansions. Decoders MUST reject with `ErrCorruptedFrame`. |
-| `0xF0` | **Pure Literal Run** | `1111 0000` | Next bytes in Section 2's decompressed stream: ULEB128 `runLen`.<br>Copies `runLen` raw bytes from Section 4 directly into `dst`. |
-| `0xF1` | **Pure RLE Run** | `1111 0001` | Next bytes in Section 2's decompressed stream: ULEB128 `rleLen`.<br>Read 1 byte $V$ from Section 4. Replicate $V$ across `dst[dstPos .. dstPos+rleLen]`. |
-| `0xF2` | **Extended Schema Token** | `1111 0010` | Next byte in Section 2's decompressed stream: `tokenID` (uint8, range $8 \dots 79$).<br>Copies entry `tokenID` from active `DictID` into `dst`. |
-| `0xF3 .. 0xFA` | **Direct 1-Byte Literal Run** | `1111 0LLL` | Direct literal transfer without extra length bytes.<br>Literal length $L = \text{op} - \mathtt{0xF3} + 1 \in [1, 8]$.<br>Copies $L$ bytes from Section 4 directly into `dst`. |
-| `0xFB .. 0xFF` | *Reserved* | — | Reserved for future fast-paths. |
+| `0x00 .. 0x7F` | **Fast-Path 1: Fused Repeat Token** | `0 LLL MM KK` | **Bit 7**: `0`<br>**Bits [6..4] (`LLL`)**: Literal length $L \in [0, 7]$. Copy $L$ literals from Section 4.<br>**Bits [3..2] (`MM`)**: Base match length $M = \text{MM} + bMin \in [bMin, bMin+3]$.<br>**Bits [1..0] (`KK`)**: Register index $k \in [0, 3]$. Use $r_k$ and pivot LRU registers. Copy $M$ bytes from `dst[dstPos - d]`. |
+| `0x80 .. 0xBF` | **Fast-Path 2: Fused Extended Match** | `10 LL MMMM` | **Bits [7..6]**: `10`<br>**Bits [5..4] (`LL`)**: Literal length $L \in [0, 3]$. Copy $L$ literals from Section 4.<br>**Bits [3..0] (`MMMM`)**: Base match length $M_{\text{base}} = \text{MMMM} + bMin \in [bMin, bMin+14]$. If $\text{MMMM} == 15$, read ULEB128 `extra`: $M = bMin + 15 + \text{extra}$.<br>Read explicit distance $d$ from Section 3 and pivot LRU registers. Copy $M$ bytes from `dst[dstPos - d]`. |
+| `0xC0 .. 0xC3` | **Long Repeat Match** | `1100 00KK` | **Bits [1..0] (`KK`)**: Register index $k \in [0, 3]$. Use $r_k$ and pivot LRU registers.<br>Next byte in stream: `[litLen (4b) | baseLen (4b)]`. Copy `litLen` literals. Match length $M = \text{baseLen} + bMin$ (with ULEB128 if $\text{baseLen}==15$). Copy $M$ bytes from `dst[dstPos - d]`. |
+| `0xC4 .. 0xCD` | **Fused Bracket Match** | `1100 BBBB` | Direct fused bracket distance $b = \text{op} - \mathtt{0xC4} \in [0, 9] \to \{1, 2, 3, 4, 5, 6, 7, 8, 16, 32\}$.<br>Next byte in stream: `[litLen (4b) | baseLen (4b)]`. Copy `litLen` literals, then copy $\text{baseLen} + bMin$ bytes from `dst[dstPos - d]`. Zero Section 3 overhead. |
+| `0xCE`         | **Difference Lattice Match** | `1100 1110` | 2D difference lattice match around stride columns: next byte `desc` provides mode and lengths; following byte provides signed step $\delta \in [-128, 127]$. Synthesizes $d = r_0 + \delta \cdot S$. |
+| `0xCF`         | **RFC 7932 Static Word Match** | `1100 1111` | Direct index into 14,016-word RFC 7932 static dictionary with optional transformation. |
+| `0xD0 .. 0xD7` | **Stride Match** | `1101 0MMM` | **Bits [2..0] (`MMM`)**: Stride multiplier index $m = \text{MMM} + 1 \in [1, 8]$. Distance $d = m \cdot S$.<br>Next byte: `[litLen (4b) | baseLen (4b)]`. Copy `litLen` literals, then copy $\text{baseLen} + bMin$ bytes. |
+| `0xD8 .. 0xDF` | **Direct 1-Byte Schema Token** | `1101 1TTT` | Token index $T \in [0, 7]$ from active `DictID`. Copies pre-defined token string directly into `dst`. |
+| `0xE0 .. 0xE7` | **Delta-Mask Match (Locality)** | `1110 0KKK` | Base distance from $r_{op \& 7}$. Reads length byte $B$ (with ULEB128 if 255). Applies Section 4 XOR mutations. |
+| `0xE8`         | **Delta-Mask Match (Explicit)** | `1110 1000` | Explicit distance $d$ from Section 3. Reads length byte $B$. Applies Section 4 XOR mutations. |
+| `0xE9`         | **Explicit Match (Tail Literals)** | `1110 1001` | Explicit match with literal runs $nLit > 3$. Next byte provides `[litLen (4b) | baseLen (4b)]` with ULEB128. Explicit distance from Section 3. |
+| `0xEA .. 0xEF` | **Fused RFC Word Transforms** | `1110 1LLL` | Fuses $1..6$ literal prefix bytes ($L = \text{op} - \mathtt{0xEA} + 1$) with RFC 7932 transformed word. |
+| `0xF0`         | **Pure Literal Run** | `1111 0000` | Next bytes: ULEB128 `runLen`. Copies `runLen` raw bytes from Section 4. |
+| `0xF1`         | **Pure RLE Run** | `1111 0001` | Next bytes: ULEB128 `rleLen`. Reads 1 byte $V$ from Section 4 and replicates across `dst`. |
+| `0xF2`         | **Extended Schema Token** | `1111 0010` | Next byte: `tokenID` (uint8). Copies entry `tokenID` from active `DictID`. |
+| `0xF3 .. 0xFA` | **Direct 1-Byte Literal Run** | `1111 0LLL` | Direct literal transfer without header: $L = \text{op} - \mathtt{0xF3} + 1 \in [1, 8]$. |
+| `0xFB .. 0xFF` | *Reserved* | — | Reserved for future fast-paths and VM extensions. |
 
 ### 17.3. Section 3: ULEB128 Offset Channel
 

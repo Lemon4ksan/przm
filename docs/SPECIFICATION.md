@@ -1,7 +1,7 @@
 ---
 title: "PRZM Compression Format: Bitstream Syntax and Decompressor Semantics"
 abbrev: "PRZM Compression Format"
-docname: draft-lemon4ksan-przm-compression-00
+docname: draft-lemon4ksan-przm-compression-01
 category: std
 ipr: trust200902
 area: Applications and Real-Time
@@ -116,13 +116,13 @@ If $U_{\text{size}} = 0$, the decompressor SHALL emit zero bytes and immediately
 ## Header Flags Bitfield
 
 ```text
-  Bit 0: FLAG_STRIDE       (0x01) - 1-byte Stride parameter present
+  Bit 0: FLAG_STRIDE       (0x01) - 1-byte Stride parameter present (value S-1)
   Bit 1: FLAG_DELTA_MASK   (0x02) - Delta mutation mode active
   Bit 2: FLAG_UNCOMPRESSED (0x04) - Uncompressed raw payload
   Bit 3: FLAG_EXT_OFFSET   (0x08) - 24-bit section sizes in directory
   Bit 4: FLAG_DICT_REF     (0x10) - 4-byte DictID parameter present
-  Bit 5: FLAG_BCJ_SPLIT    (0x20) - 4-plane x86 displacement splitter active
-  Bit 6: FLAG_BCJ          (0x40) - Standard x86 Bra86 filter active
+  Bit 5: FLAG_NORM         (0x20) - Involutive normalization permutation active
+  Bit 6: FLAG_MIN_MATCH_3  (0x40) - Periodic tabular data: minimum match length bMin = 3
   Bit 7: FLAG_NIBBLE       (0x80) - Section 4 encoded via V-ANS or Nibble-Planes
 ```
 
@@ -134,11 +134,10 @@ When `FLAG_UNCOMPRESSED` is clear, dynamic parameters immediately follow the 8-b
 
 | Field | Condition | Size and Format |
 |:---|:---|:---|
-| Stride | FLAG_STRIDE | 1 byte (value $S-1$, stride $S \in 1..256$) |
-| DictID | FLAG_DICT_REF | 4 bytes (uint32 Little-Endian) |
-| CallCount | FLAG_BCJ_SPLIT | 4 bytes (uint32 Little-Endian) |
+| Stride | FLAG_STRIDE | 1 byte (value $S-1$, effective stride $S \in 2..256$) |
+| DictID | FLAG_DICT_REF | 4 bytes (uint32 Little-Endian identifier) |
 
-Parameters MUST appear in the exact order: `Stride`, `DictID`, `CallCount`.
+Parameters MUST appear in the exact order: `Stride`, `DictID`.
 
 ## Section Directory
 
@@ -162,109 +161,73 @@ The compressed frame payload is organized into 4 disjoint, contiguous sections:
   └── Section 4: Literal Stream (size = src_len - sec4_offset)
 ```
 
-1. **Section 1 (Distribution Parameters)**: Contains probability distribution metadata. The minimum size is 8 bytes. Byte 5 of Section 1 specifies `ExceptionCount`. The total byte length of Section 1 is $\text{Sec1Size} = 8 + 2 \times \text{ExceptionCount}$.
-2. **Section 2 (Command Stream)**: Sequence of fused opcodes governing data generation.
-3. **Section 3 (Offset Stream)**: Packed ULEB128 variable-length integer match distances.
+1. **Section 1 (Distribution Parameters)**: Contains probability distribution metadata and sliding window scaling ($W_{\log} \in [16, 24]$). Total byte length is $\text{Sec1Size} = 8 + 2 \times \text{ExceptionCount}$.
+2. **Section 2 (Command Stream)**: Sequence of fused opcodes governing data generation, optionally tri-stream split via Mode 8 (`0x08`) or flat (`0x09`).
+3. **Section 3 (Offset Stream)**: Match distance channel encoded via Mode 9 (`ModeFlatCompact`), Mode 0 (`ModeFlat`), Mode 6/0x0A/0x0B (`ModeDistancePrefix*`), or Mode 12 (`ModeDistClusteredVANS`).
 4. **Section 4 (Literal Stream)**: Literal octets (raw, V-ANS 4x compressed, or nibble-plane encoded).
 
 # Fused Command Stream Syntax and Semantics
 
 The Command Stream (Section 2) is evaluated sequentially from offset `sec2_offset` to `sec2_offset + CmdStreamSize`.
 
-## Ring-16 Locality Offset Queue
+## 4-Register Locality Offset State Machine
 
-The decompressor maintains an internal 16-element integer queue $Q$, initialized at the start of each frame using the effective stride periodicity $S$ (default $S = 1$):
+The decompressor maintains an internal 4-register Least-Recently-Used (LRU) vector $\mathbf{R} = [r_0, r_1, r_2, r_3]$, initialized at the start of each frame using the effective stride periodicity $S$ (default $S = 1$):
 
-$$Q = [1, S, 2S, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]$$
+$$\mathbf{R}_{\text{init}} = \begin{cases}
+[1, S, 2S, 3S] & \text{if } S > 1 \\
+[1, 4, 8, 16] & \text{if } S = 1
+\end{cases}$$
 
-Whenever match distance $d = Q[k]$ is accessed by index $k \in [0..15]$, the queue MUST be updated using the Move-to-Front rule: elements $Q[0..k-1]$ are shifted right by one position, and $d$ is inserted at index 0:
-
+Whenever match distance $d = r_k$ is accessed by index $k \in [0..3]$, the registers MUST be updated via Move-to-Front:
 ```c
-int d = q[k];
+uint32_t d = r[k];
 for (int j = k; j > 0; j--) {
-    q[j] = q[j - 1];
+    r[j] = r[j - 1];
 }
-q[0] = d;
+r[0] = d;
 ```
 
-Whenever an explicit distance $d$ is decoded from Section 3 or synthesized via Stride matching ($d = m \times S$), the entire queue $Q$ is shifted right, and $d$ is inserted at $Q[0]$.
-
-## Fast ULEB128 Integer Deserialization
-
-Explicit match distances in Section 3 and length extensions in Section 2 are serialized using ULEB128 encoding (7 bits per byte, MSB indicates continuation):
-
-```text
-Byte 0: [0xxxxxxx]                         -> Value: 0 .. 127 (1 byte)
-Byte 1: [1xxxxxxx] [0yyyyyyy]              -> Value: x | (y << 7) (2 bytes)
-Byte 2: [1xxxxxxx] [1yyyyyyy] [0zzzzzzz]   -> Value: x | (y << 7) | (z << 14) (3 bytes)
+Whenever an explicit distance $d$ is decoded from Section 3 or synthesized via Stride matching ($d = m \times S$), the registers shift right:
+```c
+if (d != r[0]) {
+    r[3] = r[2];
+    r[2] = r[1];
+    r[1] = r[0];
+    r[0] = d;
+}
 ```
 
-For frames up to 256 KiB, all offsets and lengths are guaranteed to occupy at most 3 bytes.
+## Section 2: 3-Way Split Command Stream Engine (Mode 8)
+
+When Section 2 begins with byte `0x08`, the command stream is decompressed using the 3-Way Tri-Stream architecture:
+- **`opStream`**: Structural operation classification tokens (1 byte per command).
+- **`metaStream`**: Short match lengths, bracket descriptors, and difference lattice modes.
+- **`varStream`**: High-entropy ULEB128 variable-length integer extensions.
+
+Each stream is entropy-decoded via 8-Context Bigram V-ANS before linear bytecode reconstitution. If Section 2 begins with `0x09`, commands are stored as contiguous uncompressed linear bytecodes.
 
 ## Complete Opcode Distribution Map (`0x00..0xFF`)
 
 | Opcode Range | Command Category and Semantics |
 |:---|:---|
-| 0x00 .. 0x7F | Fast-Path 1: Fused Repeat (0 LLL MM KK) |
-| 0x80 .. 0xBF | Fast-Path 2: Fused Extended Match (10 LL MMMM) |
-| 0xC0 .. 0xCF | Long Repeat Match (k in 0..15) + Fused Literals |
-| 0xD0 .. 0xD7 | Stride Match (m in 1..8, d = m * Stride) |
-| 0xD8 .. 0xDF | Direct 1-Byte Schema Token (Tokens 0..7) |
-| 0xE0 .. 0xE7 | Delta-Mask Match with Locality Ring (k in 0..7) |
-| 0xE8 | Delta-Mask Match with Explicit Offset (ULEB128) |
-| 0xE9 .. 0xEF | Reserved for future standard extensions |
-| 0xF0 | Pure Literal Run (ULEB128 length, Section 4 payload) |
-| 0xF1 | Pure RLE Run (ULEB128 length, single byte replicated) |
-| 0xF2 | Extended 2-Byte Schema Token (0xF2 <TokenID>) |
-| 0xF3 .. 0xFA | Direct 1-Byte Literal Run (1..8 literals without header) |
-| 0xFB .. 0xFF | Reserved for Virtual Machine execution extensions |
-
-## Fast-Path 1: Fused Repeat (`0x00..0x7F`)
-
-Bit 7 is `0`. Encodes literal count, match length, and repeat index in a single byte:
-
-```text
- Bit:   7   6   5   4   3   2   1   0
-      +---+---+---+---+---+---+---+---+
-      | 0 |    LLL    |   MM  |   KK  |
-      +---+---+---+---+---+---+---+---+
-```
-- **Literal Length** `LLL = (op >> 4) & 0x07` ($0..7$ bytes).
-- **Base Match Length** `MM = (op >> 2) & 0x03`, full match length $M_{\text{len}} = MM + 4$ ($4..7$ bytes).
-- **Locality Index** `KK = op & 0x03` ($k \in [0..3]$).
-
-**Decompressor Execution Sequence:**
-1. If `LLL > 0`, copy `LLL` bytes from Section 4 to destination offset `dst_pos`. Advance `lit_ptr += LLL`, `dst_pos += LLL`.
-2. Retrieve distance $d = Q[k]$; update queue $Q$ via Move-to-Front.
-3. Validate distance: if $dst\_pos < d$, abort with `PRZM_ERR_OFFSET_OOB`.
-4. Copy $M_{\text{len}}$ bytes from offset `dst_pos - d` to `dst_pos`.
-5. Advance `dst_pos += M_len`.
-
-## Fast-Path 2: Fused Extended Match (`0x80..0xBF`)
-
-Bits 7..6 are `10`:
-
-```text
- Bit:   7   6   5   4   3   2   1   0
-      +---+---+---+---+---+---+---+---+
-      | 1   0 |   LL  |     MMMM      |
-      +---+---+---+---+---+---+---+---+
-```
-- **Literal Length** `LL = (op >> 4) & 0x03` ($0..3$ bytes).
-- **Base Match Length** `MMMM = op & 0x0F` ($0..15$).
-- If `MMMM < 15`, full match length $M_{\text{len}} = MMMM + 4$ ($4..18$ bytes).
-- If `MMMM == 15`, an unsigned ULEB128 integer `extra` is read from Section 2; $M_{\text{len}} = 19 + extra$.
-
-**Decompressor Execution Sequence:**
-1. If `LL > 0`, copy `LL` literals from Section 4.
-2. Read explicit match distance $d$ from Section 3 (Offset Stream) via ULEB128.
-3. Update queue $Q$: shift all elements right; insert $d$ at $Q[0]$.
-4. Validate $dst\_pos \ge d$, then copy $M_{\text{len}}$ bytes from `dst_pos - d`.
-
-## Long Repeat and Stride Matches (`0xC0..0xD7`)
-
-- **Long Repeat Match (`0xC0..0xCF`)**: Lower 4 bits indicate queue index $k = op \ \& \ 0x0F$ ($0..15$). The subsequent byte `token` in Section 2 provides `lit_len = token >> 4` and base length `base_len = token & 0x0F` (with ULEB128 expansion if 15). Match distance $d = Q[k]$; queue $Q$ is updated via Move-to-Front.
-- **Stride Match (`0xD0..0xD7`)**: Encodes stride multiplier $m = (op \ \& \ 0x07) + 1$ ($1..8$). The subsequent byte `token` provides `lit_len = token >> 4` and match length $M_{\text{len}} = (token \ \& \ 0x0F) + 4$. Distance is synthesized arithmetically: $d = m \times S$. Queue $Q$ is shifted right; $d$ is inserted at $Q[0]$.
+| 0x00 .. 0x7F | **Fast-Path 1: Fused Repeat Match** (`0 LLL MM KK`) — $L \in 0..7$, $M = MM + B_{\min}$, $k \in 0..3$ using $r_k$. |
+| 0x80 .. 0xBF | **Fast-Path 2: Fused Extended Match** (`10 LL MMMM`) — $L \in 0..3$, $M = MMMM + B_{\min}$ (or $+ \text{ULEB128}$ if $MMMM=15$), explicit distance from Section 3. |
+| 0xC0 .. 0xC3 | **Long Repeat Match** — $k \in 0..3$, next byte provides `[litLen (4b) \| matchLen (4b)]` with optional ULEB128 extension. |
+| 0xC4 .. 0xCD | **Fused Bracket Match** — Direct fused bracket distances ($b \in 0..9 \to \{1, 2, 3, 4, 5, 6, 7, 8, 16, 32\}$), next byte `[litLen \| matchLen]`. Zero Section 3 overhead. |
+| 0xCE         | **Difference Lattice Match (`DiffLattice`)** — 2D column delta around stride: next 2 bytes provide descriptor and signed 8-bit step $\delta$. |
+| 0xCF         | **RFC 7932 Static Word Match** — Direct reference into 14,016-word RFC 7932 vocabulary with optional transformation. |
+| 0xD0 .. 0xD7 | **Stride Match** — Periodic column offset ($m = (op \ \& \ 7) + 1$, $d = m \times S$), next byte `[litLen \| matchLen]`. |
+| 0xD8 .. 0xDF | **Direct 1-Byte Schema Token** — Common schema tokens 0..7 from active `DictID`. |
+| 0xE0 .. 0xE7 | **Delta-Mask Match with Locality** — Copies base match from $r_{op \& 7}$ and applies XOR mutations from Section 4. |
+| 0xE8         | **Delta-Mask Match with Explicit Offset** — Explicit distance from Section 3 with Section 4 XOR mutations. |
+| 0xE9         | **Explicit Match with Tail Literals** — Explicit match for literal runs $nLit > 3$, next byte `[litLen \| matchLen]`. |
+| 0xEA .. 0xEF | **Fused RFC Word Transforms** — Fuses $1..6$ literal prefix bytes with RFC 7932 static dictionary word transformation. |
+| 0xF0         | **Pure Literal Run** — ULEB128 length from Section 2, literal bytes from Section 4. |
+| 0xF1         | **Pure RLE Run** — ULEB128 length, single repeated byte from Section 4. |
+| 0xF2         | **Extended Schema Token** — 2-byte token (`0xF2 <TokenID>`) from active `DictID`. |
+| 0xF3 .. 0xFA | **Direct 1-Byte Literal Run** — Emits $1..8$ literal bytes ($op - 0xF3 + 1$) directly with zero header bytes. |
+| 0xFB .. 0xFF | **Reserved** — Reserved for Virtual Machine execution extensions. |
 
 ## Built-in Schema Dictionaries (`0xD8..0xDF`, `0xF2`)
 
@@ -294,6 +257,34 @@ Following the copy of $M_{\text{len}}$ bytes from `dst_pos - d`, mutation descri
 - **0xF0 (Pure Literal Run)**: Run length $L$ is decoded via ULEB128 from Section 2. Exactly $L$ bytes are transferred from Section 4.
 - **0xF1 (Pure RLE Run)**: Run length $R$ is decoded via ULEB128 from Section 2. A single byte from Section 4 is replicated $R$ times in $D$.
 - **0xF3..0xFA (Direct 1-Byte Literal Run)**: Emits $L = op - 0xF3 + 1$ ($1..8$) literals from Section 4 with zero framing overhead.
+
+# Match Distance Stream Decompression (Section 3)
+
+Section 3 starts at byte offset $O_3 = O_2 + \text{CmdStreamSize}$ and spans length $\text{OffsetStreamSize}$. If $\text{OffsetStreamSize} > 0$, the initial byte specifies the container framing mode:
+
+## Section 3 Container Framing Modes
+
+| Mode Byte | Identifier | Classification | Description |
+|:---:|:---|:---|:---|
+| `0x00` | `ModeFlat` | Raw Flat Sized | 4-byte LE length $L_{\text{orig}}$ followed by $L_{\text{orig}}$ raw ULEB128 bytes. |
+| `0x06` | `ModeDistancePrefix` | Standard Prefix | 12-byte header ($L_{\text{varint}}$, $N_{\text{matches}}$, $L_{\text{code}}$) + CodeStream + ExtraBitsStream. |
+| `0x09` | `ModeFlatCompact` | Raw Flat Compact | Raw ULEB128 bytes spanning the remaining $\text{OffsetStreamSize} - 1$ bytes. |
+| `0x0A` | `ModeDistancePrefixCompact` | Compact Prefix | 6-byte header with 16-bit counts + CodeStream + ExtraBitsStream. |
+| `0x0B` | `ModeDistancePrefixByte` | Byte Prefix | 3-byte header with 8-bit counts + CodeStream + ExtraBitsStream. |
+| `0x0C` | `ModeDistClusteredVANS` | Clustered V-ANS (Mode 12) | 4-context Markovian V-ANS coder across the 49 distance brackets. |
+
+## 49-Bracket Logarithmic Distance Codebook
+
+Distances $D \ge 1$ are partitioned into 49 logarithmic brackets:
+- For $1 \le D \le 4$: Distance Code $C = D - 1$, base distance $\text{Base}(C) = D$, extra bits $nb = 0$.
+- For $5 \le D \le 16{,}777{,}216$:
+  $$u = D - 1, \quad nb = \lfloor \log_2 u \rfloor - 1$$
+  $$\text{half} = (u \gg nb) \land 1, \quad C = 2 \cdot nb + 2 + \text{half}$$
+  $$\text{Base}(C) = (2 + \text{half}) \cdot 2^{nb} + 1, \quad \text{extra} = D - \text{Base}(C)$$
+
+## Built-in RFC 7932 Static Dictionary (`DictID = 0x4252544C`)
+
+When `FLAG_DICT_REF` is set and $\text{DictID} = \mathtt{0x4252544C}$ (`"BRTL"`), the decompressor binds the normative RFC 7932 static dictionary (122,784 bytes) containing 14,016 words partitioned across 24 length classes (lengths 4 to 24) and 121 word transformations. Opcode `0xCF` and fused opcodes `0xEA..0xEF` resolve vocabulary words directly from ROM/static cache at line rate.
 
 # Literal Stream Decompression (Section 4)
 
@@ -457,9 +448,10 @@ This document requests IANA to register the `"przm"` token in the "HTTP Content 
 
 The reference decompressor implementing this specification is maintained in the official repository:
 
-- **Public Header**: [`include/przm_dec.h`](file:///d:/CodingProjects/przm/include/przm_dec.h)
-- **Core Implementation**: [`src/przm_dec.c`](file:///d:/CodingProjects/przm/src/przm_dec.c)
-- **Verification Harness**: [`tests/test_przm_dec.c`](file:///d:/CodingProjects/przm/tests/test_przm_dec.c)
+- **Go Root Facade**: [`przm.go`](file:///d:/CodingProjects/przm/przm.go), [`api.go`](file:///d:/CodingProjects/przm/api.go), [`compress.go`](file:///d:/CodingProjects/przm/compress.go), [`decompress.go`](file:///d:/CodingProjects/przm/decompress.go)
+- **Core Decoupled Engines**: [`core/commands/`](file:///d:/CodingProjects/przm/core/commands), [`core/distance/`](file:///d:/CodingProjects/przm/core/distance), [`core/literals/`](file:///d:/CodingProjects/przm/core/literals), [`core/dict/`](file:///d:/CodingProjects/przm/core/dict)
+- **C99 Line-Rate Decompressor**: [`src/przm_dec.c`](file:///d:/CodingProjects/przm/src/przm_dec.c), [`src/przm_comp.c`](file:///d:/CodingProjects/przm/src/przm_comp.c)
+- **C99 Verification Suite**: [`tests/test_przm_dec.c`](file:///d:/CodingProjects/przm/tests/test_przm_dec.c) (21/21 clean-room tests)
 
 The implementation is licensed under the **BSD-3-Clause** open-source license, permitting unrestricted integration into proprietary and open-source operating systems, game engines, and firmware.
 
