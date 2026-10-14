@@ -97,7 +97,9 @@ func main() {
 
 	localAppData := os.Getenv("LOCALAPPDATA")
 	if localAppData == "" {
-		localAppData = `C:\Users\senya\AppData\Local`
+		if home := os.Getenv("USERPROFILE"); home != "" {
+			localAppData = filepath.Join(home, "AppData", "Local")
+		}
 	}
 
 	targets := []struct {

@@ -17,10 +17,9 @@ import (
 )
 
 func main() {
-	files := []string{
-		`C:\Windows\explorer.exe`,
-		`D:\CodingProjects\g-man-tf2-public\tests\testdata\schema.json`,
-		`C:\Windows\Logs\CBS\CBS.log`,
+	files := os.Args[1:]
+	if len(files) == 0 {
+		files = []string{"test_przm_dec.exe"}
 	}
 
 	fmt.Println("PRZM vs LZMA2 (xz -9) Benchmark on Real Files")
@@ -81,7 +80,7 @@ func run7z(data []byte) (int, time.Duration) {
 	defer os.Remove(tmpOut)
 
 	start := time.Now()
-	cmd := exec.Command(`C:\Program Files\7-Zip\7z.exe`, "a", "-txz", "-mx=9", tmpOut, tmpIn)
+	cmd := exec.Command("7z", "a", "-txz", "-mx=9", tmpOut, tmpIn)
 	cmd.Run()
 	t := time.Since(start)
 

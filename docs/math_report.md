@@ -1,7 +1,7 @@
 # Mathematical Foundations, Geometric Transforms, and Novel Theoretical Paradigms for High-Throughput Manifold Compression: The PRZM Architecture and Beyond
 
 **Author:** Primary Mathematical Report Author Generation 2 (`worker_writer_2`)  
-**Target Codebase:** PRZM Engine (`d:\CodingProjects\przm`)  
+**Target Codebase:** PRZM Engine (https://github.com/lemon4ksan/przm)  
 **Specification:** PRZM-SPEC-0.5  
 **Formal Verification:** Lean 4 Formal Proof Library (`proofs/PRZM/*.lean`, 38 Formal Theorems)  
 **Date:** September 30, 2026  

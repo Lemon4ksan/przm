@@ -29,7 +29,6 @@ func resolveZstdPath(preferred string) string {
 	}
 	candidates := []string{
 		"zstd",
-		`C:\w64devkit\bin\zstd.exe`,
 		"zstd.exe",
 	}
 	for _, cand := range candidates {

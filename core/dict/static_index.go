@@ -63,7 +63,7 @@ func initStaticDictIndex() {
 	// 3. Index CompactPairs (c 0..2047, p = 14016 + c)
 	// CompactPairs are high-frequency RFC pairs; inserting them last puts them
 	// at the front of each bucket chain (LIFO) for fastest discovery.
-	for c := 0; c < len(tables.CompactPairs); c++ {
+	for c := range len(tables.CompactPairs) {
 		wPtr, tau, err := resolveCompactPair(uint32(c))
 		if err != nil {
 			continue

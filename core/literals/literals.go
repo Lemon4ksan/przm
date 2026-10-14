@@ -10,6 +10,7 @@ package literals
 import (
 	"encoding/binary"
 	"errors"
+	"slices"
 	"sync/atomic"
 
 	"github.com/lemon4ksan/foundation/generic"
@@ -277,7 +278,7 @@ func BuildVansDecTab(freq []uint16, decTab []uint32) {
 		}
 		fMinus1 := (f - 1) & 0xFFF
 		symVal := uint32(byte(s))
-		for j := uint32(0); j < f; j++ {
+		for j := range f {
 			decTab[cum+j] = (fMinus1 << 20) | (j << 8) | symVal
 		}
 		cum += f
@@ -302,8 +303,8 @@ func EncodeVANS4xDirect(src, dst []byte, freq []uint16, s *Scratchpad) (int, err
 	streamBuf := s.fiberBuf[:]
 	streamLen := 0
 
-	for i := len(src) - 1; i >= 0; i-- {
-		sByte := src[i]
+	for i, sByte := range slices.Backward(src) {
+
 		lane := i & 3
 
 		f := uint32(freq[sByte])

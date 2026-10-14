@@ -16,7 +16,7 @@ import (
 func main() {
 	var cfg Config
 	flag.StringVar(&cfg.Mode, "mode", "all", "Benchmark mode: 'corpus', 'large', or 'all'")
-	flag.StringVar(&cfg.LargeFile, "large-file", `D:\shaders\fc52a9db4c4105d2.nvph`, "Path to large (256MB) benchmark file")
+	flag.StringVar(&cfg.LargeFile, "large-file", "", "Path to large (256MB) benchmark file")
 	flag.StringVar(&cfg.CorpusCSV, "corpus-csv", `teamwork_projects/przm_compression_sectors/baseline_harness/per_file.csv`, "Path to corpus per_file.csv")
 	flag.StringVar(&cfg.ZstdPath, "zstd-path", "zstd", "Path to zstd executable")
 	flag.BoolVar(&cfg.JSON, "json", false, "Emit JSON summary to stdout")

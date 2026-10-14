@@ -1,7 +1,7 @@
 # Finite-Sample Miller-Madow Bias Correction & Multi-Dimensional Entropy Estimation
 
 **Module**: `docs/aes_distinguisher/miller_maddow_entropy.md`  
-**Target Codebase**: `d:\CodingProjects\przm`  
+**Target Codebase**: `https://github.com/lemon4ksan/przm`  
 **Related Source Files**:
 - Go Implementation: `pkg/aes_distinguisher/entropy.go`
 - C Reference: `src/aes_distinguisher.c`, `include/aes_distinguisher.h`

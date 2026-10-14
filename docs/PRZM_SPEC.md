@@ -426,12 +426,12 @@ All mathematical primitives are formalized and verified in Lean 4 under `proofs/
 
 ### 15.2. Real-World Production Datasets
 
-1. **Go Toolchain Codebase (`C:\Program Files\go`)**:
+1. **Go Toolchain Codebase (Standard Library & Compiler)**:
    - 17,349 files, 235.46 MiB.
    - PRZM Level 4: **84.79 MiB** (36.01% ratio) in **5.03 seconds** (46.76 MB/s).
    - PRZM Level 1: **92.53 MiB** (39.30% ratio) in **4.23 seconds** (55.65 MB/s).
    - *Previous v0.1*: ~20 seconds. **Net speedup: 4.5x–5x** due to zero-allocation pipeline.
-2. **Full Applications Directory (`D:\Program Files`)**:
+2. **Mixed Applications & Binaries Corpus (13.3 GiB)**:
    - 27,840 files, 13.31 GiB.
    - PRZM Level 1: **10.71 GiB** (80.45% ratio) in **1m 05s** (**208.40 MB/s** continuous throughput).
    - PRZM Level 4: **10.50 GiB** (78.89% ratio) in **1m 52s** (**121.11 MB/s** continuous throughput).

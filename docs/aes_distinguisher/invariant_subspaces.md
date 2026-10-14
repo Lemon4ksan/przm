@@ -1,7 +1,7 @@
 # Invariant Subspaces, Linear Invariants & Differential Cryptanalytic Structures
 
 **Module**: `docs/aes_distinguisher/invariant_subspaces.md`  
-**Target Codebase**: `d:\CodingProjects\przm`  
+**Target Codebase**: `https://github.com/lemon4ksan/przm`  
 **Related Source Files**:
 - Go Implementation: `pkg/aes_distinguisher/aes_core.go`
 - C Reference: `src/aes_distinguisher.c`, `include/aes_distinguisher.h`

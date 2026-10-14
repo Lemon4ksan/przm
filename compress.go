@@ -147,10 +147,7 @@ func detectStride(src []byte) uint32 {
 		totalLen := 0
 		for _, off := range offsets {
 			if off+chunkLen > len(src) {
-				off = len(src) - chunkLen
-				if off < 0 {
-					off = 0
-				}
+				off = max(len(src)-chunkLen, 0)
 			}
 			chunk := src[off:min(off+chunkLen, len(src))]
 			if int(s) >= len(chunk) {
@@ -254,10 +251,7 @@ func init() {
 			avgF = 1.0
 		}
 		bits := math.Log2(4096.0 / avgF)
-		cost := uint32(bits*2.0 + 0.5)
-		if cost < 6 {
-			cost = 6
-		}
+		cost := max(uint32(bits*2.0+0.5), 6)
 		distCodeCost[c] = cost
 	}
 }
@@ -550,7 +544,7 @@ func relaxHash32Matches(
 ) {
 	h32 := hash32(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	for k := 0; k < 8; k++ {
+	for k := range 8 {
 		cand := s.head32[h32][k]
 		if cand < 0 {
 			break
@@ -578,7 +572,7 @@ func relaxHash24Matches(
 ) {
 	h24 := hash24(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	for k := 0; k < 8; k++ {
+	for k := range 8 {
 		cand := s.head24[h24][k]
 		if cand < 0 {
 			break
@@ -606,7 +600,7 @@ func relaxHash16Matches(
 ) {
 	h16 := hash16(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	for k := 0; k < 16; k++ {
+	for k := range 16 {
 		cand := s.head16[h16][k]
 		if cand < 0 {
 			break
@@ -634,7 +628,7 @@ func relaxHash12Matches(
 ) {
 	h12 := hash12(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	for k := 0; k < 16; k++ {
+	for k := range 16 {
 		cand := s.head12[h12][k]
 		if cand < 0 {
 			break
@@ -662,7 +656,7 @@ func relaxHash8Matches(
 ) {
 	h8 := hash8(src, globalPos)
 	maxL := min(bSize-i, MaxMatchLength)
-	for k := 0; k < 8; k++ {
+	for k := range 8 {
 		cand := s.head8[h8][k]
 		if cand < 0 {
 			break
@@ -715,7 +709,7 @@ func relaxExplicitSublengths(i int, d uint32, L, bMin int, stride, curCost uint3
 		}
 	}
 	if d > 2048 {
-		for mode := byte(0); mode < 3; mode++ {
+		for mode := range byte(3) {
 			ref := s.nodes[i].r[mode]
 			diff := int64(d) - int64(ref)
 			if diff >= -128 && diff <= 127 && diff != 0 {

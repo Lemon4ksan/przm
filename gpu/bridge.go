@@ -526,7 +526,6 @@ func loadPTX() ([]byte, error) {
 		"../../gpu/kernel/przm_lz77.ptx",
 		"../kernel/przm_lz77.ptx",
 		"przm_lz77.ptx",
-		`d:\CodingProjects\przm\gpu\kernel\przm_lz77.ptx`,
 	}
 	if envPath := os.Getenv("PRZM_PTX_PATH"); envPath != "" {
 		candidates = append([]string{envPath}, candidates...)

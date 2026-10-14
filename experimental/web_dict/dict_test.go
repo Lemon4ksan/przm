@@ -107,10 +107,10 @@ const sampleJSON = `{
   "message": "Resource retrieved successfully",
   "data": {
     "user_id": 104928,
-    "user_name": "senya",
+    "user_name": "developer",
     "roles": ["admin", "developer"],
     "attributes": {
-      "display_name": "Senya",
+      "display_name": "Developer",
       "email_verified": true,
       "created_at": "2026-10-13T10:00:00Z",
       "updated_at": "2026-10-13T10:15:00Z"

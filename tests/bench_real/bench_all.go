@@ -17,10 +17,9 @@ import (
 )
 
 func main() {
-	files := []string{
-		`C:\Windows\explorer.exe`,
-		`D:\shaders\fc52a9db4c4105d2.nvph`, // 256MB file for a balanced benchmark time
-		`D:\CodingProjects\przm\test_przm_dec.exe`,
+	files := os.Args[1:]
+	if len(files) == 0 {
+		files = []string{"test_przm_dec.exe"}
 	}
 
 	fmt.Println("Exhaustive Benchmark: PRZM vs LZMA2 vs Zstd")
@@ -113,7 +112,7 @@ func run7z(path string, level int) (int, time.Duration) {
 
 	start := time.Now()
 	// Using 7z format, LZMA2 method
-	cmd := exec.Command(`C:\Program Files\7-Zip\7z.exe`, "a", "-t7z", "-m0=lzma2", fmt.Sprintf("-mx=%d", level), "-bso0", tmpOut, path)
+	cmd := exec.Command("7z", "a", "-t7z", "-m0=lzma2", fmt.Sprintf("-mx=%d", level), "-bso0", tmpOut, path)
 	err := cmd.Run()
 	t := time.Since(start)
 	if err != nil {

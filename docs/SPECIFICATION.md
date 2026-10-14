@@ -448,10 +448,10 @@ This document requests IANA to register the `"przm"` token in the "HTTP Content 
 
 The reference decompressor implementing this specification is maintained in the official repository:
 
-- **Go Root Facade**: [`przm.go`](file:///d:/CodingProjects/przm/przm.go), [`api.go`](file:///d:/CodingProjects/przm/api.go), [`compress.go`](file:///d:/CodingProjects/przm/compress.go), [`decompress.go`](file:///d:/CodingProjects/przm/decompress.go)
-- **Core Decoupled Engines**: [`core/commands/`](file:///d:/CodingProjects/przm/core/commands), [`core/distance/`](file:///d:/CodingProjects/przm/core/distance), [`core/literals/`](file:///d:/CodingProjects/przm/core/literals), [`core/dict/`](file:///d:/CodingProjects/przm/core/dict)
-- **C99 Line-Rate Decompressor**: [`src/przm_dec.c`](file:///d:/CodingProjects/przm/src/przm_dec.c), [`src/przm_comp.c`](file:///d:/CodingProjects/przm/src/przm_comp.c)
-- **C99 Verification Suite**: [`tests/test_przm_dec.c`](file:///d:/CodingProjects/przm/tests/test_przm_dec.c) (21/21 clean-room tests)
+- **Go Root Facade**: [`api.go`](../api.go), [`compress.go`](../compress.go), [`decompress.go`](../decompress.go), [`options.go`](../options.go)
+- **Core Decoupled Engines**: [`core/commands/`](../core/commands), [`core/distance/`](../core/distance), [`core/literals/`](../core/literals), [`core/dict/`](../core/dict)
+- **C99 Line-Rate Decompressor**: [`src/przm_dec.c`](../src/przm_dec.c), [`src/przm_comp.c`](../src/przm_comp.c)
+- **C99 Verification Suite**: [`tests/test_przm_dec.c`](../tests/test_przm_dec.c) (21/21 clean-room tests)
 
 The implementation is licensed under the **BSD-3-Clause** open-source license, permitting unrestricted integration into proprietary and open-source operating systems, game engines, and firmware.
 

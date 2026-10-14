@@ -19,10 +19,9 @@ func main() {
 	fmt.Println("PRZM Efficiency Benchmark")
 	fmt.Println("-------------------------")
 
-	targets := []string{
-		`D:\CodingProjects\przm\compress.go`,
-		`D:\CodingProjects\przm\test_przm_dec.exe`,
-		`D:\shaders`,
+	targets := os.Args[1:]
+	if len(targets) == 0 {
+		targets = []string{"compress.go", "test_przm_dec.exe"}
 	}
 
 	for _, target := range targets {

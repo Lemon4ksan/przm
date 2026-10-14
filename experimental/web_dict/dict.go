@@ -204,8 +204,8 @@ func ParseDictionary(s string) ([]DictEntry, error) {
 		if len(part) == 0 {
 			continue
 		}
-		eq := strings.IndexByte(part, '=')
-		if eq == -1 {
+		before, after, ok := strings.Cut(part, "=")
+		if !ok {
 			// Boolean flag
 			item, err := ParseItem("?1")
 			if err != nil {
@@ -213,8 +213,8 @@ func ParseDictionary(s string) ([]DictEntry, error) {
 			}
 			entries = append(entries, DictEntry{Key: part, Item: item})
 		} else {
-			key := strings.TrimSpace(part[:eq])
-			valStr := strings.TrimSpace(part[eq+1:])
+			key := strings.TrimSpace(before)
+			valStr := strings.TrimSpace(after)
 			item, err := ParseItem(valStr)
 			if err != nil {
 				return nil, err

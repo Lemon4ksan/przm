@@ -63,7 +63,6 @@ func loadCorpus(preferredPath string) ([]CorpusItem, error) {
 		`teamwork_projects\przm_compression_sectors\baseline_harness\per_file.csv`,
 		filepath.Join("teamwork_projects", "przm_compression_sectors", "baseline_harness", "per_file.csv"),
 		filepath.Join("..", "teamwork_projects", "przm_compression_sectors", "baseline_harness", "per_file.csv"),
-		`d:\CodingProjects\przm\teamwork_projects\przm_compression_sectors\baseline_harness\per_file.csv`,
 	}
 
 	var csvPath string

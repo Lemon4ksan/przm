@@ -1,7 +1,7 @@
 # Fast Möbius Transform & Algebraic Normal Form (ANF) Degree Defects in AES
 
 **Module**: `docs/aes_distinguisher/anf_degree_defects.md`  
-**Target Codebase**: `d:\CodingProjects\przm`  
+**Target Codebase**: `https://github.com/lemon4ksan/przm`  
 **Related Source Files**:
 - Go Implementation: `pkg/aes_distinguisher/fmt.go`
 - C Reference: `src/aes_distinguisher.c`, `include/aes_distinguisher.h`
