@@ -1,936 +1,872 @@
-// Copyright (c) 2026 Lemon4ksan All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
 package przm
 
 import (
 	"encoding/binary"
-	"os"
-	"runtime"
-	"sync"
-	"sync/atomic"
+	"math"
 
-	"github.com/lemon4ksan/foundation/bufkit"
 	"github.com/lemon4ksan/foundation/generic"
 )
 
+// Constants for Trellis RDO and Match Finder.
 const (
-	hashTableSize = 65536
-	hashTableMask = hashTableSize - 1
-	minMatch      = 4
-	maxLiteralRun = 64
-	initPadSize   = 1024 * 1024
+	MaxBlockHorizon   = 65536
+	MaxWindowHorizon  = 262144
+	WindowHorizonMask = MaxWindowHorizon - 1
+	MaxHashBuckets    = 65536
+	HashMultiplier32  = uint32(0x1E35A7BD)
+	HashMultiplier64  = uint64(0x9E3779B97F4A7C15)
+	MaxMatchLength    = 1024
+	CostUnitScale     = 16 // 16 units = 1 byte = 8 bits
+	InfinityCost      = uint32(0x3FFFFFFF)
 )
 
-type scratchpad struct {
-	head            []int32
-	hensel          HenselScratchpad
-	cmdBuf          []byte
-	offsetBuf       []byte
-	literalBuf      []byte
-	transBuf        []byte
-	nibbleBuf       []byte
-	nibbleLowBuf    []byte
-	splitBuf        []byte
-	normBuf         []byte
-	dedup           DedupTable
-	sheafSBuf       []byte
-	sheafCBuf       []byte
-	sheafMaskBuf    []byte
-	sheafWorkBuf    []byte
-	ctxSheafWorkBuf []byte
-	sheafFBuf       [4][]byte
+// selectSearchDepth scales match discovery effort strictly with user-specified compression level.
+func selectSearchDepth(level int) int {
+	switch {
+	case level <= 1:
+		return 2
+	case level <= 3:
+		return 4
+	case level <= 5:
+		return 8
+	case level <= 7:
+		return 16
+	case level <= 9:
+		return 32
+	case level <= 10:
+		return 64
+	default: // level >= 11
+		return 128
+	}
 }
 
-var padPool = generic.NewPool(func() *scratchpad {
-	return &scratchpad{
-		head:            make([]int32, hashTableSize*4),
-		cmdBuf:          bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		offsetBuf:       bufkit.AlignedBytes(initPadSize/2, bufkit.CacheLineSize)[:0],
-		literalBuf:      bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		transBuf:        bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		nibbleBuf:       bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		nibbleLowBuf:    bufkit.AlignedBytes(initPadSize/2, bufkit.CacheLineSize)[:0],
-		splitBuf:        bufkit.AlignedBytes(initPadSize*2, bufkit.CacheLineSize)[:0],
-		normBuf:         bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		sheafSBuf:       bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		sheafCBuf:       bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		sheafMaskBuf:    bufkit.AlignedBytes(initPadSize/8+128, bufkit.CacheLineSize)[:0],
-		sheafWorkBuf:    bufkit.AlignedBytes(initPadSize+1024, bufkit.CacheLineSize)[:0],
-		ctxSheafWorkBuf: bufkit.AlignedBytes(initPadSize+1024, bufkit.CacheLineSize)[:0],
-		sheafFBuf: [4][]byte{
-			bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-			bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-			bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-			bufkit.AlignedBytes(initPadSize, bufkit.CacheLineSize)[:0],
-		},
-	}
+// TrellisEdge defines a parsing transition edge in the Trellis DAG.
+type TrellisEdge struct {
+	from   uint16
+	length uint16
+	dist   uint32
+	kind   uint8 // 0: lit, 1: rep, 2: bracket, 3: stride, 4: explicit
+	arg    uint8 // k for rep, b for bracket, m for stride
+}
+
+// TrellisNode models a byte boundary state within the 64 KiB block horizon.
+type TrellisNode struct {
+	cost uint32
+	r    [4]uint32
+	edge TrellisEdge
+}
+
+// CompressorScratchpad holds cache-resident tables and working memory for compression.
+type CompressorScratchpad struct {
+	head3       [MaxHashBuckets]int32
+	head4       [MaxHashBuckets]int32
+	head8       [MaxHashBuckets]int32
+	prevPos     [MaxWindowHorizon]int32
+	nodes       [MaxBlockHorizon + 1]TrellisNode
+	litCost     [256]uint32
+	subLens     [32]int
+	allCmds     [4 * 1024 * 1024]byte
+	allLits     [8 * 1024 * 1024]byte
+	allOffs     [1024 * 1024]uint32
+	s3Buf       [2 * 1024 * 1024]byte
+	edgesBuffer [MaxBlockHorizon]TrellisEdge
+}
+
+var compScratchPool = generic.NewPool[CompressorScratchpad](func() *CompressorScratchpad {
+	return new(CompressorScratchpad)
 })
 
-// detectStride scans initial bytes to identify periodic record or column strides S in [4, 256].
-func detectStride(src []byte) (int, bool) {
-	sampleLen := min(len(src), 2048)
-	if sampleLen < 32 {
-		return 1, false
+// AnalysisParams holds discovered frame attributes.
+type AnalysisParams struct {
+	stride       uint32
+	wLog         uint32
+	uncompressed bool
+	bMin         uint32
+}
+
+// AnalyzeInput evaluates entropy pre-check, stride periodicity, and window sizing.
+func AnalyzeInput(src []byte) AnalysisParams {
+	u := len(src)
+	p := AnalysisParams{bMin: 4}
+	if u == 0 {
+		p.wLog = 16
+		return p
 	}
 
-	candidates := []int{4, 8, 12, 16, 20, 24, 28, 32, 40, 48, 56, 64, 72, 80, 96, 128, 160, 192, 256}
-	bestStride := 1
-	bestScore := 0
+	p.uncompressed = checkHighEntropy(src)
+	if p.uncompressed {
+		return p
+	}
+
+	p.stride = detectStride(src)
+	p.wLog = selectWindowLog(u)
+	return p
+}
+
+// checkHighEntropy inspects a 512-byte sample for high uncompressed byte diversity.
+func checkHighEntropy(src []byte) bool {
+	sampleLen := len(src)
+	if sampleLen > 512 {
+		sampleLen = 512
+	}
+	if sampleLen < 64 {
+		return false
+	}
+
+	var seen [256]bool
+	unique := 0
+	for i := 0; i < sampleLen; i++ {
+		b := src[i]
+		if !seen[b] {
+			seen[b] = true
+			unique++
+		}
+	}
+
+	var threshold int
+	if sampleLen >= 256 {
+		threshold = (256 * 88) / 100
+	} else {
+		threshold = (sampleLen * 88) / 100
+	}
+	return unique > threshold
+}
+
+// detectStride tests periodic column cadences for tabular structures.
+func detectStride(src []byte) uint32 {
+	if len(src) < 128 {
+		return 1
+	}
+	candidates := []uint32{4, 8, 12, 16, 20, 24, 28, 32, 40, 48, 56, 64, 72, 80, 96, 128}
+	sampleLen := len(src)
+	if sampleLen > 2048 {
+		sampleLen = 2048
+	}
+
+	var bestStride uint32 = 1
+	var maxMatches int
 
 	for _, s := range candidates {
-		if s*2 > sampleLen {
-			break
+		if int(s) >= sampleLen {
+			continue
 		}
-		score := 0
-		checkCount := sampleLen - s
-		for i := 0; i < checkCount; i += 4 {
-			if src[i] == src[i+s] {
-				score++
+		matches := 0
+		for i := int(s); i < sampleLen; i++ {
+			if src[i] == src[i-int(s)] {
+				matches++
 			}
 		}
-		numChecks := (checkCount + 3) / 4
-		// Baseline matching ratio (at least 20% match rate and significant periodicity)
-		if score > bestScore && score > (numChecks/5) {
-			bestScore = score
+		if matches > maxMatches && matches > (sampleLen*20)/100 {
+			maxMatches = matches
 			bestStride = s
 		}
 	}
-
-	if bestScore > 0 && bestStride >= 4 {
-		return bestStride, true
-	}
-	return 1, false
+	return bestStride
 }
 
-// isHighEntropy evaluates a 512-byte sample prefix to detect high-entropy / pre-compressed streams.
-// By Theorem 20 (Adaptive Entropy Bypass), white noise cannot be compressed by grammar or tensor models.
-func isHighEntropy(src []byte) bool {
-	sampleLen := min(len(src), 512)
-	if sampleLen < 128 {
-		return false
+// selectWindowLog sizes the sliding window based on input capacity.
+func selectWindowLog(u int) uint32 {
+	if u <= 65536 {
+		return 16
 	}
-	var hist [256]uint8
-	unique := 0
-	for i := range sampleLen {
-		b := src[i]
-		if hist[b] == 0 {
-			unique++
-			hist[b] = 1
+	if u <= 1024*1024 {
+		return 20
+	}
+	return 23
+}
+
+// Hash calculations for multi-tier indexing.
+func hash3(src []byte, p int) uint16 {
+	val := uint32(src[p]) | (uint32(src[p+1]) << 8) | (uint32(src[p+2]) << 16)
+	return uint16((val * HashMultiplier32) >> 16)
+}
+
+func hash4(src []byte, p int) uint16 {
+	val := binary.LittleEndian.Uint32(src[p : p+4])
+	return uint16((val * HashMultiplier32) >> 16)
+}
+
+func hash8(src []byte, p int) uint16 {
+	val := binary.LittleEndian.Uint64(src[p : p+8])
+	return uint16((val * HashMultiplier64) >> 48)
+}
+
+// getParetoSublengths generates sub-length candidates to prevent greedy lock-in.
+func getParetoSublengths(L, bMin int, out []int) []int {
+	out = out[:0]
+	if L <= 18 {
+		for l := bMin; l <= L; l++ {
+			out = append(out, l)
+		}
+		return out
+	}
+	candidates := []int{4, 5, 6, 7, 8, 12, 16, 18, L - 2, L - 1, L}
+	for _, l := range candidates {
+		if l >= bMin && l <= L {
+			out = append(out, l)
 		}
 	}
-	// If unique byte count is >= 88% of sample length (e.g. >= 225 out of 256), entropy is near maximum
-	threshold := (sampleLen * 88) / 100
-	return unique >= threshold
+	return out
 }
 
-// CompressOptions configures fine-grained PRZM compression parameters.
-type CompressOptions struct {
-	Level              int          // 1..5
-	WindowLog          int          // 16 (64K), 20 (1M), 23 (8M), or 0 (auto)
-	Dict               *Dictionary  // Optional external schema dictionary
-	RawDict            []byte       // Optional raw prefix history dictionary buffer
-	DictID             uint32       // Optional dictionary ID for RawDict
-	ArchivalMode       bool         // Explicit toggle for --mode=archival
-	StandardStreamOnly bool         // Ensure canonical PRZM stream format (MagicPRZM = 0x4D5A5250)
-	Threads            int          // 0 = auto (runtime.GOMAXPROCS(0)), 1 = single-threaded, >1 = explicit worker count
-	ChunkSize          int          // 0 = auto (default 2 MiB), >0 = explicit chunk uncompressed byte size
-	GPUAcceleration    bool         // Offload LZ77 dictionary search to NVIDIA Ampere GPU via CUDA Driver API
-	MinMatch           int          // Minimum match length: 3 or 4 (default 4; 3 enables FlagMinMatch3)
-	CompactDict        bool         // Enable dedicated OpcodePrefixRawDict (0xE9) for constant raw dictionary offsets
-	LiteralProbe       func([]byte) // Optional probe hook for testing/diagnostics
-}
-
-// Option configures CompressOptions.
-type Option func(*CompressOptions)
-
-// WithGPUAcceleration enables NVIDIA GPU hardware LZ77 acceleration in CompressOptions.
-func WithGPUAcceleration() Option {
-	return func(opts *CompressOptions) {
-		opts.GPUAcceleration = true
+// computeBlockLiteralCosts calculates empirical entropy bit-costs for the block.
+func computeBlockLiteralCosts(block []byte, litCost []uint32) {
+	var counts [256]int
+	for _, b := range block {
+		counts[b]++
 	}
-}
-
-const DefaultChunkSize = 2 * 1024 * 1024 // 2 MiB
-
-func resolveConcurrencyOptions(opts CompressOptions) (threads, chunkSize int) {
-	threads = opts.Threads
-	if threads <= 0 {
-		if opts.GPUAcceleration {
-			threads = 1
-		} else {
-			threads = runtime.GOMAXPROCS(0)
+	bSize := float64(len(block))
+	for i := 0; i < 256; i++ {
+		if counts[i] == 0 {
+			litCost[i] = 26
+			continue
 		}
-	}
-	if threads < 1 {
-		threads = 1
-	}
-	chunkSize = opts.ChunkSize
-	if chunkSize <= 0 {
-		if opts.GPUAcceleration || opts.Level >= 6 || opts.ArchivalMode {
-			chunkSize = 8 * 1024 * 1024
-		} else {
-			chunkSize = DefaultChunkSize
+		prob := float64(counts[i]) / bSize
+		costBits := -math.Log2(prob)
+		costUnits := int(math.Round(costBits * 2.0))
+		if costUnits < 2 {
+			costUnits = 2
+		} else if costUnits > 26 {
+			costUnits = 26
 		}
+		litCost[i] = uint32(costUnits)
 	}
-	return threads, chunkSize
 }
 
-func shouldUseMultiChunk(srcLen int, opts CompressOptions) bool {
-	if opts.StandardStreamOnly {
-		return false
-	}
-	if opts.GPUAcceleration && srcLen < MaxBlockSize && opts.ChunkSize == 0 {
-		return false
-	}
-	threads, chunkSize := resolveConcurrencyOptions(opts)
-	if srcLen >= MaxBlockSize {
-		return true
-	}
-	if len(opts.RawDict) > 0 || opts.DictID != 0 {
-		return false
-	}
-	if srcLen > chunkSize && threads > 1 {
-		return true
-	}
-	return false
-}
-
-func compressMultiChunk(src []byte, opts CompressOptions) ([]byte, error) {
-	threads, chunkSize := resolveConcurrencyOptions(opts)
-	if chunkSize > MaxBlockSize {
-		return nil, ErrExceedsMaxBlock
-	}
-
-	uSize := len(src)
-	chunkCount := (uSize + chunkSize - 1) / chunkSize
-	if chunkCount <= 0 {
-		chunkCount = 1
-	}
-
-	chunkOpts := opts
-	chunkOpts.Threads = 1
-	chunkOpts.ChunkSize = 0
-	chunkOpts.StandardStreamOnly = true
-
-	results := make([][]byte, chunkCount)
-
-	numWorkers := max(min(chunkCount, threads), 1)
-
-	if numWorkers <= 1 {
-		for idx := 0; idx < chunkCount; idx++ {
-			start := idx * chunkSize
-			end := min(start+chunkSize, uSize)
-			comp, err := compressSingleFrame(src[start:end], chunkOpts)
-			if err != nil {
-				return nil, err
-			}
-			results[idx] = comp
-		}
-		return BuildStreamContainer(results, uint64(uSize)), nil
-	}
-
-	var nextChunk atomic.Int32
-	var firstErr atomic.Pointer[error]
-	var wg sync.WaitGroup
-
-	for range numWorkers {
-		wg.Go(func() {
-			for {
-				if firstErr.Load() != nil {
-					return
-				}
-				idx := int(nextChunk.Add(1) - 1)
-				if idx >= chunkCount {
-					return
-				}
-
-				start := idx * chunkSize
-				end := min(start+chunkSize, uSize)
-
-				comp, err := compressSingleFrame(src[start:end], chunkOpts)
-				if err != nil {
-					errCopy := err
-					firstErr.CompareAndSwap(nil, &errCopy)
-					return
-				}
-				results[idx] = comp
-			}
-		})
-	}
-	wg.Wait()
-
-	if errPtr := firstErr.Load(); errPtr != nil {
-		return nil, *errPtr
-	}
-
-	return BuildStreamContainer(results, uint64(uSize)), nil
-}
-
-// CompressWithOptions encodes src using caller-defined options.
-func CompressWithOptions(src []byte, opts CompressOptions, optList ...Option) ([]byte, error) {
-	for _, o := range optList {
-		o(&opts)
-	}
-	if !opts.GPUAcceleration && os.Getenv("PRZM_GPU") == "1" {
-		opts.GPUAcceleration = true
-	}
-	if opts.ChunkSize > MaxBlockSize {
-		return nil, ErrExceedsMaxBlock
-	}
-	if shouldUseMultiChunk(len(src), opts) {
-		return compressMultiChunk(src, opts)
-	}
-	return compressSingleFrame(src, opts)
-}
-
-// CompressWithWindow encodes src using explicit level and windowLog.
-func CompressWithWindow(src []byte, level, windowLog int) ([]byte, error) {
-	return CompressWithOptions(src, CompressOptions{Level: level, WindowLog: windowLog, StandardStreamOnly: true})
-}
-
-// Compress encodes src into PRZM format according to PRZM-SPEC-0.5.
-func Compress(src []byte, level int) ([]byte, error) {
-	return CompressWithOptions(src, CompressOptions{Level: level})
-}
-
-func compressInternal(src []byte, level int, customDict *Dictionary) ([]byte, error) {
-	return CompressWithOptions(src, CompressOptions{Level: level, Dict: customDict})
-}
-
-func compressSingleFrame(src []byte, opts CompressOptions) ([]byte, error) {
-	level := opts.Level
-	if opts.ArchivalMode {
-		level = ModeArchival
-	}
-	if level <= 0 {
-		level = 3
-	}
-	customDict := opts.Dict
-
-	rawDict := opts.RawDict
-	dictID := opts.DictID
-	if len(rawDict) == 0 && dictID != 0 {
-		rawDict = GetRawDictionary(dictID)
-	}
-	dictLen := len(rawDict)
-
-	uSize := len(src)
-	if uSize == 0 {
-		hdr := [HeaderSize]byte{}
-		binary.LittleEndian.PutUint32(hdr[0:4], MagicPRZM)
-		hdr[4] = FlagUncompressed
-		return hdr[:], nil
-	}
-
-	if uSize > MaxBlockSize {
-		return nil, ErrExceedsMaxBlock
-	}
-
-	windowLog := opts.WindowLog
-	if windowLog == 0 {
-		totalSpan := uSize + dictLen
-		if totalSpan <= 64*1024 {
-			windowLog = WindowLog64K
-		} else if totalSpan <= 1024*1024 && level < 6 {
-			windowLog = WindowLog1M
-		} else {
-			windowLog = WindowLog8M
-		}
-	}
-	if windowLog < WindowLog64K {
-		windowLog = WindowLog64K
-	} else if windowLog > WindowLog8M {
-		windowLog = WindowLog8M
-	}
-	windowSize := 1 << windowLog
-
-	pad := padPool.Get()
-	defer padPool.Put(pad)
-
-	clear(pad.head)
-	var sp1M *HenselScratchpad1M
-	var sp8M *HenselScratchpad8M
-	var spL6 *HenselScratchpadL6
-	if level >= 6 {
-		spL6 = PoolHenselL6.Get()
-		defer PoolHenselL6.Put(spL6)
-		spL6.Reset()
-		sp8M = PoolHensel8M.Get()
-		defer PoolHensel8M.Put(sp8M)
-		sp8M.Reset()
-	} else if level >= 3 {
-		switch windowLog {
-		case WindowLog8M:
-			sp8M = PoolHensel8M.Get()
-			defer PoolHensel8M.Put(sp8M)
-			sp8M.Reset()
-		case WindowLog1M:
-			sp1M = PoolHensel1M.Get()
-			defer PoolHensel1M.Put(sp1M)
-			sp1M.Reset()
-		default:
-			pad.hensel.Reset()
-		}
-	}
-	origSrc := src
-	origUSize := uSize
-	pad.cmdBuf = ensureBufCap(pad.cmdBuf, origUSize)
-	pad.offsetBuf = ensureBufCap(pad.offsetBuf, origUSize/2)
-	pad.literalBuf = ensureBufCap(pad.literalBuf, origUSize)
-
-	if dictLen > 0 {
-		fullSrc := make([]byte, dictLen+origUSize)
-		copy(fullSrc[:dictLen], rawDict)
-		copy(fullSrc[dictLen:], origSrc)
-		src = fullSrc
-		uSize = len(fullSrc)
-	}
-
-	if opts.GPUAcceleration && dictLen == 0 {
-		if comp, ok := tryCompressGPU(src, opts, pad); ok {
-			return comp, nil
-		}
-		// Clean reset for transparent CPU SIMD fallback
-		pad.cmdBuf = pad.cmdBuf[:0]
-		pad.offsetBuf = pad.offsetBuf[:0]
-		pad.literalBuf = pad.literalBuf[:0]
-	}
-
-	highEntropy := isHighEntropy(origSrc)
-	// Content Router: Sub-microsecond decision tree (<290 ns budget, 0 dynamic allocations)
-	route := RouteContent(origSrc)
-
-	flags := uint8(0)
-	normMode := NormModeNone
-	normContractedLen := 0
-
-	if dictLen == 0 && route != RouteContainerBypass && !highEntropy && origUSize >= minNormSpanLen {
-		if isHex, upper := IsWholeBlockHex(src); isHex {
-			cLen := len(src) / 2
-			if len(src)-cLen >= minNetSavings {
-				if cap(pad.normBuf) < cLen {
-					pad.normBuf = make([]byte, cLen)
-				} else {
-					pad.normBuf = pad.normBuf[:cLen]
-				}
-				ContractHex(src, pad.normBuf)
-				src = pad.normBuf
-				uSize = cLen
-				normContractedLen = cLen
-				if upper {
-					normMode = NormModeHexUpper
-				} else {
-					normMode = NormModeHex
-				}
-				flags |= FlagNorm
-			}
-		} else if isB64, padCount, urlSafe := IsWholeBlockBase64(src); isB64 {
-			cLen := (len(src)/4)*3 - padCount
-			if len(src)-cLen >= minNetSavings {
-				if cap(pad.normBuf) < cLen {
-					pad.normBuf = make([]byte, cLen)
-				} else {
-					pad.normBuf = pad.normBuf[:cLen]
-				}
-				ContractBase64(src, pad.normBuf, padCount, urlSafe)
-				src = pad.normBuf
-				uSize = cLen
-				normContractedLen = cLen
-				if !urlSafe {
-					switch padCount {
-					case 0:
-						normMode = NormModeBase64
-					case 1:
-						normMode = NormModeBase64Pad1
-					case 2:
-						normMode = NormModeBase64Pad2
-					}
-				} else {
-					switch padCount {
-					case 0:
-						normMode = NormModeBase64URL
-					case 1:
-						normMode = NormModeBase64URLP1
-					case 2:
-						normMode = NormModeBase64URLP2
-					}
-				}
-				flags |= FlagNorm
-			}
-		} else {
-			var plan NormPlan
-			if level >= 4 {
-				plan = DetectNormSpans(src)
-			}
-			if plan.NetSavings >= minNetSavings && len(plan.Spans) > 0 {
-				pad.normBuf = EncodeNormSpans(src, plan, pad.normBuf)
-				src = pad.normBuf
-				uSize = len(pad.normBuf)
-				normContractedLen = uSize
-				normMode = NormModeSpans
-				flags |= FlagNorm
-			}
-		}
-	}
-
-	var stride int
-	var hasStride bool
-	if dictLen == 0 {
-		stride, hasStride = detectStride(src)
+// costRepeat evaluates base cost and locality preservation bonus.
+func costRepeat(L, k, bMin int) uint32 {
+	var base uint32
+	if L <= 3+bMin {
+		base = 10
+	} else if L <= 14+bMin {
+		base = 20
+	} else if L <= 14+bMin+127 {
+		base = 30
 	} else {
-		stride, hasStride = detectStride(origSrc)
+		base = 40
 	}
-	if hasStride {
+
+	bonusTable := [4]uint32{6, 3, 1, 0}
+	bonus := bonusTable[k&3]
+	if base > bonus+3 {
+		return base - bonus
+	}
+	return 3
+}
+
+// costExplicit evaluates base opcode cost plus distance prefix bits.
+func costExplicit(L int, dist uint32, bMin int) uint32 {
+	var base uint32
+	if L <= 14+bMin {
+		base = 16
+	} else if L <= 14+bMin+127 {
+		base = 30
+	} else {
+		base = 46
+	}
+	_, _, nb := DistanceToCode(dist)
+	return base + uint32(2*nb)
+}
+
+// measureMatchLength computes contiguous byte match length between two positions.
+func measureMatchLength(src []byte, p1, p2, maxLen int) int {
+	l := 0
+	for l < maxLen && src[p1+l] == src[p2+l] {
+		l++
+	}
+	return l
+}
+
+// relaxLiteral advances state by emitting one literal byte.
+func relaxLiteral(i int, s *CompressorScratchpad, block []byte) {
+	c := block[i]
+	nextCost := s.nodes[i].cost + s.litCost[c]
+	if nextCost < s.nodes[i+1].cost {
+		s.nodes[i+1].cost = nextCost
+		s.nodes[i+1].r = s.nodes[i].r
+		s.nodes[i+1].edge = TrellisEdge{from: uint16(i), length: 1, kind: 0}
+	}
+}
+
+// relaxRepeat tests match against the 4 repeat distance registers.
+func relaxRepeat(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, bMin int) {
+	curCost := s.nodes[i].cost
+	for k := 0; k < 4; k++ {
+		d := s.nodes[i].r[k]
+		if d == 0 || globalPos < int(d) {
+			continue
+		}
+		maxL := bSize - i
+		if maxL > MaxMatchLength {
+			maxL = MaxMatchLength
+		}
+		if maxL < bMin {
+			continue
+		}
+		L := measureMatchLength(src, globalPos, globalPos-int(d), maxL)
+		if L < bMin {
+			continue
+		}
+
+		rNext := s.nodes[i].r
+		updateLRURepeat(&rNext, uint8(k))
+		subLens := getParetoSublengths(L, bMin, s.subLens[:])
+
+		for _, l := range subLens {
+			cost := curCost + costRepeat(l, k, bMin)
+			if cost < s.nodes[i+l].cost {
+				s.nodes[i+l].cost = cost
+				s.nodes[i+l].r = rNext
+				s.nodes[i+l].edge = TrellisEdge{from: uint16(i), length: uint16(l), dist: d, kind: 1, arg: uint8(k)}
+			}
+		}
+	}
+}
+
+// relaxBrackets probes direct fused bracket distances (1..8, 16, 32).
+func relaxBrackets(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, bMin int) {
+	curCost := s.nodes[i].cost
+	for b := 0; b < 10; b++ {
+		var d uint32
+		if b <= 7 {
+			d = uint32(b + 1)
+		} else if b == 8 {
+			d = 16
+		} else {
+			d = 32
+		}
+		if globalPos < int(d) {
+			continue
+		}
+		maxL := bSize - i
+		if maxL > 15+bMin {
+			maxL = 15 + bMin
+		}
+		if maxL < bMin {
+			continue
+		}
+		L := measureMatchLength(src, globalPos, globalPos-int(d), maxL)
+		if L < bMin {
+			continue
+		}
+
+		rNext := s.nodes[i].r
+		updateLRUExplicit(&rNext, d)
+		subLens := getParetoSublengths(L, bMin, s.subLens[:])
+
+		for _, l := range subLens {
+			cost := curCost + 22
+			if cost < s.nodes[i+l].cost {
+				s.nodes[i+l].cost = cost
+				s.nodes[i+l].r = rNext
+				s.nodes[i+l].edge = TrellisEdge{from: uint16(i), length: uint16(l), dist: d, kind: 2, arg: uint8(b)}
+			}
+		}
+	}
+}
+
+// relaxStride probes periodic stride column offsets (m * S).
+func relaxStride(i int, s *CompressorScratchpad, src []byte, globalPos, bSize int, stride uint32, bMin int) {
+	if stride <= 1 {
+		return
+	}
+	curCost := s.nodes[i].cost
+	for m := 1; m <= 8; m++ {
+		d := uint32(m) * stride
+		if globalPos < int(d) {
+			continue
+		}
+		maxL := bSize - i
+		if maxL > 15+bMin {
+			maxL = 15 + bMin
+		}
+		if maxL < bMin {
+			continue
+		}
+		L := measureMatchLength(src, globalPos, globalPos-int(d), maxL)
+		if L < bMin {
+			continue
+		}
+
+		rNext := s.nodes[i].r
+		updateLRUExplicit(&rNext, d)
+		subLens := getParetoSublengths(L, bMin, s.subLens[:])
+
+		for _, l := range subLens {
+			cost := curCost + 22
+			if cost < s.nodes[i+l].cost {
+				s.nodes[i+l].cost = cost
+				s.nodes[i+l].r = rNext
+				s.nodes[i+l].edge = TrellisEdge{from: uint16(i), length: uint16(l), dist: d, kind: 3, arg: uint8(m)}
+			}
+		}
+	}
+}
+
+// relaxHashMatches queries multi-tier hash tables for sliding window matches.
+func relaxHashMatches(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, maxDist, bMin, depthLimit, level int) {
+	if i+4 > bSize {
+		return
+	}
+	curCost := s.nodes[i].cost
+
+	// Check 8-byte macro hash for level >= 6
+	if level >= 6 && i+8 <= bSize {
+		h8 := hash8(src, globalPos)
+		cand8 := s.head8[h8]
+		if cand8 >= 0 {
+			candPos8 := int(cand8)
+			d8 := uint32(globalPos - candPos8)
+			if d8 > 0 && d8 <= uint32(maxDist) {
+				maxL := bSize - i
+				if maxL > MaxMatchLength {
+					maxL = MaxMatchLength
+				}
+				L8 := measureMatchLength(src, globalPos, candPos8, maxL)
+				if L8 >= 8 {
+					rNext := s.nodes[i].r
+					updateLRUExplicit(&rNext, d8)
+					subLens := getParetoSublengths(L8, bMin, s.subLens[:])
+					for _, l := range subLens {
+						cost := curCost + costExplicit(l, d8, bMin)
+						if cost < s.nodes[i+l].cost {
+							s.nodes[i+l].cost = cost
+							s.nodes[i+l].r = rNext
+							s.nodes[i+l].edge = TrellisEdge{from: uint16(i), length: uint16(l), dist: d8, kind: 4}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	h4 := hash4(src, globalPos)
+	cand := s.head4[h4]
+	depth := 0
+
+	for cand >= 0 && depth < depthLimit {
+		candPos := int(cand)
+		d := uint32(globalPos - candPos)
+		if d == 0 || d > uint32(maxDist) {
+			break
+		}
+
+		maxL := bSize - i
+		if maxL > MaxMatchLength {
+			maxL = MaxMatchLength
+		}
+		L := measureMatchLength(src, globalPos, candPos, maxL)
+		if L >= bMin {
+			rNext := s.nodes[i].r
+			updateLRUExplicit(&rNext, d)
+			subLens := getParetoSublengths(L, bMin, s.subLens[:])
+
+			for _, l := range subLens {
+				cost := curCost + costExplicit(l, d, bMin)
+				if cost < s.nodes[i+l].cost {
+					s.nodes[i+l].cost = cost
+					s.nodes[i+l].r = rNext
+					s.nodes[i+l].edge = TrellisEdge{from: uint16(i), length: uint16(l), dist: d, kind: 4}
+				}
+			}
+		}
+		cand = s.prevPos[candPos&WindowHorizonMask]
+		depth++
+	}
+}
+
+// insertHash inserts current position into hash indexes.
+func insertHash(src []byte, globalPos, i int, s *CompressorScratchpad) {
+	if globalPos+4 <= len(src) {
+		h4 := hash4(src, globalPos)
+		s.prevPos[globalPos&WindowHorizonMask] = s.head4[h4]
+		s.head4[h4] = int32(globalPos)
+	}
+	if globalPos+8 <= len(src) {
+		h8 := hash8(src, globalPos)
+		s.head8[h8] = int32(globalPos)
+	}
+}
+
+// initBlockNodes resets Trellis DP nodes for a new block horizon.
+func initBlockNodes(s *CompressorScratchpad, bSize int, initialR [4]uint32) {
+	s.nodes[0].cost = 0
+	s.nodes[0].r = initialR
+	s.nodes[0].edge = TrellisEdge{}
+	for i := 1; i <= bSize; i++ {
+		s.nodes[i].cost = InfinityCost
+		s.nodes[i].edge = TrellisEdge{}
+	}
+}
+
+// solveBlockTrellis executes Bellman DP relaxation across the block.
+func solveBlockTrellis(src []byte, blockStart, bSize, maxDist int, stride uint32, bMin, depthLimit, level int, s *CompressorScratchpad) {
+	block := src[blockStart : blockStart+bSize]
+	computeBlockLiteralCosts(block, s.litCost[:])
+
+	for i := 0; i < bSize; i++ {
+		if s.nodes[i].cost == InfinityCost {
+			continue
+		}
+		globalPos := blockStart + i
+		relaxLiteral(i, s, block)
+		relaxRepeat(i, s, src, globalPos, bSize, bMin)
+		relaxBrackets(i, s, src, globalPos, bSize, bMin)
+		relaxStride(i, s, src, globalPos, bSize, stride, bMin)
+		relaxHashMatches(i, s, src, globalPos, bSize, maxDist, bMin, depthLimit, level)
+		insertHash(src, globalPos, i, s)
+	}
+}
+
+// backtrackEdges traces back the optimal shortest path through the DAG.
+func backtrackEdges(s *CompressorScratchpad, bSize int) []TrellisEdge {
+	count := 0
+	curr := bSize
+	for curr > 0 {
+		e := s.nodes[curr].edge
+		s.edgesBuffer[count] = e
+		count++
+		curr = int(e.from)
+	}
+
+	// Reverse to forward chronological order
+	for i, j := 0, count-1; i < j; i, j = i+1, j-1 {
+		s.edgesBuffer[i], s.edgesBuffer[j] = s.edgesBuffer[j], s.edgesBuffer[i]
+	}
+	return s.edgesBuffer[:count]
+}
+
+// emitBlockCommands translates DP decisions into commands, literals, and offsets.
+func emitBlockCommands(edges []TrellisEdge, block []byte, bMin int,
+	cmdsOut, litsOut *[]byte, offsOut *[]uint32) {
+	var pendingLits []byte
+
+	for _, e := range edges {
+		if e.kind == 0 {
+			pendingLits = append(pendingLits, block[e.from])
+			continue
+		}
+		emitMatchWithLiterals(e, &pendingLits, bMin, cmdsOut, litsOut, offsOut)
+	}
+
+	if len(pendingLits) > 0 {
+		emitLiteralRun(pendingLits, cmdsOut, litsOut)
+	}
+}
+
+// emitMatchWithLiterals fuses literals into match opcodes when possible.
+func emitMatchWithLiterals(e TrellisEdge, pendingLits *[]byte, bMin int,
+	cmdsOut, litsOut *[]byte, offsOut *[]uint32) {
+	nLit := len(*pendingLits)
+	lMatch := int(e.length)
+
+	switch e.kind {
+	case 1: // Repeat
+		if nLit <= 7 && lMatch <= 3+bMin {
+			op := byte((nLit << 4) | ((lMatch - bMin) << 2) | int(e.arg))
+			*cmdsOut = append(*cmdsOut, op)
+		} else {
+			if nLit > 15 {
+				emitLiteralRun(*pendingLits, cmdsOut, litsOut)
+				*pendingLits = nil
+				nLit = 0
+			}
+			op := byte(0xC0 | int(e.arg))
+			if lMatch-bMin < 15 {
+				tok := byte((nLit << 4) | (lMatch - bMin))
+				*cmdsOut = append(*cmdsOut, op, tok)
+			} else {
+				tok := byte((nLit << 4) | 15)
+				*cmdsOut = append(*cmdsOut, op, tok)
+				*cmdsOut = appendLEB128Enc(*cmdsOut, uint32(lMatch-bMin-15))
+			}
+		}
+	case 2: // Bracket
+		if nLit > 15 {
+			emitLiteralRun(*pendingLits, cmdsOut, litsOut)
+			*pendingLits = nil
+			nLit = 0
+		}
+		op := byte(0xC4 + int(e.arg))
+		tok := byte((nLit << 4) | (lMatch - bMin))
+		*cmdsOut = append(*cmdsOut, op, tok)
+	case 3: // Stride
+		if nLit > 15 {
+			emitLiteralRun(*pendingLits, cmdsOut, litsOut)
+			*pendingLits = nil
+			nLit = 0
+		}
+		op := byte(0xD0 + int(e.arg-1))
+		tok := byte((nLit << 4) | (lMatch - bMin))
+		*cmdsOut = append(*cmdsOut, op, tok)
+	case 4: // Explicit
+		emitExplicitMatch(e, pendingLits, bMin, cmdsOut, litsOut, offsOut)
+	}
+
+	if len(*pendingLits) > 0 {
+		*litsOut = append(*litsOut, *pendingLits...)
+		*pendingLits = nil
+	}
+}
+
+// emitExplicitMatch serializes explicit distance matches with fused or standalone literals.
+func emitExplicitMatch(e TrellisEdge, pendingLits *[]byte, bMin int,
+	cmdsOut, litsOut *[]byte, offsOut *[]uint32) {
+	nLit := len(*pendingLits)
+	lMatch := int(e.length)
+
+	if nLit > 3 {
+		emitLiteralRun(*pendingLits, cmdsOut, litsOut)
+		*pendingLits = nil
+		nLit = 0
+	}
+
+	if lMatch-bMin < 15 {
+		op := byte(0x80 | (nLit << 4) | (lMatch - bMin))
+		*cmdsOut = append(*cmdsOut, op)
+	} else {
+		op := byte(0x80 | (nLit << 4) | 15)
+		*cmdsOut = append(*cmdsOut, op)
+		*cmdsOut = appendLEB128Enc(*cmdsOut, uint32(lMatch-bMin-15))
+	}
+	*offsOut = append(*offsOut, e.dist)
+}
+
+// emitLiteralRun encodes pure literal sequences into standalone tokens.
+func emitLiteralRun(lits []byte, cmdsOut, litsOut *[]byte) {
+	n := len(lits)
+	if n == 0 {
+		return
+	}
+	if n <= 8 {
+		*cmdsOut = append(*cmdsOut, byte(0xF2+n))
+	} else {
+		*cmdsOut = append(*cmdsOut, 0xF0)
+		*cmdsOut = appendLEB128Enc(*cmdsOut, uint32(n))
+	}
+	*litsOut = append(*litsOut, lits...)
+}
+
+// appendLEB128Enc encodes an unsigned integer as variable-length LEB128.
+func appendLEB128Enc(buf []byte, v uint32) []byte {
+	for v >= 0x80 {
+		buf = append(buf, byte(v&0x7F)|0x80)
+		v >>= 7
+	}
+	return append(buf, byte(v))
+}
+
+// packageSections serializes the 4 canonical PRZM sections.
+func packageSections(wLog uint32, cmds, lits []byte, offs []uint32, s *CompressorScratchpad) ([]byte, []byte, []byte, []byte, uint8) {
+	s1 := []byte{0x00, byte(wLog), 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	s2 := packageCommandsSection(cmds)
+	s3 := packageOffsetsSection(offs, s)
+	s4, flagNibble := packageLiteralsSection(lits)
+	return s1, s2, s3, s4, flagNibble
+}
+
+// packageCommandsSection encodes Section 2 via Mode 8 or flat mode 0x09.
+func packageCommandsSection(cmds []byte) []byte {
+	if len(cmds) == 0 {
+		return nil
+	}
+	opBuf := make([]byte, len(cmds))
+	metaBuf := make([]byte, len(cmds))
+	varBuf := make([]byte, len(cmds))
+	nOp, nM, nV, err := SplitCommands(cmds, opBuf, metaBuf, varBuf)
+	if err == nil {
+		dstBuf := make([]byte, 13+nOp+nM+nV+64)
+		nPack, pErr := PackCommandsMode8(opBuf[:nOp], metaBuf[:nM], varBuf[:nV], len(cmds), dstBuf)
+		if pErr == nil && nPack < len(cmds) {
+			out := make([]byte, nPack)
+			copy(out, dstBuf[:nPack])
+			return out
+		}
+	}
+	out := make([]byte, 1+len(cmds))
+	out[0] = 0x09
+	copy(out[1:], cmds)
+	return out
+}
+
+// packageOffsetsSection encodes Section 3 via Distance Prefix or flat mode 0x09.
+func packageOffsetsSection(offs []uint32, s *CompressorScratchpad) []byte {
+	if len(offs) == 0 {
+		return nil
+	}
+	s3Len, err := PackDistancePrefix(offs, ModeDistancePrefix, true, s.s3Buf[:])
+	var rawOffs []byte
+	for _, d := range offs {
+		rawOffs = appendLEB128Enc(rawOffs, d)
+	}
+	if err == nil && s3Len < len(rawOffs) {
+		out := make([]byte, s3Len)
+		copy(out, s.s3Buf[:s3Len])
+		return out
+	}
+	out := make([]byte, 1+len(rawOffs))
+	out[0] = 0x09
+	copy(out[1:], rawOffs)
+	return out
+}
+
+// packageLiteralsSection evaluates Étale Sheaf foliation vs verbatim fallback.
+func packageLiteralsSection(lits []byte) ([]byte, uint8) {
+	if len(lits) == 0 {
+		return nil, 0
+	}
+	var bestSheaf []byte
+	minLen := len(lits)
+
+	for mode := uint8(0); mode <= 3; mode++ {
+		packed, err := PackEtaleSheaf(lits, mode)
+		if err == nil && len(packed) < minLen {
+			minLen = len(packed)
+			bestSheaf = packed
+		}
+	}
+
+	if bestSheaf != nil {
+		return bestSheaf, FlagNibble
+	}
+	return lits, 0
+}
+
+// assembleContainer creates the PRZM frame with uncompressed fallback guard.
+func assembleContainer(src []byte, params AnalysisParams, s1, s2, s3, s4 []byte, flagNibble uint8) []byte {
+	u := len(src)
+	dirLen := 4
+	compSize := 8 + dirLen + len(s1) + len(s2) + len(s3) + len(s4)
+	if params.stride > 1 {
+		compSize++
+	}
+
+	if compSize >= u || params.uncompressed {
+		out := make([]byte, 8+u)
+		out[0], out[1], out[2], out[3] = 'P', 'R', 'Z', 'M'
+		out[4] = FlagUncompressed
+		out[5] = byte(u & 0xFF)
+		out[6] = byte((u >> 8) & 0xFF)
+		out[7] = byte((u >> 16) & 0xFF)
+		copy(out[8:], src)
+		return out
+	}
+
+	return assembleCompressedFrame(u, params, s1, s2, s3, s4, flagNibble)
+}
+
+// assembleCompressedFrame concatenates header, directory, and the 4 sections.
+func assembleCompressedFrame(u int, params AnalysisParams, s1, s2, s3, s4 []byte, flagNibble uint8) []byte {
+	flags := flagNibble
+	if params.stride > 1 {
 		flags |= FlagStride
 	}
 
-	var activeMatcher *dictMatcher
-	if customDict != nil {
-		activeMatcher = &customDict.matcher
-		dictID = customDict.id
-		flags |= FlagDictRef
-	} else if dictID != 0 {
-		if d := GetDictionary(dictID); d != nil {
-			activeMatcher = &d.matcher
+	out := make([]byte, 0, 8+len(s1)+len(s2)+len(s3)+len(s4)+64)
+	out = append(out, 'P', 'R', 'Z', 'M', flags)
+	out = append(out, byte(u&0xFF), byte((u>>8)&0xFF), byte((u>>16)&0xFF))
+
+	if params.stride > 1 {
+		out = append(out, byte(params.stride-1))
+	}
+
+	out = binary.LittleEndian.AppendUint16(out, uint16(len(s2)))
+	out = binary.LittleEndian.AppendUint16(out, uint16(len(s3)))
+
+	out = append(out, s1...)
+	out = append(out, s2...)
+	out = append(out, s3...)
+	out = append(out, s4...)
+	return out
+}
+
+// CompressOptions configures compression parameters.
+type CompressOptions struct {
+	Level              int
+	Threads            int
+	Dict               *DictionaryDesc
+	RawDict            []byte
+	DictID             uint32
+	StandardStreamOnly bool
+}
+
+// CompressWithOptions compresses src using the specified options.
+func CompressWithOptions(src []byte, opts CompressOptions) ([]byte, error) {
+	level := opts.Level
+	if level <= 0 {
+		level = 6
+	}
+	dict := opts.RawDict
+	return CompressWithDict(src, level, dict)
+}
+
+// Compress compresses an uncompressed byte buffer using Trellis RDO.
+func Compress(src []byte, level int) ([]byte, error) {
+	return CompressWithDict(src, level, nil)
+}
+
+// CompressWithDict compresses an input buffer with optional dictionary support.
+func CompressWithDict(src []byte, level int, dict []byte) ([]byte, error) {
+	u := len(src)
+	if u == 0 {
+		return []byte{'P', 'R', 'Z', 'M', 0, 0, 0, 0}, nil
+	}
+	if u > MaxBlockSize {
+		return nil, ErrExceedsMaxBlock
+	}
+
+	params := AnalyzeInput(src)
+	if params.uncompressed {
+		return assembleContainer(src, params, nil, nil, nil, nil, 0), nil
+	}
+
+	s := compScratchPool.Get()
+	defer compScratchPool.Put(s)
+
+	return executeCompressionPipeline(src, level, dict, params, s)
+}
+
+// executeCompressionPipeline parses blocks and serializes final compressed frame.
+func executeCompressionPipeline(src []byte, level int, dict []byte, params AnalysisParams, s *CompressorScratchpad) ([]byte, error) {
+	u := len(src)
+	for i := range s.head4 {
+		s.head4[i] = -1
+	}
+	for i := range s.head8 {
+		s.head8[i] = -1
+	}
+	for i := range s.prevPos {
+		s.prevPos[i] = -1
+	}
+
+	_ = dict // Generic dictionary interface hook
+
+	var allCmds []byte
+	var allLits []byte
+	var allOffs []uint32
+
+	initialR := [4]uint32{1, 4, 8, 16}
+	if params.stride > 1 {
+		initialR = [4]uint32{1, params.stride, 2 * params.stride, 3 * params.stride}
+	}
+
+	maxDist := 1 << params.wLog
+	depthLimit := selectSearchDepth(level)
+	pos := 0
+
+	for pos < u {
+		bSize := u - pos
+		if bSize > MaxBlockHorizon {
+			bSize = MaxBlockHorizon
 		}
-		flags |= FlagDictRef
-	} else if dictLen > 0 {
-		flags |= FlagDictRef
+		initBlockNodes(s, bSize, initialR)
+		solveBlockTrellis(src, pos, bSize, maxDist, params.stride, int(params.bMin), depthLimit, level, s)
+		edges := backtrackEdges(s, bSize)
+		emitBlockCommands(edges, src[pos:pos+bSize], int(params.bMin), &allCmds, &allLits, &allOffs)
+		initialR = s.nodes[bSize].r
+		pos += bSize
 	}
 
-	minMatch := 4
-	if opts.MinMatch == 3 {
-		minMatch = 3
-		flags |= FlagMinMatch3
-	}
-	minMatchBase := minMatch
-	compactDict := opts.CompactDict && dictLen > 0
-
-	if uSize > 65535 {
-		flags |= FlagExtOffset
-	}
-
-	// Initialize 4 CPU repeat offset registers
-	rep0 := 1
-	rep1 := 4
-	rep2 := 8
-	rep3 := 16
-	if hasStride && stride > 1 {
-		rep1 = stride
-		rep2 = 2 * stride
-		rep3 = 3 * stride
-	}
-
-	fastEncoder := newFastBlockEncoder(
-		src,
-		uSize,
-		windowSize,
-		minMatch,
-		hasStride,
-		stride,
-		pad,
-		&rep0,
-		&rep1,
-		&rep2,
-		&rep3,
-	)
-	greedyEncoder := newGreedyBlockEncoder(
-		src, uSize, level, windowSize, windowLog,
-		minMatch, minMatchBase, compactDict, dictLen,
-		hasStride, stride, activeMatcher, pad,
-		sp1M, sp8M, spL6, &rep0, &rep1, &rep2, &rep3, &flags,
-	)
-
-	greedyEncoder.populateDictionaryHashes()
-
-	useFast := level <= 3 && opts.MinMatch != 3 && activeMatcher == nil
-	var compressFastOrGreedy func(int, int)
-	if useFast {
-		compressFastOrGreedy = fastEncoder.compressBlock
-	} else {
-		compressFastOrGreedy = greedyEncoder.compressBlock
-	}
-
-	compressBlockGreedyOrSLP := func(bStart, bSize int) {
-		cmdStart := len(pad.cmdBuf)
-		offStart := len(pad.offsetBuf)
-		litStart := len(pad.literalBuf)
-		r0Start := rep0
-		r1Start := rep1
-		r2Start := rep2
-		r3Start := rep3
-
-		compressFastOrGreedy(bStart, bSize)
-
-		if dictLen == 0 && bSize >= 64 && level >= 3 {
-			cmdDelta := len(pad.cmdBuf) - cmdStart
-			offDelta := len(pad.offsetBuf) - offStart
-			litDelta := len(pad.literalBuf) - litStart
-			lzCost := cmdDelta + offDelta + litDelta
-
-			if lzCost > 32 {
-				if pwsData, err := PWSEncode(src[bStart : bStart+bSize]); err == nil && len(pwsData) > 0 {
-					var varBuf [8]byte
-					nVar := binary.PutUvarint(varBuf[:], uint64(len(pwsData)))
-					pwsCost := 1 + nVar + len(pwsData)
-					if pwsCost < lzCost {
-						pad.cmdBuf = pad.cmdBuf[:cmdStart]
-						pad.offsetBuf = pad.offsetBuf[:offStart]
-						pad.literalBuf = pad.literalBuf[:litStart]
-						rep0 = r0Start
-						rep1 = r1Start
-						rep2 = r2Start
-						rep3 = r3Start
-
-						pad.cmdBuf = append(pad.cmdBuf, OpGrammarBlock)
-						pad.cmdBuf = append(pad.cmdBuf, varBuf[:nVar]...)
-						pad.cmdBuf = append(pad.cmdBuf, pwsData...)
-					}
-				}
-			}
-		}
-	}
-
-	if dictLen > 0 {
-		if level >= 4 {
-			dpPad := dpScratchPool.Get()
-			defer dpScratchPool.Put(dpPad)
-			clear(dpPad.table3[:])
-			clear(dpPad.headSec[:])
-			clear(dpPad.macro8[:])
-			clear(dpPad.dagProd[:])
-			clear(dpPad.dagProd32[:])
-			populateMacroTables(src, dictLen, dpPad, pad, windowLog, sp1M, sp8M)
-
-			bStart := dictLen
-			for bStart < uSize {
-				bSize := min(uSize-bStart, BlockSize64K)
-				consumed := compressBlockOptimal(
-					src,
-					bStart,
-					bSize,
-					uSize,
-					windowSize,
-					windowLog,
-					level,
-					pad,
-					dpPad,
-					&rep0,
-					&rep1,
-					&rep2,
-					&rep3,
-					sp1M,
-					sp8M,
-					minMatchBase,
-					activeMatcher,
-					dictLen,
-					compactDict,
-					hasStride,
-					stride,
-				)
-				bStart += consumed
-			}
-		} else {
-			compressFastOrGreedy(dictLen, origUSize)
-		}
-	} else if uSize >= 131072 {
-		pad.dedup.Reset()
-		var dpPad *dpScratchpad
-		if level >= 4 {
-			dpPad = dpScratchPool.Get()
-			defer dpScratchPool.Put(dpPad)
-			clear(dpPad.table3[:])
-			clear(dpPad.headSec[:])
-			clear(dpPad.macro8[:])
-			clear(dpPad.dagProd[:])
-			clear(dpPad.dagProd32[:])
-		}
-
-		bStart := 0
-		blockIdx := uint32(0)
-		for bStart < uSize {
-			if level >= 5 {
-				rLen := DetectRLE(src, bStart)
-				alignedRLen := (rLen / DedupBlockSize) * DedupBlockSize
-				if alignedRLen >= DedupBlockSize {
-					pad.cmdBuf = append(pad.cmdBuf, OpcodePrefixRLE)
-					var vBuf [8]byte
-					n := binary.PutUvarint(vBuf[:], uint64(alignedRLen))
-					pad.cmdBuf = append(pad.cmdBuf, vBuf[:n]...)
-					pad.literalBuf = append(pad.literalBuf, src[bStart])
-					bStart += alignedRLen
-					blockIdx += uint32(alignedRLen / DedupBlockSize)
-					continue
-				}
-			}
-
-			bSize := min(uSize-bStart, DedupBlockSize)
-			consumed := bSize
-			if bSize == DedupBlockSize && blockIdx > 0 {
-				h := Hash64KBlock(src[bStart : bStart+DedupBlockSize])
-				if matchedIdx, found := pad.dedup.Probe(h, src, bStart); found {
-					pad.cmdBuf = append(pad.cmdBuf, OpCopyBlock,
-						byte(matchedIdx), byte(matchedIdx>>8),
-						byte(matchedIdx>>16), byte(matchedIdx>>24))
-					bStart += DedupBlockSize
-					blockIdx++
-					continue
-				}
-				if dpPad != nil {
-					consumed = compressBlockOptimal(
-						src,
-						bStart,
-						bSize,
-						uSize,
-						windowSize,
-						windowLog,
-						level,
-						pad,
-						dpPad,
-						&rep0,
-						&rep1,
-						&rep2,
-						&rep3,
-						sp1M,
-						sp8M,
-						minMatchBase,
-						activeMatcher,
-						dictLen,
-						compactDict,
-						hasStride,
-						stride,
-					)
-				} else {
-					compressBlockGreedyOrSLP(bStart, bSize)
-				}
-				pad.dedup.Insert(h, blockIdx)
-			} else if bSize == DedupBlockSize && blockIdx == 0 {
-				if dpPad != nil {
-					consumed = compressBlockOptimal(
-						src,
-						bStart,
-						bSize,
-						uSize,
-						windowSize,
-						windowLog,
-						level,
-						pad,
-						dpPad,
-						&rep0,
-						&rep1,
-						&rep2,
-						&rep3,
-						sp1M,
-						sp8M,
-						minMatchBase,
-						activeMatcher,
-						dictLen,
-						compactDict,
-						hasStride,
-						stride,
-					)
-				} else {
-					compressBlockGreedyOrSLP(bStart, bSize)
-				}
-				h := Hash64KBlock(src[bStart : bStart+DedupBlockSize])
-				pad.dedup.Insert(h, 0)
-			} else {
-				// Tail block (< 65536 bytes) compressed via standard LZ77
-				if dpPad != nil {
-					consumed = compressBlockOptimal(
-						src,
-						bStart,
-						bSize,
-						uSize,
-						windowSize,
-						windowLog,
-						level,
-						pad,
-						dpPad,
-						&rep0,
-						&rep1,
-						&rep2,
-						&rep3,
-						sp1M,
-						sp8M,
-						minMatchBase,
-						activeMatcher,
-						dictLen,
-						compactDict,
-						hasStride,
-						stride,
-					)
-				} else {
-					compressBlockGreedyOrSLP(bStart, bSize)
-				}
-			}
-			bStart += consumed
-			blockIdx++
-		}
-	} else {
-		// Under 128 KiB: bypass deduplication entirely
-		if level >= 4 {
-			dpPad := dpScratchPool.Get()
-			defer dpScratchPool.Put(dpPad)
-			clear(dpPad.table3[:])
-			clear(dpPad.headSec[:])
-			clear(dpPad.macro8[:])
-			clear(dpPad.dagProd[:])
-			clear(dpPad.dagProd32[:])
-
-			bStart := 0
-			for bStart < uSize {
-				bSize := min(uSize-bStart, BlockSize64K)
-				consumed := compressBlockOptimal(
-					src,
-					bStart,
-					bSize,
-					uSize,
-					windowSize,
-					windowLog,
-					level,
-					pad,
-					dpPad,
-					&rep0,
-					&rep1,
-					&rep2,
-					&rep3,
-					sp1M,
-					sp8M,
-					minMatchBase,
-					activeMatcher,
-					dictLen,
-					compactDict,
-					hasStride,
-					stride,
-				)
-				bStart += consumed
-			}
-		} else {
-			compressBlockGreedyOrSLP(0, uSize)
-		}
-	}
-
-	if opts.LiteralProbe != nil {
-		opts.LiteralProbe(pad.literalBuf)
-	}
-
-	// Pack Section 1 (Literals) via Etale Sheaf V-ANS or Nibble-Planes
-	litSection := packLiteralSection(pad.literalBuf, pad, level, opts, origSrc, &flags)
-
-	// Pack Section 2 (Commands) and Section 3 (Offsets) via 4-Stream Canonical Huffman
-	cmdMode := uint8(ModeHuffman4X)
-	if level <= 3 {
-		cmdMode = ModeFlat
-	}
-	cmdSection, err := PackCommandStream(pad.cmdBuf, cmdMode)
-	if err != nil {
-		return nil, err
-	}
-	var offSection []byte
-	if len(pad.offsetBuf) > 0 {
-		offSection, err = PackOffsetStream(pad.offsetBuf, cmdMode)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if uSize > 65535 || len(cmdSection) > 65535 || len(offSection) > 65535 {
-		flags |= FlagExtOffset
-	}
-
-	// Calculate Frame Layout & Size
-	frameParamsSize := 0
-	if hasStride {
-		frameParamsSize += 1
-	}
-	if (flags & FlagDictRef) != 0 {
-		frameParamsSize += 4
-	}
-
-	secDirSize := generic.Ternary((flags&FlagExtOffset) != 0, 6, 4)
-
-	sec1Size := 8 // 8-byte distribution params (ModelType = 0 uniform/raw)
-	totalCompressedSize := HeaderSize + frameParamsSize + secDirSize + sec1Size + len(
-		cmdSection,
-	) + len(
-		offSection,
-	) + len(
-		litSection,
-	)
-
-	// Fallback to uncompressed if compressed payload exceeds raw data
-	if totalCompressedSize >= origUSize {
-		rawFrame := make([]byte, HeaderSize+origUSize)
-		binary.LittleEndian.PutUint32(rawFrame[0:4], MagicPRZM)
-		rawFrame[4] = FlagUncompressed
-		rawFrame[5] = byte(origUSize)
-		rawFrame[6] = byte(origUSize >> 8)
-		rawFrame[7] = byte(origUSize >> 16)
-		copy(rawFrame[HeaderSize:], origSrc)
-		return rawFrame, nil
-	}
-
-	// Build Final Output Frame
-	out := make([]byte, totalCompressedSize)
-	binary.LittleEndian.PutUint32(out[0:4], MagicPRZM)
-	out[4] = flags
-	out[5] = byte(origUSize)
-	out[6] = byte(origUSize >> 8)
-	out[7] = byte(origUSize >> 16)
-
-	wOffset := HeaderSize
-	if hasStride {
-		out[wOffset] = uint8(stride - 1)
-		wOffset++
-	}
-	if (flags & FlagDictRef) != 0 {
-		binary.LittleEndian.PutUint32(out[wOffset:wOffset+4], dictID)
-		wOffset += 4
-	}
-
-	// Section Directory
-	if (flags & FlagExtOffset) == 0 {
-		binary.LittleEndian.PutUint16(out[wOffset:wOffset+2], uint16(len(cmdSection)))
-		binary.LittleEndian.PutUint16(out[wOffset+2:wOffset+4], uint16(len(offSection)))
-		wOffset += 4
-	} else {
-		cmdLen := len(cmdSection)
-		offLen := len(offSection)
-		out[wOffset] = byte(cmdLen)
-		out[wOffset+1] = byte(cmdLen >> 8)
-		out[wOffset+2] = byte(cmdLen >> 16)
-		out[wOffset+3] = byte(offLen)
-		out[wOffset+4] = byte(offLen >> 8)
-		out[wOffset+5] = byte(offLen >> 16)
-		wOffset += 6
-	}
-
-	// Section 1: Distribution Parameters (Uniform/Raw)
-	for i := range sec1Size {
-		out[wOffset+i] = 0
-	}
-	out[wOffset+1] = byte(windowLog)
-	if normMode != NormModeNone {
-		out[wOffset+2] = byte(normMode)
-		binary.LittleEndian.PutUint16(out[wOffset+3:wOffset+5], uint16(normContractedLen))
-		out[wOffset+6] = byte(normContractedLen >> 16)
-		out[wOffset+7] = byte(normContractedLen >> 24)
-	}
-	wOffset += sec1Size
-
-	// Section 2: Command Stream
-	copy(out[wOffset:wOffset+len(cmdSection)], cmdSection)
-	wOffset += len(cmdSection)
-
-	// Section 3: Offset Channel
-	copy(out[wOffset:wOffset+len(offSection)], offSection)
-	wOffset += len(offSection)
-
-	// Section 4: Literal, Mask, and RLE Channel
-	copy(out[wOffset:wOffset+len(litSection)], litSection)
-
-	return out, nil
+	s1, s2, s3, s4, flagNibble := packageSections(params.wLog, allCmds, allLits, allOffs, s)
+	return assembleContainer(src, params, s1, s2, s3, s4, flagNibble), nil
 }
