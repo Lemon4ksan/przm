@@ -1,21 +1,21 @@
 // Clean Room Synthesized Brotli Dictionary & RFC 7932 Tables
-package przm
+package dict
 
-var wordBase = [22]uint16{
+var WordBase = [22]uint16{
     0, 1024, 2048, 4096, 6144, 7168, 8192, 9216, 10240, 11264, 11776, 12288, 12544, 12672, 12800, 13056, 13184, 13312, 13376, 13440, 13472, 13504,
 }
 
-var dictOffsets = [21]uint32{
+var DictOffsets = [21]uint32{
     0, 4096, 9216, 21504, 35840, 44032, 53248, 63488, 74752, 87040, 93696, 100864, 104704, 106752, 108928, 113536, 115968, 118528, 119872, 121280, 122016,
 }
 
-type transformEntry struct {
+type TransformEntry struct {
     PIdx uint8
     Op   uint8
     SIdx uint8
 }
 
-var transforms = [121]transformEntry{
+var Transforms = [121]TransformEntry{
     {49, 0, 49},     {49, 0, 0},     {0, 0, 0},     {49, 12, 49},     {49, 10, 0},     {49, 0, 47},
     {0, 0, 49},     {4, 0, 0},     {49, 0, 3},     {49, 10, 49},     {49, 0, 6},     {49, 13, 49},
     {49, 1, 49},     {1, 0, 0},     {49, 0, 1},     {0, 10, 0},     {49, 0, 7},     {49, 0, 9},
@@ -39,12 +39,12 @@ var transforms = [121]transformEntry{
     {0, 10, 34}, 
 }
 
-type compactPair struct {
+type CompactPair struct {
     WId uint16
     Tau uint16
 }
 
-var compactPairs = [2048]compactPair{
+var CompactPairs = [2048]CompactPair{
     {9953, 48},     {1397, 12},     {11323, 64},     {709, 1},     {9953, 56},     {11325, 64},     {11453, 64},     {5994, 23},
     {9493, 48},     {9493, 56},     {6603, 23},     {11316, 64},     {1105, 12},     {194, 1},     {324, 6},     {1740, 12},
     {4995, 23},     {1397, 1},     {4995, 12},     {12101, 64},     {4995, 1},     {3748, 12},     {11325, 48},     {9558, 23},
@@ -304,7 +304,7 @@ var compactPairs = [2048]compactPair{
 
 }
 
-var psStrings = [50]string{
+var PSStrings = [50]string{
     "\x20",
     "\x2c\x20",
     "\x20\x6f\x66\x20\x74\x68\x65\x20",
@@ -357,7 +357,7 @@ var psStrings = [50]string{
     "",
 }
 
-var topRFCWords = [512]string{
+var TopRFCWords = [512]string{
     "\x72\x65\x74\x75\x72\x6e",
     "\x6d\x61\x74\x68\x63\x61\x6c",
     "\x75\x69\x6e\x74\x38\x5f\x74",
@@ -872,7 +872,7 @@ var topRFCWords = [512]string{
     "\x72\x65\x76\x65\x72\x73\x69\x62\x6c\x65",
 }
 
-var webTokens = [256]string{
+var WebTokens = [256]string{
     "\x3c\x2f\x64\x69\x76\x3e",
     "\x3c\x64\x69\x76\x20\x63\x6c\x61\x73\x73\x3d\x22",
     "\x3c\x2f\x73\x70\x61\x6e\x3e",
@@ -1131,8 +1131,8 @@ var webTokens = [256]string{
     "\x73\x69\x7a\x65\x5f\x74\x20",
 }
 
-// brotliDictData contains the 122784 bytes canonical Brotli dictionary.
-var brotliDictData = []byte{
+// BrotliDictionary contains the 122784 bytes canonical Brotli dictionary.
+var BrotliDictionary = []byte{
     0x74, 0x69, 0x6d, 0x65, 0x64, 0x6f, 0x77, 0x6e, 0x6c, 0x69, 0x66, 0x65, 0x6c, 0x65, 0x66, 0x74,
     0x62, 0x61, 0x63, 0x6b, 0x63, 0x6f, 0x64, 0x65, 0x64, 0x61, 0x74, 0x61, 0x73, 0x68, 0x6f, 0x77,
     0x6f, 0x6e, 0x6c, 0x79, 0x73, 0x69, 0x74, 0x65, 0x63, 0x69, 0x74, 0x79, 0x6f, 0x70, 0x65, 0x6e,
@@ -8808,3 +8808,89 @@ var brotliDictData = []byte{
     0xa4, 0xb5, 0xe0, 0xa4, 0xbe, 0xe0, 0xa4, 0x88, 0xe0, 0xa4, 0xb8, 0xe0, 0xa4, 0x95, 0xe0, 0xa5,
     0x8d, 0xe0, 0xa4, 0xb0, 0xe0, 0xa4, 0xbf, 0xe0, 0xa4, 0xaf, 0xe0, 0xa4, 0xa4, 0xe0, 0xa4, 0xbe,
 }
+
+// DictIDBrotli is the RFC 7932 canonical Brotli dictionary identifier 'B','R','T','L'.
+const DictIDBrotli uint32 = 0x4252544C
+
+// DictEntry represents a single external dictionary entry.
+type DictEntry struct {
+	Data   string
+	Length int
+}
+
+// DictionaryDesc describes an external static dictionary.
+type DictionaryDesc struct {
+	DictID       uint32
+	TransformIdx int
+	NumEntries   int
+	Entries      []DictEntry
+}
+
+// BrotliDictData is an alias to BrotliDictionary for backward compatibility.
+var BrotliDictData = BrotliDictionary
+
+// LookupBrotliWord performs binary search over the static RFC 7932 dictionary.
+func LookupBrotliWord(wid uint32) []byte {
+	low := 0
+	high := 21
+	best := 0
+	for low <= high {
+		mid := (low + high) / 2
+		if uint32(WordBase[mid]) <= wid {
+			best = mid
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+	wLen := best + 4
+	idx := int(wid - uint32(WordBase[best]))
+	off := int(DictOffsets[best]) + idx*wLen
+	return BrotliDictionary[off : off+wLen]
+}
+
+// ExternalDictMapper dynamically maps word IDs to byte slice offsets in an external dictionary.
+type ExternalDictMapper struct {
+	Dict    []byte
+	Base    []uint16
+	Offsets []uint32
+}
+
+// NewExternalDictMapper constructs a new dynamic ExternalDictMapper.
+func NewExternalDictMapper(dict []byte, base []uint16, offsets []uint32) *ExternalDictMapper {
+	return &ExternalDictMapper{
+		Dict:    dict,
+		Base:    base,
+		Offsets: offsets,
+	}
+}
+
+// Lookup finds a word byte slice by its ID in the external dictionary.
+func (m *ExternalDictMapper) Lookup(wid uint32) ([]byte, bool) {
+	if len(m.Base) == 0 || len(m.Offsets) == 0 || len(m.Dict) == 0 {
+		return nil, false
+	}
+	low := 0
+	high := len(m.Base) - 1
+	best := 0
+	for low <= high {
+		mid := (low + high) / 2
+		if uint32(m.Base[mid]) <= wid {
+			best = mid
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+	if best >= len(m.Offsets) {
+		return nil, false
+	}
+	wLen := best + 4
+	idx := int(wid - uint32(m.Base[best]))
+	off := int(m.Offsets[best]) + idx*wLen
+	if off < 0 || off+wLen > len(m.Dict) {
+		return nil, false
+	}
+	return m.Dict[off : off+wLen], true
+}
+

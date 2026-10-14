@@ -1,7 +1,7 @@
 // Clean Room Synthesized 8-Context V-ANS Meta Frequency Table
-package przm
+package commands
 
-var staticMetaFreq8 = [8][256]uint16{
+var StaticMetaFreq8 = [8][256]uint16{
 	{
 		358, 110, 346, 16, 100, 23, 789, 88, 15, 171, 12, 12, 104, 51, 23, 159,
 		15, 7, 39, 12, 40, 12, 28, 80, 20, 11, 11, 63, 12, 9, 219, 47,
@@ -147,3 +147,6 @@ var staticMetaFreq8 = [8][256]uint16{
 		18, 6, 12, 12, 12, 18, 18, 6, 12, 12, 12, 35, 18, 24, 24, 41,
 	},
 }
+
+var staticMetaFreq8 = StaticMetaFreq8
+

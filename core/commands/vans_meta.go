@@ -1,9 +1,17 @@
-// Package clean_core provides 8-context Bigram V-ANS entropy encoding and decoding.
+// Package commands provides command splitting, Mode 8 framing, and 8-context Bigram V-ANS entropy encoding and decoding.
 // Strictly adheres to the Clean Room Specification with zero dynamic memory allocations.
-package przm
+package commands
 
 import (
 	"encoding/binary"
+	"errors"
+
+	"github.com/lemon4ksan/foundation/generic"
+)
+
+var (
+	ErrCorruptedFrame = errors.New("przm: corrupted frame")
+	ErrBufferTooSmall = errors.New("przm: destination buffer too small")
 )
 
 // MetaModel represents the precomputed frequency, CDF, and inversion tables for one context.
@@ -56,15 +64,21 @@ func ContextMeta(p byte) int {
 	return 7
 }
 
+type varBufPoolType [2 * 1024 * 1024]byte
+
+var varBufPool = generic.NewPool[varBufPoolType](func() *varBufPoolType {
+	return new(varBufPoolType)
+})
+
 // EncodeVansMeta8 encodes src into dst using 8-context Bigram V-ANS with 4 interleaved lanes.
 func EncodeVansMeta8(src, dst []byte) (int, error) {
 	n := len(src)
 	if n == 0 {
 		return encodeEmptyHeader(dst)
 	}
-	s := scratchPool.Get()
-	outLen, err := encodeVansMeta8Internal(src, dst, s)
-	scratchPool.Put(s)
+	buf := varBufPool.Get()
+	outLen, err := encodeVansMeta8Internal(src, dst, buf[:])
+	varBufPool.Put(buf)
 	return outLen, err
 }
 
@@ -83,9 +97,8 @@ func encodeEmptyHeader(dst []byte) (int, error) {
 	return 24, nil
 }
 
-func encodeVansMeta8Internal(src, dst []byte, s *Scratchpad) (int, error) {
+func encodeVansMeta8Internal(src, dst []byte, streamBuf []byte) (int, error) {
 	n := len(src)
-	streamBuf := s.varBuf[:]
 	var streamPtr int
 	x := [4]uint32{65536, 65536, 65536, 65536}
 

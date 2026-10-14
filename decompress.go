@@ -7,13 +7,15 @@ import (
 	"errors"
 
 	"github.com/lemon4ksan/foundation/generic"
+	"github.com/lemon4ksan/przm/core/commands"
+	"github.com/lemon4ksan/przm/core/dict"
 )
 
 // Frame Signatures and Capacity Bounds
 const (
 	MagicPRZM    = 0x4D5A5250 // ASCII 'P','R','Z','M'
 	MaxBlockSize = 16777216   // 16 MiB maximum payload
-	DictIDBrotli = 0x4252544C // ASCII 'B','R','T','L'
+	DictIDBrotli = dict.DictIDBrotli // ASCII 'B','R','T','L'
 )
 
 // Configuration Vector Bitmasks
@@ -30,10 +32,10 @@ const (
 
 // Error Definitions
 var (
-	ErrCorruptedFrame  = errors.New("przm: corrupted frame")
+	ErrCorruptedFrame  = commands.ErrCorruptedFrame
 	ErrInvalidMagic    = errors.New("przm: invalid magic")
 	ErrOffsetOOB       = errors.New("przm: offset out of bounds")
-	ErrBufferTooSmall  = errors.New("przm: destination buffer too small")
+	ErrBufferTooSmall  = commands.ErrBufferTooSmall
 	ErrExceedsMaxBlock = errors.New("przm: exceeds max block size")
 	ErrUnsupportedMode = errors.New("przm: unsupported compression mode")
 	ErrUnknownDict     = errors.New("przm: unknown dictionary")
@@ -140,20 +142,7 @@ func copyLEB128Raw(src []byte, sp *int, dst []byte, dp *int) error {
 
 // lookupBrotliWord performs binary search over the static RFC 7932 dictionary.
 func lookupBrotliWord(wid uint32) []byte {
-	low, high, best := 0, 20, 0
-	for low <= high {
-		mid := (low + high) / 2
-		if uint32(wordBase[mid]) <= wid {
-			best = mid
-			low = mid + 1
-		} else {
-			high = mid - 1
-		}
-	}
-	wLen := best + 4
-	idx := int(wid - uint32(wordBase[best]))
-	off := int(dictOffsets[best]) + idx*wLen
-	return brotliDictData[off : off+wLen]
+	return dict.LookupBrotliWord(wid)
 }
 
 
@@ -595,18 +584,18 @@ func execRFCTransform(dst []byte, dstPos *int, uSize uint32, cmd []byte, cp *int
 		if p < 13504 {
 			wPtr = lookupBrotliWord(p)
 		} else if p < 14016 {
-			wPtr = []byte(topRFCWords[p-13504])
+			wPtr = []byte(dict.TopRFCWords[p-13504])
 		} else {
 			c := p - 14016
 			if c >= 2048 {
 				return ErrCorruptedFrame
 			}
-			wid = uint32(compactPairs[c].WId)
-			tau = uint32(compactPairs[c].Tau)
+			wid = uint32(dict.CompactPairs[c].WId)
+			tau = uint32(dict.CompactPairs[c].Tau)
 			if wid < 13504 {
 				wPtr = lookupBrotliWord(wid)
 			} else {
-				wPtr = []byte(topRFCWords[wid-13504])
+				wPtr = []byte(dict.TopRFCWords[wid-13504])
 			}
 		}
 	} else {
@@ -619,7 +608,7 @@ func execRFCTransform(dst []byte, dstPos *int, uSize uint32, cmd []byte, cp *int
 		if wid < 13504 {
 			wPtr = lookupBrotliWord(wid)
 		} else {
-			wPtr = []byte(topRFCWords[wid-13504])
+			wPtr = []byte(dict.TopRFCWords[wid-13504])
 		}
 	}
 	if len(wPtr) == 0 || tau > 120 {
@@ -630,9 +619,9 @@ func execRFCTransform(dst []byte, dstPos *int, uSize uint32, cmd []byte, cp *int
 
 // applyAndEmitTransform applies string transformations and copies to destination.
 func applyAndEmitTransform(dst []byte, dstPos *int, uSize uint32, wPtr []byte, tau uint32, s *Scratchpad) error {
-	t := transforms[tau]
-	pre := psStrings[t.PIdx]
-	suf := psStrings[t.SIdx]
+	t := dict.Transforms[tau]
+	pre := dict.PSStrings[t.PIdx]
+	suf := dict.PSStrings[t.SIdx]
 	mw := wPtr
 	mwLen := len(mw)
 	op := t.Op
@@ -944,8 +933,8 @@ func execTokenMatch(dst []byte, dstP *int, op byte, f *FrameContext) error {
 		*dstP += entry.Length
 		return nil
 	}
-	if idx < len(webTokens) {
-		tok := webTokens[idx]
+	if idx < len(dict.WebTokens) {
+		tok := dict.WebTokens[idx]
 		if *dstP+len(tok) > int(f.uSize) {
 			return ErrCorruptedFrame
 		}

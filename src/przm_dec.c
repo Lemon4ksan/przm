@@ -1162,16 +1162,26 @@ static int32_t exec_rfc_transform(uint8_t *dst, size_t *dst_pos, size_t u_size,
             uint32_t c = p - 14016;
             if (c >= 2048) return PRZM_ERR_CORRUPTED_FRAME;
             wid = przm_compact_pairs[c][0]; tau = przm_compact_pairs[c][1];
-            w_ptr = (wid < 13504) ? lookup_brotli_word(wid, &w_len)
-                                  : przm_top_words[wid - 13504].str;
-            if (wid >= 13504) w_len = przm_top_words[wid - 13504].len;
+            if (wid < 13504) {
+                w_ptr = lookup_brotli_word(wid, &w_len);
+            } else if (wid < 14016) {
+                w_ptr = przm_top_words[wid - 13504].str;
+                w_len = przm_top_words[wid - 13504].len;
+            } else {
+                return PRZM_ERR_CORRUPTED_FRAME;
+            }
         }
     } else {
         tau = b0;
         if (read_leb128(cmd, clen, cp, &wid) != PRZM_OK) return PRZM_ERR_CORRUPTED_FRAME;
-        w_ptr = (wid < 13504) ? lookup_brotli_word(wid, &w_len)
-                              : przm_top_words[wid - 13504].str;
-        if (wid >= 13504) w_len = przm_top_words[wid - 13504].len;
+        if (wid < 13504) {
+            w_ptr = lookup_brotli_word(wid, &w_len);
+        } else if (wid < 14016) {
+            w_ptr = przm_top_words[wid - 13504].str;
+            w_len = przm_top_words[wid - 13504].len;
+        } else {
+            return PRZM_ERR_CORRUPTED_FRAME;
+        }
     }
     if (!w_ptr || tau > 120) return PRZM_ERR_CORRUPTED_FRAME;
 
