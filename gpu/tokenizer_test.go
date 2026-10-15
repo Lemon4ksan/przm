@@ -185,7 +185,7 @@ func BenchmarkWarpTokenizerKernel64MB(b *testing.B) {
 
 	comp, err := gpu.GetGlobalCompressor()
 	if err != nil {
-		b.Fatalf("GetGlobalCompressor failed: %v", err)
+		b.Skipf("GetGlobalCompressor failed: %v", err)
 	}
 
 	size := 64 * 1024 * 1024
@@ -230,7 +230,7 @@ func BenchmarkWarpTokenizerEndToEnd64MB(b *testing.B) {
 
 	comp, err := gpu.GetGlobalCompressor()
 	if err != nil {
-		b.Fatalf("GetGlobalCompressor failed: %v", err)
+		b.Skipf("GetGlobalCompressor failed: %v", err)
 	}
 
 	size := 64 * 1024 * 1024

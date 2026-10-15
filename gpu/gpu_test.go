@@ -330,9 +330,12 @@ func TestRadixStrikeLargePayloads(t *testing.T) {
 }
 
 func BenchmarkRadixStrike(b *testing.B) {
+	if !IsAvailable() {
+		b.Skip("cuda gpu acceleration not available or compute capability < 8.0")
+	}
 	comp, err := GetGlobalCompressor()
 	if err != nil {
-		b.Fatalf("GetGlobalCompressor failed: %v", err)
+		b.Skipf("GetGlobalCompressor failed: %v", err)
 	}
 
 	size := 4 * 1024 * 1024 // 4 MB
