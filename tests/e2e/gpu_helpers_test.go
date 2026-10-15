@@ -25,6 +25,9 @@ var (
 
 // isGPUAvailable checks if NVIDIA CUDA hardware and driver are accessible.
 func isGPUAvailable() bool {
+	if !gpu.IsAvailable() {
+		return false
+	}
 	testGPUOnce.Do(func() {
 		testGPUComp, testGPUInitErr = gpu.NewGPUCompressor(0)
 	})

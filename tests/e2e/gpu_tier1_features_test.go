@@ -113,6 +113,10 @@ func TestTier1_GPU_F02_PTXKernelArtifact(t *testing.T) {
 
 // Feature 3: Pure Go CUDA Driver API Bridge
 func TestTier1_GPU_F03_CUDAAPIBridge(t *testing.T) {
+	if !isGPUAvailable() {
+		t.Skip("CUDA GPU unavailable for Tier 1 bridge test")
+	}
+
 	tests := []struct {
 		name string
 		fn   func(t *testing.T)
@@ -246,6 +250,10 @@ func TestTier1_GPU_F05_WithGPUAccelerationOption(t *testing.T) {
 
 // Feature 6: Engine Pipeline Routing
 func TestTier1_GPU_F06_EnginePipelineRouting(t *testing.T) {
+	if !isGPUAvailable() {
+		t.Skip("CUDA GPU unavailable for Tier 1 pipeline routing test")
+	}
+
 	tests := []struct {
 		name string
 		data []byte
@@ -346,6 +354,10 @@ func TestTier1_GPU_F07_GracefulCPUSIMDFallback(t *testing.T) {
 
 // Feature 8: Bit-Exact Lossless Roundtrips
 func TestTier1_GPU_F08_BitExactLosslessRoundtrips(t *testing.T) {
+	if !isGPUAvailable() {
+		t.Skip("CUDA GPU unavailable for Tier 1 lossless roundtrips test")
+	}
+
 	levels := []int{1, 3, 5, 7, 9}
 
 	for _, lvl := range levels {

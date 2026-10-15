@@ -216,6 +216,10 @@ func TestTier2_GPU_B07_MaxOffset(t *testing.T) {
 
 // Boundary 8: Incompressible High-Entropy Payloads
 func TestTier2_GPU_B08_IncompressibleHighEntropy(t *testing.T) {
+	if !isGPUAvailable() {
+		t.Skip("CUDA GPU unavailable for Tier 2 boundary test")
+	}
+
 	sizes := []struct {
 		name string
 		size int
@@ -250,6 +254,10 @@ func TestTier2_GPU_B08_IncompressibleHighEntropy(t *testing.T) {
 
 // Boundary 9: Degenerate Data Distributions
 func TestTier2_GPU_B09_DegenerateDistributions(t *testing.T) {
+	if !isGPUAvailable() {
+		t.Skip("CUDA GPU unavailable for Tier 2 boundary test")
+	}
+
 	tests := []struct {
 		name string
 		gen  func() []byte

@@ -23,6 +23,10 @@ import (
 // and bus disconnects.
 // Invariant: 0 panics, 0 failures, 100% bit-exact lossless roundtrips.
 func TestChallenger_GPU_AdversarialChaosMonkey(t *testing.T) {
+	if !isGPUAvailable() {
+		t.Skip("CUDA GPU unavailable for AdversarialChaosMonkey test")
+	}
+
 	defer func() {
 		gpu.SetMockUnavailableForTest(false)
 		gpu.SetMockMatchErrorForTest(nil)

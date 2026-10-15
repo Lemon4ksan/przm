@@ -399,8 +399,9 @@ func relaxLiteral(i int, s *CompressorScratchpad, block []byte) {
 }
 
 // relaxRepeat tests match against the 4 repeat distance registers.
-func relaxRepeat(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, bMin int) {
+func relaxRepeat(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, bMin int) int {
 	curCost := s.nodes[i].cost
+	maxFound := 0
 	for k := range 4 {
 		d := s.nodes[i].r[k]
 		if d == 0 || globalPos < int(d) {
@@ -414,8 +415,12 @@ func relaxRepeat(i int, s *CompressorScratchpad, src []byte, globalPos, bSize, b
 		if L < bMin {
 			continue
 		}
+		if L > maxFound {
+			maxFound = L
+		}
 		relaxRepeatSublengths(i, k, d, L, bMin, curCost, s)
 	}
+	return maxFound
 }
 
 func relaxRepeatSublengths(i, k int, d uint32, L, bMin int, curCost uint32, s *CompressorScratchpad) {
@@ -907,12 +912,15 @@ func solveBlockTrellis(
 		globalPos := blockStart + i
 		if s.nodes[i].cost != InfinityCost {
 			relaxLiteral(i, s, block)
-			relaxRepeat(i, s, src, globalPos, bSize, bMin)
-			relaxBrackets(i, s, src, globalPos, bSize, bMin)
-			relaxStride(i, s, src, globalPos, bSize, stride, bMin)
-			relaxHashMatches(i, s, src, globalPos, bSize, maxDist, winMask, stride, bMin, depthLimit, level)
-			relaxDictMatches(i, s, src, globalPos, bSize, bMin)
-			relaxDiffLattice(i, s, src, globalPos, bSize, stride, bMin)
+			repL := relaxRepeat(i, s, src, globalPos, bSize, bMin)
+			maxPossibleL := min(bSize-i, MaxMatchLength)
+			if repL < maxPossibleL {
+				relaxBrackets(i, s, src, globalPos, bSize, bMin)
+				relaxStride(i, s, src, globalPos, bSize, stride, bMin)
+				relaxHashMatches(i, s, src, globalPos, bSize, maxDist, winMask, stride, bMin, depthLimit, level)
+				relaxDictMatches(i, s, src, globalPos, bSize, bMin)
+				relaxDiffLattice(i, s, src, globalPos, bSize, stride, bMin)
+			}
 		}
 		if i+4 <= bSize {
 			insertHash(src, globalPos, winMask, s)
