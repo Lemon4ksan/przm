@@ -143,12 +143,11 @@ przm/
 │   ├── bridge.go                    # Мост к NVIDIA Driver API (Zero-CGo) и пайплайн DMA
 │   ├── memory.go                    # Аллокатор закреплённой памяти хоста (Pinned Memory)
 │   ├── types.go                     # Дескрипторы совпадений, профили GPU и топологии
-│   └── kernel/przm_lz77.ptx         # Встроенные PTX sm_86 ядра параллельного поиска
-├── src/                             # Чистая реализация Clean Room на C99/C11
-│   ├── przm_dec.c, przm_dec.h       # Декомпрессор со строго нулевыми аллокациями
-│   └── przm_comp.c, przm_comp.h     # Эталонный компрессор на C
+├── src/                             # Линейный декомпрессор на чистом C99/C11 (libprzm_dec)
+│   └── przm_dec.c, przm_dec.h       # Декомпрессор со строго 0 аллокациями (до 58.7 ГБ/с)
 ├── tests/                           # Наборы кросс-языковых и чистых тестов
-│   ├── test_przm_dec.c              # Пакет верификации C99 (21/21 тест пройден)
+│   ├── test_przm_dec.c              # Пакет верификации C99-декомпрессора (21/21 тест пройден)
+│   ├── przm_comp.c, przm_comp.h     # Внутренний генератор тестовых фреймов на C для тестов
 │   └── e2e/                         # Сквозные интеграционные и стресс-тесты GPU
 ├── cmd/                             # Утилиты командной строки и бинарники
 │   ├── przm/                        # Основной автономный CLI компрессор, декомпрессор и бенчмарк
@@ -175,7 +174,7 @@ PRZM предоставляет 11 тонко настроенных уровн�
 | **6 – 8** | **High Density** | 4.0x – 4.9x | 60 – 120 МБ/с | **4.8+ ГБ/с** | Глубокий 4-путный ассоциативный горизонт поиска, макроокно, оптимизация префиксов смещений | Дистрибуция ПО, пакетные репозитории, резервное копирование баз данных |
 | **9 – 11** | **Ultra Archival** | 4.8x – 5.6x | 10 – 35 МБ/с | **4.6+ ГБ/с** | Многомасштабная Trellis DAG RDO (оптимизация скорость-искажение), полная матрица RFC 7932 на 14,016 слов | Долгосрочные холодные архивы, неизменяемые хранилища, сборки прошивок (*Режим уничтожителя Zstd-19*) |
 
-### 1. Консольная утилита (Go CLI)
+### Консольная утилита (Go CLI)
 
 В репозитории доступна полнофункциональная высокопроизводительная CLI-утилита в `cmd/przm`:
 
@@ -215,73 +214,9 @@ go install github.com/lemon4ksan/przm/cmd/przm@latest
 ./przm bench linux.tar
 ```
 
-### 2. Автономный C99 CLI (Без Go и сторонних зависимостей)
-
-Для встраиваемых, классических или C/C++ окружений скомпилируйте полностью автономный бинарник напрямую:
-
-```bash
-# Сборка чистого C99-инструмента с помощью GCC или Clang:
-gcc -O3 -Wall -Wextra -Isrc -o przm_c.exe tests/test_przm_dec.c src/przm_dec.c src/przm_comp.c
-
-# Сжатие на чистом Си (Уровни 1..11):
-./przm_c.exe -c payload.bin payload.przm 3
-
-# Распаковка на чистом Си (строго 0 аллокаций в куче при распаковке):
-./przm_c.exe -d payload.przm restored.bin
-```
-
 ## Использование API
 
-### API чистого C99/C11 (Zero Allocation)
-
-Автономный декомпрессор (`src/przm_dec.c` / `src/przm_dec.h`) и энкодер (`src/przm_comp.c` / `src/przm_comp.h`) **не имеют внешних зависимостей** и работают исключительно в предоставленной памяти:
-
-```c
-#include "przm_comp.h"
-#include "przm_dec.h"
-#include <stdio.h>
-#include <stdlib.h>
-
-void compression_roundtrip_example(const uint8_t* raw_data, size_t raw_len) {
-    // 1. Выделение буфера под сжатые данные
-    size_t comp_cap = raw_len + 1024;
-    uint8_t* comp_buf = (uint8_t*)malloc(comp_cap);
-
-    // 2. Сжатие на Уровне 3 (Balanced)
-    int32_t comp_len = przm_compress(raw_data, raw_len, comp_buf, comp_cap, 3);
-    if (comp_len <= 0) {
-        fprintf(stderr, "Сжатие завершилось ошибкой\n");
-        free(comp_buf);
-        return;
-    }
-    printf("Сжато %zu -> %d байт\n", raw_len, comp_len);
-
-    // 3. Запрос точного размера несжатых данных за время O(1)
-    int64_t u_size = przm_get_uncompressed_size(comp_buf, (size_t)comp_len);
-    if (u_size < 0) {
-        fprintf(stderr, "Повреждённый или некорректный фрейм PRZM\n");
-        free(comp_buf);
-        return;
-    }
-
-    // 4. Выделение буфера назначения с запасом безопасности
-    size_t out_cap = (size_t)u_size + PRZM_SAFETY_PADDING;
-    uint8_t* out_buf = (uint8_t*)malloc(out_cap);
-
-    // 5. Декомпрессия со СТРОГО НУЛЕВЫМИ аллокациями в куче (0 B/op)
-    int64_t written = przm_decompress(comp_buf, (size_t)comp_len, out_buf, out_cap);
-    if (written != u_size) {
-        fprintf(stderr, "Ошибка декомпрессии: %lld\n", (long long)written);
-    } else {
-        printf("Успешно распаковано %lld байт на линейной скорости (0 аллокаций)!\n", (long long)written);
-    }
-
-    free(comp_buf);
-    free(out_buf);
-}
-```
-
-### Высокоуровневый API на Go (Декомпрессия на месте без аллокаций)
+### 1. Высокоуровневый API на Go (Декомпрессия на месте без аллокаций)
 
 ```go
 package main
@@ -319,7 +254,7 @@ func main() {
 }
 ```
 
-### API аппаратного сжатия на CUDA GPU
+### 2. API аппаратного сжатия на CUDA GPU
 
 ```go
 package main
@@ -356,11 +291,64 @@ func main() {
 }
 ```
 
+### 3. Линейный C99/C11 декомпрессор (`libprzm_dec`)
+
+Для встраиваемых систем, игровых движков (Unreal, Unity), высоконагруженных микросервисов на C/C++ или прошивок PRZM предоставляет автономный C99 декомпрессор (`src/przm_dec.c` / `include/przm_dec.h`). Он **не имеет внешних зависимостей** и работает со **строго 0 динамических аллокаций в куче** (`0 B/op`, 0 allocs/op) на микроархитектурной линейной скорости (до **58.7 ГБ/с**):
+
+```c
+#include "przm_dec.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+void decompress_archive_example(const uint8_t *comp_buf, size_t comp_len) {
+    // 1. Запрос точного размера несжатых данных за время O(1) напрямую из заголовка
+    int32_t u_size = przm_get_uncompressed_size(comp_buf, comp_len);
+    if (u_size < 0) {
+        fprintf(stderr, "Повреждённый или некорректный фрейм PRZM: %d\n", u_size);
+        return;
+    }
+
+    // 2. Выделение буфера назначения (управляется вызывающей стороной)
+    size_t out_cap = (size_t)u_size + 64;
+    uint8_t *out_buf = (uint8_t *)malloc(out_cap);
+    if (!out_buf) return;
+
+    // 3. Декомпрессия со СТРОГО НУЛЕВЫМИ динамическими аллокациями в куче (0 B/op, до 58.7 ГБ/с)
+    int32_t written = przm_decompress(comp_buf, comp_len, out_buf, out_cap);
+    if (written != u_size) {
+        fprintf(stderr, "Ошибка декомпрессии: %d\n", written);
+    } else {
+        printf("Успешно распаковано %d байт на линейной скорости (0 динамических аллокаций)!\n", written);
+    }
+
+    free(out_buf);
+}
+```
+
 ## Сборка и верификация
 
-### 1. Сборка и запуск набора верификации C99-декомпрессора
+### 1. Запуск тестов на Go и проверка линтером
 ```bash
-gcc -O3 -Wall -Wextra -Isrc -o test_przm_dec.exe tests/test_przm_dec.c src/przm_dec.c src/przm_comp.c
+# Запуск основных тестов ядра и корневого пакета
+go test -count=1 ./core/... .
+
+# Запуск сквозных интеграционных тестов
+go test -v ./tests/e2e
+
+# Запуск тестов аппаратного ускорения GPU (требуется GPU NVIDIA)
+go test -v ./gpu/...
+
+# Запуск микробенчмарков
+go test -bench=. -benchmem ./...
+
+# Запуск golangci-lint (0 предупреждений)
+golangci-lint run ./...
+```
+
+### 2. Сборка и запуск набора верификации C99-декомпрессора (`libprzm_dec`)
+```bash
+# Сборка библиотеки libprzm_dec.a и запуск всех 21 тестов Clean Room
+make
 ./test_przm_dec.exe
 ```
 Ожидаемый вывод:
@@ -374,18 +362,6 @@ gcc -O3 -Wall -Wextra -Isrc -o test_przm_dec.exe tests/test_przm_dec.c src/przm_
 [RUN] mode8_and_explicit_matches
 [PASS] mode8_and_explicit_matches
 >>> ALL CLEAN ROOM C99 TESTS PASSED SUCCESSFULLY! <<<
-```
-
-### 2. Запуск тестов на Go и проверка линтером
-```bash
-# Запуск основных тестов ядра и корневого пакета
-go test -count=1 ./core/... .
-
-# Запуск тестов аппаратного ускорения GPU (требуется GPU NVIDIA)
-go test -v ./gpu/...
-
-# Запуск golangci-lint (0 предупреждений)
-golangci-lint run ./...
 ```
 
 ### 3. Проверка формальных математических доказательств в Lean 4

@@ -46,13 +46,11 @@ typedef struct {
     const przm_dict_entry_t *entries;
 } przm_dict_desc_t;
 
-/* Canonical C API */
+/* Canonical C API (Zero-Allocation Decompressor) */
 int32_t przm_get_uncompressed_size(const uint8_t *src, size_t src_len);
 int32_t przm_decompress(const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap);
 int32_t przm_decompress_with_dict(const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap, const uint8_t *dict, size_t dict_len);
 int32_t przm_decompress_dict(const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap, const void *dict);
-int32_t przm_compress(const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap, int level);
-int32_t przm_compress_with_dict(const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap, int level, const uint8_t *dict, size_t dict_len);
 
 /* Stage 2 Command Stream & 8-Context V-ANS Meta API */
 int32_t przm_split_commands(const uint8_t *src, size_t slen,

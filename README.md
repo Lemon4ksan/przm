@@ -143,12 +143,11 @@ przm/
 │   ├── bridge.go                    # Zero-CGo NVIDIA Driver API bridge & DMA pipeline
 │   ├── memory.go                    # Pinned host memory allocator & buffer pool
 │   ├── types.go                     # Match descriptors, GPU profiles, and stream topologies
-│   └── kernel/przm_lz77.ptx         # Embedded PTX sm_86 parallel matching kernels
-├── src/                             # Pure C99/C11 clean-room implementation
-│   ├── przm_dec.c, przm_dec.h       # Zero-allocation line-rate decompressor
-│   └── przm_comp.c, przm_comp.h     # Reference C encoder
+├── src/                             # Pure C99/C11 line-rate decompressor (libprzm_dec)
+│   └── przm_dec.c, przm_dec.h       # Zero-allocation line-rate decompressor (up to 58.7 GB/s)
 ├── tests/                           # Cross-language & clean-room test suites
-│   ├── test_przm_dec.c              # Pure C verification suite (21/21 clean-room tests)
+│   ├── test_przm_dec.c              # Pure C decompressor verification suite (21/21 clean-room tests)
+│   ├── przm_comp.c, przm_comp.h     # Internal C synthetic frame generator for unit tests
 │   └── e2e/                         # End-to-end integration and GPU stress tests
 ├── cmd/                             # CLI utilities & binaries
 │   ├── przm/                        # Main standalone CLI compressor, decompressor & benchmarker
@@ -175,7 +174,7 @@ PRZM features 11 finely tuned compression levels balancing microarchitectural th
 | **6 – 8** | **High Density** | 4.0x – 4.9x | 60 – 120 MB/s | **4.8+ GB/s** | Deep 4-way associative hash horizon, macro window matching, distance prefix optimization | Software distribution, package registries, database backups |
 | **9 – 11** | **Ultra Archival** | 4.8x – 5.6x | 10 – 35 MB/s | **4.6+ GB/s** | Multi-Scale Trellis DAG RDO (Rate-Distortion Optimization), full RFC 7932 14,016-word static matrix | Long-term archival, immutable cold storage, firmware builds (*Zstd-19 Slayer*) |
 
-### 1. Command-Line Interface (CLI)
+### Command-Line Interface (CLI)
 
 The repository provides a standalone, high-performance CLI utility in `cmd/przm`:
 
@@ -215,73 +214,9 @@ Test compression ratio, throughput, and zero-allocation decompression speed on a
 ./przm bench linux.tar
 ```
 
-### 2. Standalone Pure C CLI (Zero Go / Zero Dependencies)
-
-For embedded, legacy, or pure C/C++ environments, compile the standalone zero-dependency binary directly:
-
-```bash
-# Compile pure C99 tool with GCC or Clang:
-gcc -O3 -Wall -Wextra -Isrc -o przm_c.exe tests/test_przm_dec.c src/przm_dec.c src/przm_comp.c
-
-# Compress using pure C (Level 1..11):
-./przm_c.exe -c payload.bin payload.przm 3
-
-# Decompress using pure C (strictly 0 heap allocations during decode):
-./przm_c.exe -d payload.przm restored.bin
-```
-
 ## API Usage
 
-### Pure C99/C11 API (Zero Allocation)
-
-The standalone decompressor (`src/przm_dec.c` / `src/przm_dec.h`) and encoder (`src/przm_comp.c` / `src/przm_comp.h`) have **zero external dependencies** and operate strictly within caller-provided memory:
-
-```c
-#include "przm_comp.h"
-#include "przm_dec.h"
-#include <stdio.h>
-#include <stdlib.h>
-
-void compression_roundtrip_example(const uint8_t* raw_data, size_t raw_len) {
-    // 1. Allocate destination buffer for compressed output
-    size_t comp_cap = raw_len + 1024;
-    uint8_t* comp_buf = (uint8_t*)malloc(comp_cap);
-
-    // 2. Compress at Level 3 (Balanced)
-    int32_t comp_len = przm_compress(raw_data, raw_len, comp_buf, comp_cap, 3);
-    if (comp_len <= 0) {
-        fprintf(stderr, "Compression failed\n");
-        free(comp_buf);
-        return;
-    }
-    printf("Compressed %zu -> %d bytes\n", raw_len, comp_len);
-
-    // 3. Query exact uncompressed size in O(1) time
-    int64_t u_size = przm_get_uncompressed_size(comp_buf, (size_t)comp_len);
-    if (u_size < 0) {
-        fprintf(stderr, "Invalid or corrupted PRZM frame\n");
-        free(comp_buf);
-        return;
-    }
-
-    // 4. Allocate output destination buffer with safety padding
-    size_t out_cap = (size_t)u_size + PRZM_SAFETY_PADDING;
-    uint8_t* out_buf = (uint8_t*)malloc(out_cap);
-
-    // 5. Decompress with strictly ZERO heap allocations (0 B/op)
-    int64_t written = przm_decompress(comp_buf, (size_t)comp_len, out_buf, out_cap);
-    if (written != u_size) {
-        fprintf(stderr, "Decompression error: %lld\n", (long long)written);
-    } else {
-        printf("Decompressed %lld bytes at line-rate speed (0 allocs)!\n", (long long)written);
-    }
-
-    free(comp_buf);
-    free(out_buf);
-}
-```
-
-### Go High-Level API (Zero-Allocation In-Place)
+### 1. Go High-Level API (Zero-Allocation In-Place)
 
 ```go
 package main
@@ -319,7 +254,7 @@ func main() {
 }
 ```
 
-### CUDA GPU Compression API
+### 2. Hardware CUDA GPU Compression API
 
 ```go
 package main
@@ -356,11 +291,64 @@ func main() {
 }
 ```
 
+### 3. Pure C99/C11 Line-Rate Decompressor (`libprzm_dec`)
+
+For embedded systems, game engines (Unreal, Unity), high-throughput C/C++ microservices, or firmware, PRZM provides a standalone C99 decompressor (`src/przm_dec.c` / `include/przm_dec.h`). It has **zero external dependencies** and operates with **strictly 0 dynamic heap allocations** (`0 B/op`, 0 allocs/op) at microarchitectural line-rate speeds (up to **58.7 GB/s**):
+
+```c
+#include "przm_dec.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+void decompress_archive_example(const uint8_t *comp_buf, size_t comp_len) {
+    // 1. Query exact uncompressed size in O(1) time directly from frame header
+    int32_t u_size = przm_get_uncompressed_size(comp_buf, comp_len);
+    if (u_size < 0) {
+        fprintf(stderr, "Invalid or corrupted PRZM frame: %d\n", u_size);
+        return;
+    }
+
+    // 2. Allocate output destination buffer (caller-managed)
+    size_t out_cap = (size_t)u_size + 64;
+    uint8_t *out_buf = (uint8_t *)malloc(out_cap);
+    if (!out_buf) return;
+
+    // 3. Decompress with strictly ZERO dynamic heap allocations (0 B/op, up to 58.7 GB/s)
+    int32_t written = przm_decompress(comp_buf, comp_len, out_buf, out_cap);
+    if (written != u_size) {
+        fprintf(stderr, "Decompression error: %d\n", written);
+    } else {
+        printf("Decompressed %d bytes at line-rate speed (0 dynamic allocations)!\n", written);
+    }
+
+    free(out_buf);
+}
+```
+
 ## Building & Verification
 
-### 1. Build & Run Pure C99 Decompressor Verification Suite
+### 1. Run Go Test Suite & Linter
 ```bash
-gcc -O3 -Wall -Wextra -Isrc -o test_przm_dec.exe tests/test_przm_dec.c src/przm_dec.c src/przm_comp.c
+# Run all core and root unit tests
+go test -count=1 ./core/... .
+
+# Run end-to-end integration tests
+go test -v ./tests/e2e
+
+# Run GPU hardware acceleration test suite (requires NVIDIA GPU)
+go test -v ./gpu/...
+
+# Run microbenchmarks
+go test -bench=. -benchmem ./...
+
+# Run golangci-lint (0 warnings enforced)
+golangci-lint run ./...
+```
+
+### 2. Build & Run Pure C99 Decompressor Verification Suite (`libprzm_dec`)
+```bash
+# Build libprzm_dec.a and run all 21 clean-room verification tests
+make
 ./test_przm_dec.exe
 ```
 Expected output:
@@ -374,18 +362,6 @@ Expected output:
 [RUN] mode8_and_explicit_matches
 [PASS] mode8_and_explicit_matches
 >>> ALL CLEAN ROOM C99 TESTS PASSED SUCCESSFULLY! <<<
-```
-
-### 2. Run Go Test Suite & Linter
-```bash
-# Run core and root test suites
-go test -count=1 ./core/... .
-
-# Run GPU hardware acceleration test suite (requires NVIDIA GPU)
-go test -v ./gpu/...
-
-# Run golangci-lint (0 warnings enforced)
-golangci-lint run ./...
 ```
 
 ### 3. Verify Formal Mathematical Proofs in Lean 4

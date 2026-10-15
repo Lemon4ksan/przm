@@ -450,7 +450,7 @@ The reference decompressor implementing this specification is maintained in the 
 
 - **Go Root Facade**: [`api.go`](../api.go), [`compress.go`](../compress.go), [`decompress.go`](../decompress.go), [`options.go`](../options.go)
 - **Core Decoupled Engines**: [`core/commands/`](../core/commands), [`core/distance/`](../core/distance), [`core/literals/`](../core/literals), [`core/dict/`](../core/dict)
-- **C99 Line-Rate Decompressor**: [`src/przm_dec.c`](../src/przm_dec.c), [`src/przm_comp.c`](../src/przm_comp.c)
+- **C99 Line-Rate Decompressor**: [`src/przm_dec.c`](../src/przm_dec.c), [`include/przm_dec.h`](../include/przm_dec.h) (`libprzm_dec`)
 - **C99 Verification Suite**: [`tests/test_przm_dec.c`](../tests/test_przm_dec.c) (21/21 clean-room tests)
 
 The implementation is licensed under the **BSD-3-Clause** open-source license, permitting unrestricted integration into proprietary and open-source operating systems, game engines, and firmware.
