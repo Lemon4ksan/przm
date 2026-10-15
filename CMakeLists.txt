@@ -3,7 +3,7 @@
 # license that can be found in the LICENSE file.
 
 cmake_minimum_required(VERSION 3.15)
-project(przm VERSION 0.5.0 LANGUAGES C)
+project(przm VERSION 0.1.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
