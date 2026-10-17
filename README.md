@@ -1,4 +1,4 @@
-# PRZM: Autonomous Geometric Archival Compression
+# PRZM: High-Performance Archival Compression Engine
 
 [English](README.md) | [Русский](README_RU.md)
 
@@ -15,7 +15,7 @@
 
 ## Overview: The v0.1.0 Architecture
 
-**PRZM** (PrismLZ) is an ultra-high-speed, mathematically unified archival compression system engineered to transcend classical 1D sliding-window limits (such as Zstandard, LZMA, and Brotli) by mapping non-linear digital data distributions onto curved discrete manifolds.
+**PRZM** (PrismLZ) is a high-speed archival compression system designed for high compression density and line-rate decompression throughput by combining structural algebraic data transforms with modern superscalar execution models.
 
 PRZM couples a production-grade **Go 1.27** core with hardware-accelerated **NVIDIA CUDA kernels (`gpu/`)** and a standalone, dependency-free **Pure C99/C11 Zero-Allocation Decompressor (`libprzm_dec`)**. It is designed for line-rate integration into high-performance systems: game engines (Unreal Engine, Unity, Godot), GPU streaming pipelines, asset loaders, database storage engines, and cross-language FFI bindings (Rust, C++, Zig, Python).
 
@@ -45,12 +45,12 @@ Evaluated against the official 45-file multi-domain corpus spanning executable b
 | **Zstandard (Level 19)** | 324,934 B | 4.57x | 78.1% | 1.8–3.2 GB/s | Dynamic buffers |
 | **Brotli (Level 11, HQ)** | 259,103 B | 5.74x | 82.6% | 0.35–0.45 GB/s | Heap allocated |
 
-### The Zstd-19 Victory Breakdown
+### Performance Comparison: PRZM vs. Zstandard Level 19
 
-Across the 45-file test corpus, PRZM outperforms Zstandard at its maximum standard preset (Level 19):
+Across the 45-file test corpus, PRZM shows higher density than Zstandard Level 19 while maintaining higher decompression throughput:
 - **+28,367 Bytes Smaller (+8.7% ratio)**: PRZM compresses the corpus down to **296,567 B** vs Zstd-19's **324,934 B**.
-- **Structured Code / Tables Victory**: On structured tables (`brotli_tables.go`), PRZM produces **100,844 B** vs Zstd-19's **127,722 B** — a margin of **-26,878 bytes (-21.0% smaller)**.
-- **Decompression Speed Superiority**: PRZM decompresses at **4.57–6.16 GB/s** (strictly zero heap allocations), running **2.5x–3.5x faster than Zstd-19** and **12x–15x faster than Brotli-11**.
+- **Structured Code / Tables**: On structured tables (`brotli_tables.go`), PRZM produces **100,844 B** vs Zstd-19's **127,722 B** — a margin of **-26,878 bytes (-21.0% smaller)**.
+- **Decompression Throughput**: PRZM decompresses at **4.57–6.16 GB/s** (strictly zero heap allocations), running **2.5x–3.5x faster than Zstd-19** and **12x–15x faster than Brotli-11**.
 
 ```
 Decompression Throughput Comparison:
@@ -58,6 +58,30 @@ Decompression Throughput Comparison:
   Zstandard-19: [████████████████] 2,140 MB/s
   Brotli-11   : [███] 390 MB/s
 ```
+
+### Silesia Compression Corpus Benchmark (211.9 MB)
+
+Evaluated on the full 12-file standard Silesia Compression Corpus (211,938,580 bytes / 202.12 MiB), comparing PRZM Level 1 (fast streaming), PRZM Level 3 (balanced with Hensel ultrametric lifting), and 7-Zip LZMA2 (`-mx=3`). 100% bit-exact restoration verified across both Go and Pure C99 (`libprzm_dec`) zero-allocation engines.
+
+| File | Category | Original Size | PRZM Level 1 | PRZM Level 3 | LZMA2 (-mx=3) | PRZM L3 vs LZMA2 | Decomp Speed (Pure C) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`dickens`** | English Literature (Text) | 10.19 MB | 3.74 MB (2.72x) | **3.32 MB (3.07x)** | 3.36 MB (3.03x) | **PRZM +1.3%** | 140.5 MB/s |
+| **`mozilla`** | x86 Tarred Executables | 51.22 MB | 17.54 MB (2.92x) | 16.97 MB (3.02x) | **14.84 MB (3.45x)** | LZMA2 +12.5% | 223.0 MB/s |
+| **`mr`** | MRI Medical Image (Raw) | 9.97 MB | 3.70 MB (2.69x) | 3.44 MB (2.90x) | **3.05 MB (3.27x)** | LZMA2 +11.4% | 223.0 MB/s |
+| **`nci`** | Chemical DB / SMILES | 33.55 MB | 2.56 MB (13.11x) | **2.14 MB (15.65x)** | 2.37 MB (14.18x) | **PRZM +9.4%** | **840.2 MB/s** |
+| **`ooffice`** | OpenOffice DLL/SO | 6.15 MB | 2.94 MB (2.09x) | 2.84 MB (2.17x) | **2.62 MB (2.35x)** | LZMA2 +7.6% | 168.8 MB/s |
+| **`osdb`** | PostgreSQL DB Dump | 10.09 MB | 3.38 MB (2.98x) | **3.25 MB (3.10x)** | 3.30 MB (3.06x) | **PRZM +1.5%** | 293.0 MB/s |
+| **`reymont`** | Polish Literature (Text) | 6.63 MB | 1.94 MB (3.42x) | **1.57 MB (4.22x)** | 1.70 MB (3.89x) | **PRZM +7.8%** | 312.9 MB/s |
+| **`samba`** | Samba C Source Tarball | 21.61 MB | 4.87 MB (4.44x) | 4.52 MB (4.78x) | **4.30 MB (5.02x)** | LZMA2 +4.9% | 326.6 MB/s |
+| **`sao`** | Astronomical Star Catalog | 7.25 MB | 5.35 MB (1.36x) | 5.17 MB (1.40x) | **4.82 MB (1.50x)** | LZMA2 +6.9% | 175.3 MB/s |
+| **`webster`** | English Dictionary (Text) | 41.46 MB | 11.51 MB (3.60x) | **10.25 MB (4.05x)** | 10.49 MB (3.95x) | **PRZM +2.3%** | 216.6 MB/s |
+| **`x-ray`** | Medical Radiograph | 8.47 MB | 5.83 MB (1.45x) | 5.69 MB (1.49x) | **4.94 MB (1.71x)** | LZMA2 +13.1% | 131.8 MB/s |
+| **`xml`** | XML Tree Structure | 5.35 MB | 0.62 MB (8.60x) | **0.53 MB (10.13x)** | 0.54 MB (9.82x) | **PRZM +3.0%** | **566.4 MB/s** |
+| **TOTAL** | **Full Corpus (202.12 MiB)** | **211.94 MB** | **63.98 MB (3.31x)** | **59.68 MB (3.55x)** | **56.33 MB (3.76x)** | *Delta: 5.6%* | **248.8 MB/s (avg)** |
+
+- **Outperformed LZMA2 on 6 of 12 files**: On structured text, databases, and dictionaries (`nci`, `xml`, `reymont`, `webster`, `dickens`, `osdb`), PRZM Level 3 achieves superior density over LZMA2.
+- **Line-Rate Decompression Throughput**: Pure C99 decompressor runs up to **840.2 MB/s** on `nci` and **566.4 MB/s** on `xml` with strictly **0 dynamic heap allocations** (`0 B/op, 0 allocs/op`).
+
 
 ## Hardware CUDA GPU Acceleration (`gpu/`)
 
@@ -172,7 +196,7 @@ PRZM features 11 finely tuned compression levels balancing microarchitectural th
 | **1 – 2** | **Fast Streaming** | 2.1x – 2.8x | 400 – 650 MB/s | **5.5+ GB/s** | Greedy 4-byte hash matcher, SIMD V-ANS | High-throughput network streams, RPC, log shipping, real-time telemetry |
 | **3 – 5** | **Balanced** *(Default: 3)* | 3.2x – 4.1x | 150 – 280 MB/s | **5.2+ GB/s** | Non-Archimedean Hensel $p$-adic lifting, 2-way hash chain, static dictionary | General asset archives, web content, game asset bundles, HTTP serving |
 | **6 – 8** | **High Density** | 4.0x – 4.9x | 60 – 120 MB/s | **4.8+ GB/s** | Deep 4-way associative hash horizon, macro window matching, distance prefix optimization | Software distribution, package registries, database backups |
-| **9 – 11** | **Ultra Archival** | 4.8x – 5.6x | 10 – 35 MB/s | **4.6+ GB/s** | Multi-Scale Trellis DAG RDO (Rate-Distortion Optimization), full RFC 7932 14,016-word static matrix | Long-term archival, immutable cold storage, firmware builds (*Zstd-19 Slayer*) |
+| **9 – 11** | **Ultra Archival** | 4.8x – 5.6x | 10 – 35 MB/s | **4.6+ GB/s** | Multi-Scale Trellis DAG RDO (Rate-Distortion Optimization), full RFC 7932 14,016-word static matrix | Long-term archival, immutable cold storage, firmware builds (Maximum archival density) |
 
 ### Command-Line Interface (CLI)
 
